@@ -21,6 +21,18 @@
 //   writer0  UA_JIT_WARM_WRITER=0: the same file, written by the compiling thread
 //   inline   a runtime whose inliner runs an AggressiveInlining callee's class constructor (JITWARM_INLINE_CCTORS):
 //            a call to such a callee of a class not initialised waits too, a plain callee's does not
+//   seed     the list and the setup's seed share one array: 5,000 entries of data/jitwarm.txt, then 15,000 of
+//            data/jitwarm-seed.txt (Enter the Gungeon's sizes: until 2026-11-22 the seed's entries were written
+//            past the array's end, a SIGSEGV at every launch after the first): all read, the first and the last of
+//            each compiled ahead
+//   torn     the list's last line cut short (a power cut while it was written): not an entry, the whole lines
+//            before it compiled ahead, the file written again without it, a new entry on a line of its own
+//   garbage  a damaged list (binary bytes, NULs, a line of 5,000 bytes, a token that is not hex, an empty line, a
+//            cut "# mvid" line): none of it is an entry or asked of Mono, the whole entries between are compiled
+//            ahead, the file is written again with those only
+//   garbageseed the same bytes as the setup's seed: left out, nothing crashes, the list's own entries compiled
+//   missing  a list naming a method that is not there any more: a token Mono does not find, a token whose method
+//            has another name: neither compiled, the entries after them are
 #include "../jitwarm.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -35,7 +47,7 @@ static int fails;
 
 // two assemblies of 100 methods each; image ids 1, 2; a method = image * 1000 + row
 static const char *g_guid[3] = { "", "AAAA-1111", "BBBB-2222" };
-static int g_compiled[3][101], g_lookups, g_bad_lookups;
+static int g_compiled[3][101], g_lookups, g_bad_lookups, g_gone = -1;
 typedef void (*done_cb)(void *, void *, int);
 static done_cb g_done;
 static void l_install(void *p, void *s) { (void)p; (void)s; }
@@ -86,6 +98,7 @@ static unsigned token(void *m) { return 0x06000000u | (unsigned)((long)m % 1000)
 static void *get_method(void *img, unsigned tok, void *k)
 {
     (void)k; g_lookups++;
+    if ((tok & 0xffffff) == (unsigned)g_gone) return NULL;                         // (a method Mono does not find)
     unsigned row = tok & 0xffffff;
     if ((tok >> 24) != 6 || !row || row > 100) { g_bad_lookups++; return NULL; }   // (Mono would raise here)
     return (void *)((long)img * 1000 + row);
@@ -116,6 +129,22 @@ void *so_dlsym(void *h, const char *n)
     return NULL;
 }
 static void frames(int n) { for (int i = 0; i < n; i++) jitwarm_frame(); }
+static void put_bytes(const char *path, const char *b, size_t n) { FILE *f = fopen(path, "w"); fwrite(b, 1, n, f); fclose(f); }
+static char *slurp(size_t *n) { jitwarm_flush(); FILE *f = fopen("data/jitwarm.txt", "r"); char *b = calloc(1, 1 << 20); *n = f ? fread(b, 1, (1 << 20) - 1, f) : 0; if (f) fclose(f); return b; }
+// a damaged list: whole entries (M3, M7, M9) between lines that are none
+static size_t garbage(char *b)
+{
+    size_t n = 0;
+    n += sprintf(b + n, "# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 06000003 C1:M3 ()\n");
+    memcpy(b + n, "Assembly-CSharp 06000004 C1:\0M4 ()\n", 34); n += 34;                // a NUL in a line
+    memcpy(b + n, "\x01\x02\xff\xfe\x00\x7f\x1b[0m\n", 11); n += 11;                   // binary bytes
+    n += sprintf(b + n, "Assembly-CSharp 06000005 ");                                   // a line of 5,000 bytes
+    memset(b + n, 'x', 5000); n += 5000; b[n++] = '\n';
+    n += sprintf(b + n, "Assembly-CSharp zzzz C1:M6 ()\n\nAssembly-CSharp 06000008\n# mvid\nAssembly-CSharp 0600000800 C1:M8 ()\n");
+    n += sprintf(b + n, "Assembly-CSharp 06000007 C1:M7 ()\n 06000002 C1:M2 ()\nAssembly-CSharp 06000009 C1:M9 ()\n");
+    n += sprintf(b + n, "Assembly-CSharp 0600000a C1:M1");                              // and the last line cut short
+    return n;
+}
 static void put(const char *text) { FILE *f = fopen("data/jitwarm.txt", "w"); fputs(text, f); fclose(f); }
 static int count(const char *what) { jitwarm_flush(); FILE *f = fopen("data/jitwarm.txt", "r"); if (!f) return -1; char l[256]; int n = 0; while (fgets(l, sizeof l, f)) if (strstr(l, what)) n++; fclose(f); return n; }
 
@@ -142,6 +171,34 @@ int main(int argc, char **argv)
     if (!strcmp(sc, "badtoken"))
         put("# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 06009dab C1:M40363 ()\nAssembly-CSharp 02000004 C1:T4 ()\n"
             "Assembly-CSharp 06000004 C1:M4 ()\n");
+    if (!strcmp(sc, "seed")) {
+        // tokens past the 100 methods of the test's assemblies are skipped when the warm-up reaches them: the
+        // entries still fill the array, and the first and last of each file are real methods
+        FILE *f = fopen("data/jitwarm.txt", "w");
+        fprintf(f, "# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 06000003 C1:M3 ()\n");
+        for (int i = 0; i < 4998; i++) fprintf(f, "Assembly-CSharp %08x C1:M%d ()\n", 0x06001000 + i, 0x1000 + i);
+        fprintf(f, "Assembly-CSharp 06000007 C1:M7 ()\n");
+        fclose(f);
+        f = fopen("data/jitwarm-seed.txt", "w");
+        fprintf(f, "# mvid Other BBBB-2222/10/100\nOther 06000005 *\n");
+        for (int i = 0; i < 14998; i++) fprintf(f, "Other %08x *\n", 0x06001000 + i);
+        fprintf(f, "Other 06000009 *\nAssembly-CSharp 06000003 *\n");               // (the last: the list's own already)
+        fclose(f);
+    }
+    if (!strcmp(sc, "torn"))
+        put("# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 06000003 C1:M3 ()\nAssembly-CSharp 06000007 C1:M7 ()\n"
+            "Assembly-CSharp 0600");
+    if (!strcmp(sc, "garbage") || !strcmp(sc, "garbageseed")) {
+        char *b = malloc(16384); size_t n = garbage(b);
+        if (!strcmp(sc, "garbage")) put_bytes("data/jitwarm.txt", b, n);
+        else { put_bytes("data/jitwarm-seed.txt", b, n); put("# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 0600000b C1:M11 ()\n"); }
+        free(b);
+    }
+    if (!strcmp(sc, "missing")) {
+        put("# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 06000003 C1:M3 ()\nAssembly-CSharp 06000004 C1:Renamed ()\n"
+            "Assembly-CSharp 06000006 C1:M6 ()\nAssembly-CSharp 06000007 C1:M7 ()\n");
+        g_gone = 6;
+    }
     int rule = !strcmp(sc, "cctor") || !strcmp(sc, "noprobe") || !strcmp(sc, "nodefer") || !strcmp(sc, "inline");
     if (rule) {
         put("# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 06000003 C1:M3 ()\nAssembly-CSharp 06000004 C1:M4 ()\n"
@@ -201,6 +258,36 @@ int main(int argc, char **argv)
     } else if (!strcmp(sc, "badtoken")) {
         CHECK(g_bad_lookups == 0, "a bad token never looked up (%d)", g_bad_lookups);
         CHECK(g_compiled[1][4], "the good entry after them compiled");
+    } else if (!strcmp(sc, "seed")) {
+        CHECK(g_compiled[1][3] == 1 && g_compiled[1][7] == 1, "the list's first and last entries compiled ahead once (%d %d)", g_compiled[1][3], g_compiled[1][7]);
+        CHECK(g_compiled[2][5] == 1 && g_compiled[2][9] == 1, "the seed's first and last entries compiled ahead once (%d %d)", g_compiled[2][5], g_compiled[2][9]);
+        CHECK(g_lookups == 4 && g_bad_lookups == 0, "the 19,996 entries between read and skipped, none asked of Mono (%d lookups, %d bad)", g_lookups, g_bad_lookups);
+        CHECK(count("Assembly-CSharp 0600") == 5000 && count("Other") == 0, "the list's file as it was");
+    } else if (!strcmp(sc, "torn")) {
+        CHECK(g_compiled[1][3] && g_compiled[1][7] && g_lookups == 2 && g_bad_lookups == 0, "the whole lines compiled ahead, the cut one not an entry (%d lookups)", g_lookups);
+        g_done(NULL, (void *)1008L, 0);
+        size_t n; char *got = slurp(&n);
+        const char *want = "# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 06000003 C1:M3 ()\nAssembly-CSharp 06000007 C1:M7 ()\n"
+                           "Assembly-CSharp 06000008 C1:M8 ()\n";
+        CHECK(n == strlen(want) && !memcmp(got, want, n), "the file written again without the cut line, the new entry on its own line: %s", got);
+        CHECK(access("data/jitwarm.txt.tmp", F_OK) != 0, "no .tmp left");
+        free(got);
+    } else if (!strcmp(sc, "garbage")) {
+        int *c = g_compiled[1];
+        CHECK(c[3] && c[7] && c[9] && g_lookups == 3 && g_bad_lookups == 0, "only the whole entries compiled ahead (%d lookups, %d bad)", g_lookups, g_bad_lookups);
+        for (int i = 0; i <= 100; i++) CHECK(c[i] == (i == 3 || i == 7 || i == 9), "M%d compiled %d times", i, c[i]);
+        size_t n; char *got = slurp(&n);
+        const char *want = "# mvid Assembly-CSharp AAAA-1111/10/100\nAssembly-CSharp 06000003 C1:M3 ()\nAssembly-CSharp 06000007 C1:M7 ()\n"
+                           "Assembly-CSharp 06000009 C1:M9 ()\n";
+        CHECK(n == strlen(want) && !memcmp(got, want, n), "the file written again with the whole entries only (%zu bytes)", n);
+        free(got);
+    } else if (!strcmp(sc, "garbageseed")) {
+        int *c = g_compiled[1];
+        CHECK(c[11] && c[3] && c[7] && c[9] && g_lookups == 4 && g_bad_lookups == 0, "the list's entry and the seed's whole entries compiled, the rest left out (%d lookups)", g_lookups);
+        CHECK(count("Assembly-CSharp 0600") == 1, "the list's file as it was");
+    } else if (!strcmp(sc, "missing")) {
+        int *c = g_compiled[1];
+        CHECK(c[3] && c[7] && !c[4] && !c[6], "a method that is gone and a renamed one not compiled, the others compiled (%d %d %d %d)", c[3], c[7], c[4], c[6]);
     } else if (!strcmp(sc, "cctor")) {
         int *c = g_compiled[1];
         CHECK(c[4] && c[5] && c[35] && c[6] && c[7], "the methods touching no class whose static constructor is still to run compiled ahead");

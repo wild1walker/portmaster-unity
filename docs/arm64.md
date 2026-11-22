@@ -285,12 +285,25 @@ the release passes `pmu arch-check`, and a launch without the game, an install o
   | Enter the Gungeon (answers auto / auto; in a folder of its own, the launcher's GAMEDIR changed to it) | 22 min 43 s | 701 MB | the Breach, walking, with `UA_JIT_WARM=0` | 56.3 (53.7 - 57.6) | 570 MB; 218 MB |
   No setup stopped or was refused, so the setup's resume fix (1e4f8ff) was not exercised on the handheld. Open
   from these runs:
-  - **Enter the Gungeon crashes at every start after its first** with the release's settings (2 of 2): SIGSEGV in
+  - **Enter the Gungeon crashed at every start after its first** with the release's settings (2 of 2): SIGSEGV in
     `ua_host` (`+0x4f110`, build id c177685...) on UnityMain right after the first frame, `Assembly-CSharp` text in
-    the registers, the fault address just past a mapping. The first start (after the setup) ran and left
-    `data/jitwarm.txt` (5,139 lines beside the setup's 15,232-line `jitwarm-seed.txt`) before the exit hotkey
-    killed it; with `UA_JIT_WARM=0` the same install starts and plays. The warm-up's reading of its own list
-    is the suspect; the logs and both lists are kept (the work folder's `rc/evidence/`).
+    the registers, the fault address just past a mapping. **Fixed 2026-11-22** (runtime/host/jitwarm.c;
+    [runtime.md](runtime.md), `UA_JIT_WARM`). The cause was not 64-bit and not a torn file (the kept
+    `jitwarm.txt` ends on a whole line): `+0x4f110` is the list's read storing an entry's token, and the list and
+    the setup's seed share one array whose capacity count the seed's read began again at zero, so with the first
+    start's 5,118 own entries in an array of 8,192 the 15,232 seed entries were written past its end (entry 8,238
+    met the mapping's end). A first start (no list yet) and a port without a seed (Hollow Knight, Cuphead,
+    Blasphemous: only Gungeon's setup writes one) never reach it; the 32-bit build has the same code. Reproduced
+    without the G350: the release candidate set up by `tools/port/rehearse.sh`, in the arm64 rig the second start
+    stops at `ua_host+0x4f110`, and on the RG34XX-SP (Knulli, the setup rehearsed with the handheld's
+    `/proc/meminfo`: ASTC 4x4 textures, 711 MB) the same: first start runs, second start SIGSEGV at `+0x4f110`.
+    With the fixed `ua_host` on the same install, silent through `tools/device/profrun.sh`, the title left by
+    three presses, 25 s measured: second, third, fourth and fifth starts run (20,388 - 20,745 listed, about 6,100
+    compiled ahead in 7.5 s, none not found), 59.6 / 59.6 / 59.5 / 59.5 fps against 59.5 / 59.6 with
+    `UA_JIT_WARM=0` in the same hold, 604 - 607 MB resident against 586 - 594, no managed exception. The list is
+    also safe against a cut or damaged file now (runtime.md). Not yet run on the G350 itself; the four release
+    candidates' zips predate the fix: Gungeon's needs rebuilding with this runtime, the other three carry the same
+    `ua_host` code but no seed, so they cannot reach the overrun (rebuild them with the next release).
   - **Blasphemous's first level leaves 59 MB** of the G350's 895 MB with EmulationStation resident (the game
     704 - 720 MB), 20 MB over the launcher-less test's memory watchdog line, and runs at 37 - 55 fps there.
   - Cuphead's Botanic Panic at 38 - 39 fps at the device's resolution.

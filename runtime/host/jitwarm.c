@@ -56,11 +56,30 @@
 // a crash writes what is queued from the crash handler). The file has the same bytes in the same order as with
 // the old write of each line from the compiling thread (UA_JIT_WARM_WRITER=0, kept as the fallback when the
 // thread cannot be made).
+// A list that was cut short or damaged cannot crash the next launch, nor lose more than the damaged lines. Each
+// batch of whole lines goes to the file in one write() on a descriptor opened O_APPEND, never through a stdio
+// buffer that would split a line over two writes, so a kill (the exit hotkey's SIGKILL, an out-of-memory kill)
+// leaves whole lines. What a power cut or a full card can still leave is taken at the next read: a line with no
+// newline at its end (the file's torn last line), with a NUL or another control byte in it, longer than 2047
+// bytes, or not "<assembly> <1-8 hex digits> <name>", is not an entry; data/jitwarm.txt is then written again
+// without such lines to data/jitwarm.txt.tmp, synced and renamed over the list (as when another build's entries
+// are dropped), and if that fails a newline is put before the first new line so it never joins a torn one. Logged:
+// "[jitwarm] <n> lines of data/jitwarm.txt were not entries (cut short or damaged): dropped". The same lines of
+// the setup's seed are only left out. An entry that parses but names nothing here (a token past the method table,
+// a method Mono does not find, another name) is skipped when the warm-up reaches it, as before.
+// The two lists share one array: until 2026-11-22 the seed's read began with its own capacity count at zero, so
+// with entries of data/jitwarm.txt already in the array it never grew it again and wrote the seed's entries past
+// its end (Enter the Gungeon's 64-bit release candidate: 5,118 own entries in an array of 8,192, then 15,232
+// seed entries: SIGSEGV in the list's read at every launch after the first; a port without a seed, or a first
+// launch, never reached it).
 #define _GNU_SOURCE
 #include "jitwarm.h"
 #include "hitches.h"
 #include "../loader/so_loader.h"
 
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -104,7 +123,7 @@ static const char *image_id(void *img, char *b, size_t n);
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t *g_seen;
 static size_t g_seen_cap, g_seen_n;
-static FILE *g_out;
+static int g_out = -1;                      // the list, for its new lines (O_APPEND)
 
 // the list's writer: lines queued in q (q_n bytes of q_cap), taken whole by the thread (ua_jitwrite) and appended
 // to g_out; q_busy while it writes a batch (outside the lock), so a flush waits for that too
@@ -113,6 +132,17 @@ static pthread_cond_t q_data = PTHREAD_COND_INITIALIZER, q_room = PTHREAD_COND_I
 static char *q, *q_spare;
 static size_t q_n, q_cap;
 static volatile int q_busy, q_on;
+
+// the whole of b in the list's file (one write() for a batch of whole lines, see the top)
+static void write_all(const char *b, size_t n)
+{
+    while (n) {
+        ssize_t w = write(g_out, b, n);
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) return;
+        b += w; n -= (size_t)w;
+    }
+}
 
 static void *write_thread(void *arg)
 {
@@ -124,8 +154,7 @@ static void *write_thread(void *arg)
         char *b = q; size_t n = q_n;
         q = q_spare; q_spare = b; q_n = 0; q_busy = 1;
         pthread_mutex_unlock(&q_lock);
-        fwrite(b, 1, n, g_out);
-        fflush(g_out);
+        write_all(b, n);
         pthread_mutex_lock(&q_lock);
         q_busy = 0;
         pthread_cond_broadcast(&q_room);
@@ -140,8 +169,7 @@ static void list_line(const char *line)
     size_t n = strlen(line);
     if (!q_on || n > q_cap) {
         if (q_on) jitwarm_flush();      // (a line longer than the queue: after what is queued, in order)
-        fputs(line, g_out);
-        fflush(g_out);
+        write_all(line, n);
         return;
     }
     pthread_mutex_lock(&q_lock);
@@ -164,13 +192,11 @@ void jitwarm_flush_crash(void)
 {
     // from a signal handler: no waiting on a lock that a stopped thread may hold. Let a batch being written
     // finish (up to a second), then write what is queued straight to the file, after it.
-    if (!q_on || !g_out) return;
+    if (!q_on || g_out < 0) return;
     for (int i = 0; i < 1000 && q_busy; i++) usleep(1000);
     if (pthread_mutex_trylock(&q_lock) != 0) return;
     if (q_n && !q_busy) {
-        fflush(g_out);
-        size_t off = 0;
-        while (off < q_n) { ssize_t w = write(fileno(g_out), q + off, q_n - off); if (w <= 0) break; off += (size_t)w; }
+        write_all(q, q_n);
         q_n = 0;
     }
     pthread_mutex_unlock(&q_lock);
@@ -202,7 +228,8 @@ struct entry { char image[64]; unsigned token; char *name; short idx; };   // id
 static struct { char image[64]; char guid[96]; } g_fid[MAXIMG];
 static int g_nfid;
 static struct entry *g_list;
-static size_t g_list_n, g_next;
+static size_t g_list_n, g_list_cap, g_next;     // (g_list_cap: of both files' entries, the list's then the seed's)
+static long g_torn;                              // lines of the list's file that were not entries
 static long g_done, g_had, g_missing;
 static double g_spent;
 
@@ -440,7 +467,7 @@ static void on_done(void *prof, void *method, void *jinfo)
 {
     (void)prof; (void)jinfo;
     unsigned tok = m_token(method);
-    if (!tok || !g_out) return;
+    if (!tok || g_out < 0) return;
     void *img = m_class_image(m_get_class(method));
     const char *in = img ? m_image_name(img) : NULL;
     if (!in || strlen(in) >= sizeof g_list[0].image || strchr(in, ' ')) return;
@@ -496,19 +523,40 @@ static const char *loaded_guid(const char *image)
     return image_id(m_image_loaded(image), b, sizeof b);
 }
 
+// a line of a list's file as an entry: "<assembly> <token, 1-8 hex digits> <name>"; 0 when it is not one
+static int parse_entry(char *line, char *image, size_t image_n, unsigned *tok, char **name)
+{
+    char *sp = strchr(line, ' ');
+    size_t il = sp ? (size_t)(sp - line) : 0;
+    if (!il || il >= image_n || line[0] == '#') return 0;
+    char *t = sp + 1, *e = t;
+    while (isxdigit((unsigned char)*e)) e++;
+    if (e == t || e - t > 8 || *e != ' ' || !e[1]) return 0;
+    memcpy(image, line, il); image[il] = 0;
+    *tok = (unsigned)strtoul(t, NULL, 16);
+    *name = e + 1;
+    return 1;
+}
+
 static void read_list(const char *path)
 {
     int own = !strcmp(path, LIST);
     FILE *f = fopen(path, "r");
     if (!f) return;
-    char line[2048];
-    size_t cap = 0;
+    char *line = NULL; size_t line_cap = 0; ssize_t len;
+    long bad = 0;
     // the module version id each assembly's entries were listed under, as the file goes (a file's later
     // lines can name a newer build)
     struct { char image[64]; char guid[96]; int ok; } cur[MAXIMG];
     int ncur = 0;
-    while (fgets(line, sizeof line, f)) {
-        char image[64], guid[96]; unsigned tok; int at = 0;
+    while ((len = getline(&line, &line_cap, f)) > 0) {
+        char image[64], guid[96]; unsigned tok = 0; char *name = NULL;
+        // a whole line only: its newline there (the file's last line cut short has none), no NUL or other control
+        // byte in it, not longer than a list's line gets
+        int whole = line[len - 1] == '\n' && len < 2048;
+        for (ssize_t i = 0; whole && i < len - 1; i++) if ((unsigned char)line[i] < 0x20 && line[i] != '\t') whole = 0;
+        if (!whole) { bad++; continue; }
+        line[len - 1] = 0;
         if (sscanf(line, "# mvid %63s %95s", image, guid) == 2) {
             int k = 0;
             while (k < ncur && strcmp(cur[k].image, image)) k++;
@@ -519,7 +567,8 @@ static void read_list(const char *path)
             cur[k].ok = m_image_loaded(image) ? (strcmp(guid, loaded_guid(image)) ? 0 : 1) : 2;
             continue;
         }
-        if (sscanf(line, "%63s %x %n", image, &tok, &at) != 2 || !at) continue;
+        if (line[0] == '#' && strncmp(line, "# mvid", 6)) continue;      // (a comment)
+        if (!parse_entry(line, image, sizeof image, &tok, &name)) { bad++; continue; }
         int k = 0;
         while (k < ncur && strcmp(cur[k].image, image)) k++;
         if (k == ncur || !cur[k].ok) { g_stale++; continue; }     // another build's, or no module version id
@@ -530,33 +579,40 @@ static void read_list(const char *path)
             if (j == g_nfid) { if (g_nfid == MAXIMG) continue; memcpy(g_fid[j].image, cur[k].image, sizeof g_fid[j].image); memcpy(g_fid[j].guid, cur[k].guid, sizeof g_fid[j].guid); g_nfid++; }
             idx = (short)j;
         }
-        char *name = line + at;
-        name[strcspn(name, "\n")] = 0;
         if (!seen_add(key(image, tok))) continue;
-        if (g_list_n == cap) {
-            cap = cap ? cap * 2 : 4096;
+        if (g_list_n >= g_list_cap) {
+            size_t cap = g_list_cap ? g_list_cap * 2 : 4096;
             struct entry *l = realloc(g_list, cap * sizeof *l);
             if (!l) break;
-            g_list = l;
+            g_list = l; g_list_cap = cap;
         }
+        char *nm = strdup(name);
+        if (!nm) break;
         struct entry *x = &g_list[g_list_n++];
         snprintf(x->image, sizeof x->image, "%s", image);
         x->token = tok;
-        x->name = strdup(name);
+        x->name = nm;
         x->idx = idx;
     }
+    free(line);
     fclose(f);
-    if (!own) return;                         // (the setup's seed list: entries of another build are only left out)
-    if (!g_stale) {
+    if (!own) {                               // (the setup's seed list: entries of another build are only left out)
+        if (bad) fprintf(stderr, "[jitwarm] %ld lines of %s were not entries (cut short or damaged): left out\n", bad, path);
+        return;
+    }
+    g_torn = bad;
+    if (!g_stale && !g_torn) {
         // the file's assemblies, as they stand: new entries of these follow on without a new line
         for (int k = 0; k < ncur && g_nmvid < MAXIMG; k++)
             if (cur[k].ok) { memcpy(g_mvid[g_nmvid].image, cur[k].image, sizeof g_mvid[0].image);
                              memcpy(g_mvid[g_nmvid].guid, cur[k].guid, sizeof g_mvid[0].guid); g_nmvid++; }
         return;
     }
-    // some entries were another build's: the file written again with the kept ones only (and their assemblies'
-    // module version ids), so the next launch does not read them again
-    fprintf(stderr, "[jitwarm] %ld listed methods were another build's (an assembly changed since): dropped\n", g_stale);
+    // some lines were not entries (cut short or damaged), or some entries were another build's: the file written
+    // again with the kept ones only (and their assemblies' module version ids), so the next launch does not read
+    // them again
+    if (g_torn) fprintf(stderr, "[jitwarm] %ld lines of %s were not entries (cut short or damaged): dropped\n", g_torn, LIST);
+    if (g_stale) fprintf(stderr, "[jitwarm] %ld listed methods were another build's (an assembly changed since): dropped\n", g_stale);
     FILE *o = fopen(LIST ".tmp", "w");
     if (!o) return;
     for (size_t i = 0; i < g_list_n; i++) {
@@ -571,7 +627,24 @@ static void read_list(const char *path)
         }
         fprintf(o, "%s %08x %s\n", x->image, x->token, x->name);
     }
-    if (fclose(o) == 0) rename(LIST ".tmp", LIST); else remove(LIST ".tmp");
+    // (synced before the rename: the list is either the old file or the whole new one, after a power cut too)
+    int ok = fflush(o) == 0 && !ferror(o) && fsync(fileno(o)) == 0;
+    if (fclose(o) != 0) ok = 0;
+    if (!ok || rename(LIST ".tmp", LIST) != 0) remove(LIST ".tmp");
+}
+
+// the list opened for its new lines: appended (O_APPEND), after a newline when its last line has none
+static void open_out(void)
+{
+    g_out = open(LIST, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0666);
+    if (g_out < 0) return;
+    off_t end = lseek(g_out, 0, SEEK_END);
+    int r = end > 0 ? open(LIST, O_RDONLY | O_CLOEXEC) : -1;
+    if (r >= 0) {
+        char c = '\n';
+        if (pread(r, &c, 1, end - 1) == 1 && c != '\n') write_all("\n", 1);
+        close(r);
+    }
 }
 
 static void install(void)
@@ -639,8 +712,8 @@ static void install(void)
     if (legacy && jl && *jl && *jl != '0')
         fprintf(stderr, "[jitwarm] UA_JIT_LOG holds Mono 2.6's one profiler: compiled ahead, nothing new listed\n");
     else {
-        g_out = fopen(LIST, "a");
-        if (!g_out) fprintf(stderr, "[jitwarm] cannot write %s: nothing new is listed\n", LIST);
+        open_out();
+        if (g_out < 0) fprintf(stderr, "[jitwarm] cannot write %s: nothing new is listed\n", LIST);
         else { writer_start(); atexit(jitwarm_flush); }
         if (legacy) {
             static int prof_token;
