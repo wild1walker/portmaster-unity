@@ -114,6 +114,22 @@ PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk PMU_PARITY_PYTHON=<venv>/bin/pyth
   setup-rs/tools/rs.sh <worktree> cargo test -p pmu --test check_parity -- --nocapture
 ```
 
+## The setup templates' tests
+
+`pmu/tests/setup_templates.rs` runs the templates as a handheld does (test_port.py's setup tests,
+in Rust): a port made by `pmu port new --data` from a made-up game and installed as
+`ports/mygame`, its `setup/patchscript` run by bash with a stand-in for `setup/pmu` (a script that
+logs each command and makes what the setup reads next), for PortMaster's 7-Zip, `sync` (which notes
+what is on the card at each sync, and can cut the power) and `df`; the launcher on a stand-in
+PortMaster. Every route's patchscript: a relative start with `GAMEDIR=.` and an absolute one (#20
+and the guard against running itself again for ever), hooks without `.sh` (#19); the android,
+mono-arm64, il2cpp-arm64 and box64 setups from a folder, a zip, a `.tar.gz` (a damaged one too),
+macOS installers, a compressed build; a missing donor, another Unity version, a conversion stopped
+by the kernel, a full card, progress files that cannot be written or came back empty, the order of
+the setup's end and a power cut after its mark; the launcher of a game not set up, or set up with
+the setup's files still there. The apk route's setup runs the real pmu on made-up APKs
+(crates/apk/tests/made). They need bash, gunzip and tar; no Python.
+
 The parity check, `pmu/tests/port_parity.rs`, runs the Python and pmu one after the other at the
 same paths on synthetic ports (every route, `aarch64_only`, Windows/Direct3D 11, Vulkan with a
 Python plugin, asmpatch, box64, the apk route's three player layouts, error cases) and compares the
