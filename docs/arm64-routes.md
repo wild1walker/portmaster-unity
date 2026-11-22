@@ -1350,6 +1350,33 @@ compressed. Which budget a 1 GB handheld gets was set for memory (2026-11-09); w
   output came out the same. `ANDROID_SLES_CAPTURE` can compare outputs, but no skip here is exact by
   construction. Dropped.
 
+*As a player launches it (2026-11-21, evening).* dArkOS starts a port from EmulationStation with
+`sudo perfmax %GOVERNOR% %ROM%; nice -n -19 %ROM%; sudo perfnorm`, and `%GOVERNOR%` is `performance` here: the
+CPU's, GPU's and memory's governors are all `performance` while the game runs (the GPU fixed at 520 MHz, the CPU
+at 1512 MHz until the thermal governor steps it down) and back to their on-demand ones after it; ES gives up the
+display for the game. None of the runs above this paragraph had that: they were started over SSH under the idle
+governors. Measured the system's own way instead: test launchers in `/roms/ports` (the release's own, and one
+each for the 32-bit and 64-bit bench installs, the same game data), EmulationStation started on Ports and driven
+by pad events injected into the handheld's own pad (`evemu-event`), what it started checked in the process list
+before any further press, the save continued and the game left by PortMaster's Select + Start hotkey the same way;
+silent (the installs' audio lines, and the mixer at 0 for the session), the logger running. 120 s a run, the
+log's 10 s frame rates:
+
+| ES-launched, fps | 32-bit | 64-bit |
+|---|---|---|
+| King's Pass (bench installs, 32 64 64 32) | 45.2, 45.3 | 45.6, 45.7 |
+| City of Tears (32 64 64 32) | 39.7, 39.2 | 37.8, 37.8 |
+| the Hall of Gods room of the boss save (64 32 32 64) | 56.1, 56.2 | 55.6, 55.3 |
+| the release's install (64-bit): King's Pass, City of Tears, the boss save's room | - | 57 - 58.8 on a cool handheld, 44 - 46 warm; 37.0 - 38.1; 55.3 - 56.9 |
+
+The handheld is warm in these (76 - 78 C in a run; the thermal governor holds the CPU at 1.0 - 1.2 GHz). King's
+Pass and the boss room are within half a frame either way; City of Tears is 1.6 fps (4 %) behind on 64-bit, the
+GL thread's driver time on the RK3326's small L2 (above). 18 launches in all (12 of a 64-bit build, 6 of the 32-bit one), every one left by the hotkey in 2 s with
+EmulationStation back, no hang; the battery went 4.17 -> 4.12 - 4.14 V at 100 % over two hours on the Mac's USB
+port (95 - 217 mA out while a game runs, 30 - 120 mA in between runs). The Knulli and muOS numbers of this page
+need no such correction: Knulli's launcher sets no governor (schedutil in the menu and in a game), and the muOS
+runs already apply muOS's own content governor as its launcher does.
+
 ### Fragments that cannot show (2026-11-21)
 
 `UA_GL_TRACE_FILL=1` (runtime/host/glfill.c: every draw of a traced frame made a second time with a counting copy
