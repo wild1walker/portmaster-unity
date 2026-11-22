@@ -43,6 +43,25 @@ Xbox prompts name the wrong letter for each button. Fix the letters, never the p
   Knight; Cuphead's own `pad-prompts-android`). Such a patch reads `UA_PAD_LETTERS`: unset, or
   anything but `xbox`, the Nintendo layout's letters; `xbox` the game's Xbox letters, for handhelds
   printed like an Xbox pad.
+- The firmware's SDL map decides where `a` is. PortMaster's own maps are by position (its
+  `mapper.py` turns EmulationStation's `b` into SDL's `a`), and so are Knulli's (checked on the
+  RG34XX-SP). muOS has two maps for its pad and a setting for them: **Modern** by position, and
+  **Retro**, its default, by the printed letters (`a` = the button printed A, on the right; `x` the
+  top one), as in muOS's own menus. There the game's jump is on the right button and its own Xbox
+  letters are the printed ones, so the Nintendo pictures name every face button wrongly (Hollow
+  Knight's testers on the RG35XX H, 2026-11-21: "A is B and B is A"). muOS links the map it uses to
+  `/usr/lib/gamecontrollerdb.txt` and `/usr/lib32/gamecontrollerdb.txt`, which PortMaster's muOS
+  `control.txt` reads as `$SDL_GAMECONTROLLERCONFIG_FILE`: `.../info/gamecontrollerdb/retro.txt` or
+  `modern.txt` (since August 2025; before, `gamecontrollerdb_retro.txt` or `_modern.txt`; MustardOS
+  `script/mux/sdl_map.sh`). A launcher shows the Xbox letters on Retro, after reading the setup's
+  answer:
+
+  ```sh
+  [ "$CFW_NAME" = muOS ] && case "$(readlink "$SDL_GAMECONTROLLERCONFIG_FILE" 2>/dev/null)" in
+    *retro.txt) export UA_PAD_LETTERS=xbox ;; esac
+  ```
+
+  Hollow Knight's launcher does (from 2026-11-22); Cuphead's `CUPHEAD_PROMPTS` does not yet.
 
 ## What the game reads
 
