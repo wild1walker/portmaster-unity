@@ -309,8 +309,39 @@ the release passes `pmu arch-check`, and a launch without the game, an install o
   - Cuphead's Botanic Panic at 38 - 39 fps at the device's resolution.
   - Hollow Knight's scripted boss fight and death did not trigger on the G350 (arm64-routes.md, "The sound
     budget on a 1 GB handheld").
-- An earlier release's 32-bit build on the card: the 64-bit setup needs the game's files again (the 32-bit
-  setup used them up), and each launcher says so; the saves come over (Cuphead and Hollow Knight copy
-  `data/files`, `shared_prefs`, `external` into `arm64/data/` once, where it has none; Blasphemous's stay in
-  `data/`). The 32-bit build's own files (its `lib/`, APK, OBB) stay on the card until removed by hand
-  (Blasphemous's are replaced by the 64-bit install).
+- **An earlier release's 32-bit build on the card (tested 2026-11-22/23).** The 64-bit setup needs the game's
+  files again (the 32-bit setup used them up), and each launcher says so; the saves come over (Cuphead and
+  Hollow Knight copy `data/files`, `shared_prefs`, `external` into `arm64/data/` once, where it has none;
+  Blasphemous's stay in `data/`).
+  - Hollow Knight on the G350, every launch from EmulationStation (the public release 2026.11.19 unzipped, the
+    game's folder in `gamedata/`, the patcher's first answers): the 32-bit setup took 54 min 21 s (1884 MB;
+    it wants 7.8 GB free beside the game's 4.9 GB), a save played in City of Tears at 38 - 41 fps. The
+    64-bit only zip unzipped over it adds 59 MB (`setup/`, `donor/`, `relayout/`). A launch without the
+    game's files: the patcher's questions, the setup's "Put Hollow Knight for Linux ... in
+    ports/hollowknight/gamedata", then the launcher's error card "This release of Hollow Knight is 64-bit
+    only ... Your saves are kept". With the game's files back: **the first try was refused, "Converting the
+    game needs about 7798 MB free on the card (7116 MB free)"**, because the 32-bit build's 1.9 GB was still
+    there, and the launcher's card then asked for the game's files that were there. Fixed in both ports'
+    launchers: the 32-bit build's game files (the release has no runtime for them) go before the setup starts,
+    once `gamedata/` holds more than its note, and the "64-bit only" card shows only while the setup has
+    found no game. With that the setup ran in 53 min 40 s (1949 MB), `data/` kept its 36 files unchanged, the
+    save and the settings in `arm64/data/` are the same bytes, and the same save plays at 36.5 - 38.4 fps
+    (599 MB resident, 234 MB available at the lowest), left by the exit hotkey in 2 s. Left of the 32-bit
+    build: `data/` (2 MB).
+  - Cuphead: not run on a handheld this time. In the rehearsal container (`tools/port/rehearse.sh`,
+    `REHEARSE_OVER` a stand-in for the 32-bit install: the public release's files as its launcher leaves
+    them and the 32-bit build's files by their real names, as an RG34XX-SP install lists them) the 64-bit
+    only zip shows "Put Cuphead.app ..." and the card without the game, and with Cuphead.app in `gamedata/`
+    removes the 32-bit build's files, sets the game up (23 - 29 minutes there, 2398 MB, the same build id as the
+    G350's setup of 2026-11-21) and copies the saves. The same rehearsal of Hollow Knight gives what the
+    G350 gave.
+  - Both setups now work with paths relative to the port folder, as the templates (their own files:
+    Hollow Knight's `setup/patchscript`, Cuphead's `setup64/patchscript`); Hollow Knight's ran so on the G350.
+  - The rehearsal's PortMaster stand-in has `pm_show_error` (the launchers' error cards).
+- **The G350 hung with no game running** (2026-11-22 23:41): about a minute into a 4.9 GB `tar` over ssh
+  into `/roms` at the link's full speed, EmulationStation idle in its menu; the USB device stayed listed, no
+  ARP answer, a power cycle brought it back with the card clean. The same copy an hour earlier had gone
+  through. Large copies to it now go through `pv -L 4m` on the handheld (21 minutes for 4.9 GB, no hang in
+  two such copies), every ssh with ConnectTimeout and ServerAlive; file counts and byte totals are compared
+  afterwards. After the power cycle the mixer was back at the user's level: a test state that relies on
+  the mixer at 0 has to set it again.

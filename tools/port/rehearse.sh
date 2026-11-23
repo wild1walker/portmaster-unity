@@ -122,6 +122,7 @@ CFW_NAME=Rehearsal; DEVICE_NAME=container; DEVICE_ARCH=aarch64; DISPLAY_WIDTH=72
 ESUDO=""; GPTOKEYB="true"; GPTOKEYB2="true"; sdl_controllerconfig=""
 get_controls() { :; }
 pm_message() { echo "[pm_message] $*"; }
+pm_show_error() { echo "[pm_show_error] $1"; }   # (PortMaster's error card: the text; --title and --type are its options)
 pm_message_end() { :; }
 pm_finish() { :; }
 pm_platform_helper() { :; }
