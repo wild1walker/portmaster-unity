@@ -885,6 +885,29 @@ steps = ["shaders", "settings", "audio", "quality", "textures", "exactindex", "f
 names = "MSJhengHei-cut|...|Bishop_executionTPORecolor|...|RegresoAPuerto-Prayer|...|miriam-fragments-spritesheet"
 ```
 
+The same step for a boss that comes in variants (2026-11-24): the Amanecidas' arena (`D21Z01S01`-`S04`) preloads
+every Amanecida's sprite sheets, four colours and Laudes (`AmanecidasAnimatorInyector.bodyAnimatorsByType`, one
+animator controller each; `SetAmanecidaColor` binds the fight's one), 160 textures, 166 MB at a byte a texel. With
+them in the lazy list only the bound controller's sheets load (about 25 of the 160 at the fight's start): muOS, the
+arena loaded straight from a save, 313 MB of textures and 157 - 171 MB free through a fight with the Bejeweled Arrow
+(drawn as before, 55 - 60 fps), a death and its respawn; before, the arena ran out (50 MB). A controller bound to an
+active Animator loads every sprite its clips name when it is bound, whatever the lists say: Crisanta's ending (her
+execution, 92 MB of sheets in her arena's own shared assets) loads with her arena although the step names it (also
+with its override controllers and clips named, tried with a pmu that names those classes): the lists decide what a
+scene preloads, not what its live objects load.
+
+Art a game keeps referenced everywhere but draws in one place: Blasphemous's persistent UI holds the main menu's
+animations, its DLC screens and the two logos in every level (133 textures, 51 MB). The lists cannot help (the menu
+draws it before every game), `UA_UNLOAD_ASSETS` neither (given back while the menu still shows it, it comes back at
+once and is kept); ua_host's `UA_UNLOAD_OUTSIDE` (runtime.md) gives it back on the way out of the menu scenes and lets
+the menu load it again: muOS's first room 263 -> 217 MB of textures, Crisanta's arena 400 -> 349 MB; the menu after a
+return from a level the same picture. Unity's active scene names are not the game's level names
+(`MainMenu_LOGIC`, `D06Z01S25_LOGIC`): a first run with any list logs the names it sees.
+
+On the BattleXP G350 (EmulationStation launch, 2026-11-24) with both: the first level 145 - 163 MB free (59 before the
+lazy list, about 110 with the executions and prayers), Crisanta's zone about 155; her arena's load is still killed by
+the kernel (both rooms and her ending's sheets during the load).
+
 What this is not: `UA_UNLOAD_ASSETS` for these names. The fonts are given back because the game never draws them in
 another language; an execution or a prayer may come back any time, and a texture given back is not always loaded
 again for a renderer that already draws it (Hollow Knight's Korean notice, above). The one profile goes to every

@@ -46,6 +46,12 @@
 //   UA_UNLOAD_ASSETS=<name>[|<name>...]  (a memory setting) those loaded Textures and Fonts given back with
 //                           Resources.UnloadAsset after the first frames and after each new active scene; Unity loads
 //                           them again from disk if anything uses them (unload_assets below)
+//   UA_UNLOAD_OUTSIDE=<scene>[|<scene>...], UA_UNLOAD_OUTSIDE_ASSETS=<name>[|<name>...]  (a memory setting) those
+//                           Textures given back 2 s after the first active scene outside the first list each time the
+//                           game leaves those scenes: art that only those scenes draw (a main menu's), loaded again when one is shown
+//                           (unload_outside below)
+//   UA_UNLOAD_IN='<scene>=<name>[|<name>...][;...]'  (a memory setting) those Textures given back 2 s after <scene>
+//                           becomes the active scene, each time: art a scene loads but shows only at its end (unload_in)
 //   UA_ASYNC_UPLOAD=<MB>[,transient]  (a memory setting, not a dump) Unity's async upload ring buffer: its size
 //                           (QualitySettings.asyncUploadBufferSize) and, with "transient", given back when idle
 //                           (asyncUploadPersistentBuffer false), set once after the first frame through Unity's setters
@@ -1118,10 +1124,168 @@ static void unload_assets(void)
     } else quiet = 0;
 }
 
+// the loaded objects of <type> whose names are in <names> ("|a|b|") given back with Resources.UnloadAsset; their count
+// and their size at a byte a texel in *mb
+static int give_back(MonoMethod *find_all, MonoMethod *unload, MonoObject *type, const char *names, double *mb)
+{
+    void *args[1] = { type };
+    MonoObject *exc = NULL;
+    MonoArray *arr = (MonoArray *)m_invoke(find_all, NULL, args, &exc);
+    if (!arr || exc) return 0;
+    int n_un = 0;
+    for (uintptr_t i = 0, n = array_length(arr); i < n; i++) {
+        MonoObject *o = *(MonoObject **)m_array_addr(arr, sizeof(void *), i);
+        char nm[128], key[132];
+        if (!o) continue;
+        name_of(o, nm, sizeof nm);
+        if (!nm[0]) continue;
+        snprintf(key, sizeof key, "|%s|", nm);
+        if (!strstr(names, key)) continue;
+        int w = 0, h = 0;
+        geti(o, "get_width", &w); geti(o, "get_height", &h);
+        void *a1[1] = { o };
+        exc = NULL;
+        m_invoke(unload, NULL, a1, &exc);
+        if (!exc) { n_un++; *mb += (double)w * h / 1048576; }
+    }
+    return n_un;
+}
+
+// UA_UNLOAD_OUTSIDE=<scene>[|<scene>...] with UA_UNLOAD_OUTSIDE_ASSETS=<name>[|<name>...]: loaded Textures of those names
+// (exact) given back with Resources.UnloadAsset 2 s after the active scene changes to one whose name is not in the scene
+// list, the first such change after one of the listed scenes (or the start). For art only those scenes draw that a game keeps referenced everywhere (Blasphemous's
+// main menu: its persistent UI holds the menu's animations, about 55 MB, through every level): Unity loads it again
+// when the menu is shown, and it is given back again on the way out. Unlike UA_UNLOAD_ASSETS an asset loaded again is
+// never "kept": the scenes that draw it are named. Logged: "[dump] outside <scenes>: <n> given back (<MB>) at <s> s".
+static void unload_outside(void)
+{
+    static int state = -1, frames, pending, armed = 1;
+    static double t0, due;
+    static MonoMethod *unload, *find_all, *get_active, *scene_name;
+    static MonoObject *type;
+    static char scenes[512], names[8192], last[128] = "\1";
+    if (!state) return;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    if (state < 0) {
+        const char *sc = getenv("UA_UNLOAD_OUTSIDE"), *e = getenv("UA_UNLOAD_OUTSIDE_ASSETS");
+        state = 0;
+        if (!sc || !*sc || !e || !*e || !load()) return;
+        snprintf(scenes, sizeof scenes, "|%s|", sc);
+        snprintf(names, sizeof names, "|%s|", e);
+        MonoImage *core = m_image_loaded("UnityEngine.CoreModule");
+        MonoClass *k_res = core ? m_class_from_name(core, "UnityEngine", "Resources") : NULL;
+        MonoClass *k_tex = core ? m_class_from_name(core, "UnityEngine", "Texture") : NULL;
+        MonoClass *k_sm = core ? m_class_from_name(core, "UnityEngine.SceneManagement", "SceneManager") : NULL;
+        MonoClass *k_scene = core ? m_class_from_name(core, "UnityEngine.SceneManagement", "Scene") : NULL;
+        unload = k_res ? m_method_from_name(k_res, "UnloadAsset", 1) : NULL;
+        find_all = k_res ? m_method_from_name(k_res, "FindObjectsOfTypeAll", 1) : NULL;
+        get_active = k_sm ? m_method_from_name(k_sm, "GetActiveScene", 0) : NULL;
+        scene_name = k_scene ? m_method_from_name(k_scene, "get_name", 0) : NULL;
+        if (!unload || !find_all || !k_tex || !get_active || !scene_name) {
+            fprintf(stderr, "[dump] UA_UNLOAD_OUTSIDE: Resources.UnloadAsset, FindObjectsOfTypeAll or SceneManager not found: off\n");
+            return;
+        }
+        type = m_type_get_object(m_domain_get(), m_class_get_type(k_tex));
+        t0 = now; state = 1;
+        fprintf(stderr, "[dump] UA_UNLOAD_OUTSIDE: given back outside %s\n", sc);
+        return;
+    }
+    // the active scene's name, every 60 frames: a new one outside the list, a pass 2 s later
+    if (++frames % 60 == 0) {
+        MonoObject *exc = NULL, *sc = m_invoke(get_active, NULL, NULL, &exc);
+        char nm[128] = "";
+        if (sc && !exc) {
+            MonoObject *s = m_invoke(scene_name, m_unbox(sc), NULL, &exc);
+            if (s && !exc) str(s, nm, sizeof nm);
+        }
+        if (nm[0] && strcmp(nm, last)) {
+            char key[132]; snprintf(key, sizeof key, "|%s|", nm);
+            snprintf(last, sizeof last, "%s", nm);
+            // the art loads only while one of the named scenes is shown: a pass on the first scene after one of them
+            // (and after the start), not at every room change (each pass walks every texture Unity holds)
+            if (strstr(scenes, key)) { pending = 0; armed = 1; }
+            else if (armed) { pending = 1; due = now + 2; armed = 0; }
+        }
+    }
+    if (!pending || now < due) return;
+    pending = 0;
+    double mb = 0;
+    int n_un = give_back(find_all, unload, type, names, &mb);
+    fprintf(stderr, "[dump] outside %s: %d given back (about %.1f MB at a byte a texel) at %.0f s\n", last, n_un, mb, now - t0);
+}
+
+// UA_UNLOAD_IN='<scene>=<name>[|<name>...][;<scene>=...]': loaded Textures of those names given back with
+// Resources.UnloadAsset 2 s after <scene> becomes the active scene, each time it does. For art a scene loads with an
+// object it shows only at the end (Blasphemous's Crisanta: her arena binds her animator, whose controller holds her two
+// ending cutscenes, 92 MB, at the arena's load): Unity loads a texture again when a sprite of it is drawn, so the
+// cutscene shows the same picture after a load in its first frame, and the fight runs without it. Only the named scenes
+// make a pass. Logged: "[dump] in <scene>: <n> given back (<MB>) at <s> s".
+static void unload_in(void)
+{
+    static int state = -1, frames, pending;
+    static double t0, due;
+    static MonoMethod *unload, *find_all, *get_active, *scene_name;
+    static MonoObject *type;
+    static char spec[8192], last[128] = "\1", names[8192];
+    if (!state) return;
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    double now = ts.tv_sec + ts.tv_nsec / 1e9;
+    if (state < 0) {
+        const char *e = getenv("UA_UNLOAD_IN");
+        state = 0;
+        if (!e || !*e || !load()) return;
+        snprintf(spec, sizeof spec, ";%s;", e);
+        MonoImage *core = m_image_loaded("UnityEngine.CoreModule");
+        MonoClass *k_res = core ? m_class_from_name(core, "UnityEngine", "Resources") : NULL;
+        MonoClass *k_tex = core ? m_class_from_name(core, "UnityEngine", "Texture") : NULL;
+        MonoClass *k_sm = core ? m_class_from_name(core, "UnityEngine.SceneManagement", "SceneManager") : NULL;
+        MonoClass *k_scene = core ? m_class_from_name(core, "UnityEngine.SceneManagement", "Scene") : NULL;
+        unload = k_res ? m_method_from_name(k_res, "UnloadAsset", 1) : NULL;
+        find_all = k_res ? m_method_from_name(k_res, "FindObjectsOfTypeAll", 1) : NULL;
+        get_active = k_sm ? m_method_from_name(k_sm, "GetActiveScene", 0) : NULL;
+        scene_name = k_scene ? m_method_from_name(k_scene, "get_name", 0) : NULL;
+        if (!unload || !find_all || !k_tex || !get_active || !scene_name) {
+            fprintf(stderr, "[dump] UA_UNLOAD_IN: Resources.UnloadAsset, FindObjectsOfTypeAll or SceneManager not found: off\n");
+            return;
+        }
+        type = m_type_get_object(m_domain_get(), m_class_get_type(k_tex));
+        t0 = now; state = 1;
+        return;
+    }
+    if (++frames % 60 == 0) {
+        MonoObject *exc = NULL, *sc = m_invoke(get_active, NULL, NULL, &exc);
+        char nm[128] = "";
+        if (sc && !exc) {
+            MonoObject *s = m_invoke(scene_name, m_unbox(sc), NULL, &exc);
+            if (s && !exc) str(s, nm, sizeof nm);
+        }
+        if (nm[0] && strcmp(nm, last)) {
+            char key[132]; snprintf(key, sizeof key, ";%s=", nm);
+            snprintf(last, sizeof last, "%s", nm);
+            const char *at = strstr(spec, key);
+            pending = 0;
+            if (at) {
+                at += strlen(key);
+                const char *end = strchr(at, ';');
+                snprintf(names, sizeof names, "|%.*s|", (int)(end - at), at);
+                pending = 1; due = now + 2;
+            }
+        }
+    }
+    if (!pending || now < due) return;
+    pending = 0;
+    double mb = 0;
+    int n_un = give_back(find_all, unload, type, names, &mb);
+    fprintf(stderr, "[dump] in %s: %d given back (about %.1f MB at a byte a texel) at %.0f s\n", last, n_un, mb, now - t0);
+}
+
 void monodump_frame(void)
 {
     async_upload();
     unload_assets();
+    unload_outside();
+    unload_in();
     flipbook_frame();
     probe_frame();
     hero_place();

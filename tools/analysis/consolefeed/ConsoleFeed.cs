@@ -11,8 +11,10 @@
 //                  ("[feed] <s> s: watch <value>"; default Blasphemous's level name,
 //                  Framework.Managers.Core:LevelManager:currentLevel:LevelName), to line the frame-rate lines up with the
 //                  room the game shows; empty: off
+// A line "!obj <type>[:<member>...]:<method> [<text>]" does the same from the scene's first object of that type
+// (FindObjectOfType; Blasphemous: "!obj Gameplay.GameControllers.Bosses.Crisanta.Crisanta:KillInstanteneously").
 // A line "!call <type>:<static member>[:<member>...]:<method> [<text>]" calls that method (no parameters, or one string: the
-// rest of the line) on the value the chain reaches, for an action the console has no command for; logged with its answer.
+// rest of the line; "true" or "false" also finds one bool) on the value the chain reaches, for an action the console has no command for; logged with its answer.
 // Blasphemous's console: "loadnoui D08Z01S01" (a room; the area's music and enemies as on arrival; "load" also opens a
 // debug door list), "invincible" (toggles), "prayer equip PR12 0" (gives, deciphers and equips it, fervour full),
 // "execution y", "help". A prayer is cast with
@@ -60,7 +62,7 @@ public static class UAProbe
             foreach (string raw in lines) {
                 string line = raw.Trim();
                 if (line.Length == 0 || line[0] == '#') continue;
-                Say("[feed] " + Secs() + " s: " + line + (line.StartsWith("!call ") ? Call(line.Substring(6).Trim()) : Send(line)));
+                Say("[feed] " + Secs() + " s: " + line + (line.StartsWith("!call ") ? Call(line.Substring(6).Trim(), false) : line.StartsWith("!obj ") ? Call(line.Substring(5).Trim(), true) : Send(line)));
             }
         } catch (Exception e) { if (threw++ < 5) Say("[feed] threw " + e); }
     }
@@ -78,21 +80,26 @@ public static class UAProbe
     }
 
     // "!call <type>:<static member>[:<member>...]:<method> [<text>]": a method on that value, without parameters or with
-    // one string (the rest of the line); logged with the method's answer
-    static string Call(string spec)
+    // one string (the rest of the line), or one bool for "true"/"false"; logged with the method's answer
+    static string Call(string spec, bool obj)
     {
         string arg = null;
         int sp = spec.IndexOf(' ');
         if (sp > 0) { arg = spec.Substring(sp + 1).Trim(); spec = spec.Substring(0, sp); }
         string[] p = spec.Split(':');
-        if (p.Length < 3) return " (want <type>:<static member>[:<member>...]:<method>)";
+        if (p.Length < (obj ? 2 : 3)) return obj ? " (want <type>[:<member>...]:<method>)" : " (want <type>:<static member>[:<member>...]:<method>)";
         string[] chain = new string[p.Length - 1];
         Array.Copy(p, chain, chain.Length);
-        object inst = Chain(chain);
+        object inst = obj ? Found(chain) : Chain(chain);
         if (inst == null) return " (no value yet)";
         for (Type k = inst.GetType(); k != null; k = k.BaseType) {
             MethodInfo m = k.GetMethod(p[p.Length - 1], A | BindingFlags.DeclaredOnly, null, arg == null ? Type.EmptyTypes : new Type[] { typeof(string) }, null);
-            if (m != null) { object r = m.Invoke(inst, arg == null ? null : new object[] { arg }); return " -> " + (r == null ? "done" : r.ToString()); }
+            object[] pa = arg == null ? null : new object[] { arg };
+            if (m == null && (arg == "true" || arg == "false")) {
+                m = k.GetMethod(p[p.Length - 1], A | BindingFlags.DeclaredOnly, null, new Type[] { typeof(bool) }, null);
+                pa = new object[] { arg == "true" };
+            }
+            if (m != null) { object r = m.Invoke(inst, pa); return " -> " + (r == null ? "done" : r.ToString()); }
         }
         return " (no method " + p[p.Length - 1] + "())";
     }
@@ -104,6 +111,17 @@ public static class UAProbe
         if (t == null) return null;
         object v = Get(t, null, p[1]);
         for (int i = 2; i < p.Length && v != null; i++) v = Get(v.GetType(), v, p[i]);
+        return v;
+    }
+
+    // "!obj": the first loaded object of that type (UnityEngine.Object.FindObjectOfType), then the members
+    static object Found(string[] p)
+    {
+        Type t = T(p[0]), uo = T("UnityEngine.Object");
+        if (t == null || uo == null) return null;
+        MethodInfo f = uo.GetMethod("FindObjectOfType", new Type[] { typeof(Type) });
+        object v = f == null ? null : f.Invoke(null, new object[] { t });
+        for (int i = 1; i < p.Length && v != null; i++) v = Get(v.GetType(), v, p[i]);
         return v;
     }
 
