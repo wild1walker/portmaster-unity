@@ -26,6 +26,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "jitlog.h"
 #include "monoaot.h"
 #include "jitwarm.h"
+#include "guiwarm.h"
 #include "quality.h"
 #include "desktopenv.h"
 #include "gldriver.h"
@@ -525,7 +526,7 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); unityhooks_frame(); fmodasync_frame(); unitylayers_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); }
+static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); guiwarm_frame(); unityhooks_frame(); fmodasync_frame(); unitylayers_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
@@ -773,6 +774,7 @@ int main(int argc, char **argv)
     uinav_init();
     jitlog_init();
     jitwarm_init();
+    guiwarm_init();
     quality_init(pj_quality);
     cfg.on_frame = on_frame;
     cfg.sdk_int = sdk_int;
