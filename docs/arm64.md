@@ -309,6 +309,24 @@ the release passes `pmu arch-check`, and a launch without the game, an install o
   - Cuphead's Botanic Panic at 38 - 39 fps at the device's resolution.
   - Hollow Knight's scripted boss fight and death did not trigger on the G350 (arm64-routes.md, "The sound
     budget on a 1 GB handheld").
+  - **Enter the Gungeon's floors did not fit the G350 with EmulationStation (2026-11-23/24; fixed).** The Keep's first
+    fight thrashed (0.2 - 27 fps, frames of 1 - 17 s, 41 MB available, Mono's heap 288 MB). Where the 64-bit build's
+    memory went (muOS, the same room, bench build: smaps, `UA_MEM_LEDGER=2`, `GC_PRINT_STATS=1`): anonymous memory 556
+    MB against the 32-bit build's 413; Mono's heap 288 MB around 170 - 194 MB of live data (the 32-bit build's heap 206
+    MB), glibc's malloc 227 MB (libunity 138 of it) against 164 (libunity 115, libmono 30). The heap was the 64-bit
+    build's own excess: the Mono route's Boehm grows its heap 16 MB at a time during a floor's load while less than
+    heap/3 has been allocated since its last collection (four grows in a row, 34 - 75 MB allocated), and the port's
+    `UA_GC_GROW`, which stops that on the 32-bit player, had been off on this route (its thread started only for Mono 2.6's
+    `libmono.so`; a floor's load draws frames, so the thread rarely finds the long frame it waits for anyway). Fixed in
+    ua_host: `UA_GC_GROW` on the Mono route and `UA_GC_TIGHT=<n>` (runtime.md: under `UA_GC_GROW`'s line Boehm's
+    free-space divisor at n). Gungeon also kept 40 MB of GPU memory in the Ammonomicon's ten precached 960x1080 page
+    buffers, a game-side cut both builds get (the port's gungeonpatch, `ammo-buffers`). On the G350, ES-launched, bench
+    build (fixed seed, no damage) warped to each floor's busiest room, `UA_GC_TIGHT=32`: the Keep 151 - 162 MB
+    available, 29.5 - 33 fps; Bullet Hell 121 - 125 MB, 27 - 30 fps; the Forge 110 - 134 MB, 36 - 38 fps (the 32-bit
+    build: 29.8 - 31.1, 29.5 - 31 fps; the Forge 140 MB with `UA_GC_GROW`). The book opens in the same time (2.8 s the
+    first time, 1.65 s after) with the same pages. A census of the Mono route's live heap (`UA_GC_CENSUS`) needs
+    `GC_enumerate_reachable_objects_inner`, which this repository's Mono build does not export ("[census] ... off");
+    the census request now works where the game keeps its collector on.
 - **An earlier release's 32-bit build on the card (tested 2026-11-22/23).** The 64-bit setup needs the game's
   files again (the 32-bit setup used them up), and each launcher says so; the saves come over (Cuphead and
   Hollow Knight copy `data/files`, `shared_prefs`, `external` into `arm64/data/` once, where it has none;

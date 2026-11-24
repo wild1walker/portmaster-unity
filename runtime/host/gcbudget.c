@@ -16,10 +16,16 @@
 //                       has less than <MB> MB available (MemAvailable), a thread of the host runs one full
 //                       collection right away. Boehm grows its heap whenever the garbage since its last
 //                       collection is small next to the heap (a third of the live data: Mono 2.6's
-//                       GC_free_space_divisor, which no setting reaches), and a heap never gives memory back;
+//                       GC_free_space_divisor, which no setting reaches; the Mono route's libmonobdwgc the
+//                       same, 16 MB at a time), and a heap never gives memory back;
 //                       collected first, the next growth waits for the memory the game keeps. Each one is a
 //                       pause inside the load ("[host] gc grow" with its length, the heap and the used heap
 //                       before and after); frames at play speed are never paused by it.
+//   UA_GC_TIGHT=<n>     (with UA_GC_GROW; default 0 = off) while the system has less than UA_GC_GROW's MB available,
+//                       Boehm's free-space divisor at <n> (GC_set_free_space_divisor: a collection after heap/<n>
+//                       bytes allocated, where it would otherwise grow the heap; its own value, 3, again once more
+//                       than the line + 64 MB is available). Collectors that export the setting: the Mono route's
+//                       libmonobdwgc (and Unity's Mono 2017+ players); Mono 2.6's has none ("[host] gc tight: off").
 //
 // A census of the live managed heap (a measurement; Unity's Boehm collector, Mono players and the Mono route):
 //   UA_GC_CENSUS=<n>    after each of the first <n> collections of UA_GC_BUDGET, and whenever a file gccensus.req
@@ -61,6 +67,7 @@ static int64_t g_base = -1;                 // used heap after the last collecti
 static int g_count;
 
 static int g_grow_mb;                       // UA_GC_GROW (0: off)
+static int g_tight;                         // UA_GC_TIGHT: Boehm's free-space divisor under UA_GC_GROW's line (0: off)
 static volatile double g_frame_t;           // when UnityMain last finished a frame
 static int g_grow_started;
 static int g_census_on, g_census_left, g_census_frames;   // UA_GC_CENSUS
@@ -71,6 +78,8 @@ void gcbudget_init(void)
     if (e && *e) g_budget = (long long)atoi(e) << 20;
     e = getenv("UA_GC_GROW");
     if (e && *e) g_grow_mb = atoi(e);
+    e = getenv("UA_GC_TIGHT");
+    if (e && *e) g_tight = atoi(e);
     e = getenv("UA_GC_CENSUS");
     if (e && *e) { g_census_on = 1; g_census_left = atoi(e); }
 }
@@ -140,9 +149,26 @@ static void *grow_main(void *arg)
         return NULL;
     }
     fprintf(stderr, "[host] gc grow: on (a collection when the heap grows during a load with under %d MB available)\n", g_grow_mb);
+    // UA_GC_TIGHT: while the system has less than UA_GC_GROW's MB available, Boehm's free-space divisor at this value
+    // (collect after heap/<n> bytes allocated instead of growing the heap; its own value back above the line + 64 MB)
+    void (*set_div)(unsigned long) = (void (*)(unsigned long))so_dlsym(h, "GC_set_free_space_divisor");
+    unsigned long (*get_div)(void) = (unsigned long (*)(void))so_dlsym(h, "GC_get_free_space_divisor");
+    unsigned long div0 = get_div ? get_div() : 0;
+    int tight = 0, tick = 0;
+    if (g_tight > 0 && (!set_div || !div0)) fprintf(stderr, "[host] gc tight: this collector has no free-space divisor setting: off\n");
     int64_t last = heap(); int last_n = count(0), logged = 0;
     for (;;) {
         usleep(10000);
+        if (g_tight > 0 && set_div && div0 && ++tick % 50 == 0) {
+            long a = mem_available_mb();
+            if (!tight && a >= 0 && a < g_grow_mb) {
+                set_div((unsigned long)g_tight); tight = 1;
+                if (logged++ < 100) fprintf(stderr, "[host] gc tight: %ld MB available: free-space divisor %lu -> %d\n", a, div0, g_tight);
+            } else if (tight && a > g_grow_mb + 64) {
+                set_div(div0); tight = 0;
+                if (logged++ < 100) fprintf(stderr, "[host] gc tight: %ld MB available: free-space divisor back to %lu\n", a, div0);
+            }
+        }
         int64_t hs = heap(); int n = count(0);
         int grew = hs > last, collected = n != last_n;
         last = hs; last_n = n;
@@ -348,6 +374,29 @@ static void census(const char *why)
             named / 1048576.0, shown / 1048576.0, unnamed / 1048576.0);
 }
 
+static int resolve_collector(void)
+{
+    if (m_collect) return 1;
+    {
+        void *h = mono_runtime_lib();
+        if (h) {
+            m_collect = (void (*)(int))so_dlsym(h, "mono_gc_collect");
+            m_max_gen = (int (*)(void))so_dlsym(h, "mono_gc_max_generation");
+            m_used = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_used_size");
+            m_heap = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_heap_size");
+        } else if ((h = so_dlopen("libil2cpp.so", 4 /* RTLD_NOLOAD */))) {
+            // IL2CPP (its Boehm collector): il2cpp_gc_collect collects everything whatever the
+            // generation it is given; UnityMain, where this runs, is attached to the runtime
+            m_collect = (void (*)(int))so_dlsym(h, "il2cpp_gc_collect");
+            m_used = (int64_t (*)(void))so_dlsym(h, "il2cpp_gc_get_used_size");
+            m_heap = (int64_t (*)(void))so_dlsym(h, "il2cpp_gc_get_heap_size");
+            m_max_gen = il2cpp_max_gen;
+        }
+        if (!m_collect || !m_max_gen || !m_used) { m_collect = NULL; return 0; }
+    }
+    return 1;
+}
+
 static void census_frame(void)
 {
     if (!g_census_on || ++g_census_frames % 30) return;
@@ -367,31 +416,18 @@ void gcbudget_frame(void *user)
     (void)user;
     if (g_grow_mb > 0) {
         g_frame_t = now();
-        if (!g_grow_started && so_dlopen("libmono.so", 4 /* RTLD_NOLOAD: Mono 2.6's Boehm only */)) {
+        // Mono 2.6's Boehm (Unity's 32-bit Mono players) and the Mono route's (Unity's Mono for aarch64,
+        // libmonobdwgc-2.0.so): both grow their heap during a load rather than collect
+        if (!g_grow_started && mono_runtime_lib()) {
             pthread_t t;
             g_grow_started = 1;
             if (pthread_create(&t, NULL, grow_main, NULL) == 0) pthread_detach(t);
         }
     }
+    // the census (UA_GC_CENSUS) also where the game keeps its collector on
+    if (g_census_on && resolve_collector()) census_frame();
     if (g_budget <= 0 || !g_mode_known || g_mode != GC_DISABLED || !r_set_mode) return;
-    if (!m_collect) {
-        void *h = mono_runtime_lib();
-        if (h) {
-            m_collect = (void (*)(int))so_dlsym(h, "mono_gc_collect");
-            m_max_gen = (int (*)(void))so_dlsym(h, "mono_gc_max_generation");
-            m_used = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_used_size");
-            m_heap = (int64_t (*)(void))so_dlsym(h, "mono_gc_get_heap_size");
-        } else if ((h = so_dlopen("libil2cpp.so", 4 /* RTLD_NOLOAD */))) {
-            // IL2CPP (its Boehm collector): il2cpp_gc_collect collects everything whatever the
-            // generation it is given; UnityMain, where this runs, is attached to the runtime
-            m_collect = (void (*)(int))so_dlsym(h, "il2cpp_gc_collect");
-            m_used = (int64_t (*)(void))so_dlsym(h, "il2cpp_gc_get_used_size");
-            m_heap = (int64_t (*)(void))so_dlsym(h, "il2cpp_gc_get_heap_size");
-            m_max_gen = il2cpp_max_gen;
-        }
-        if (!m_collect || !m_max_gen || !m_used) { m_collect = NULL; g_budget = 0; return; }
-    }
-    census_frame();
+    if (!resolve_collector()) { g_budget = 0; return; }
     int64_t used = m_used();
     if (g_base < 0) { g_base = used; return; }
     if (used - g_base < g_budget) return;
