@@ -399,7 +399,9 @@ static void *decode_thread(void *p)
                              (long long)(um_now_us() - t0));
         }
         pthread_mutex_lock(&c->mu);
-        if ((fl & UM_BUFFER_FLAG_END_OF_STREAM) && !c->flushing) { emit_eos(c); c->state = ST_EOS; }
+        int ended = (fl & UM_BUFFER_FLAG_END_OF_STREAM) && !c->flushing;
+        if (ended) { emit_eos(c); c->state = ST_EOS; }
+        if (ended && c->video) um_frame_pool_idle();
         b->state = IN_CODEC;
         c->busy = 0;
         pthread_cond_broadcast(&c->cv);
@@ -597,6 +599,7 @@ int um_codec_stop(um_codec *c)
     c->dec->flush(c->dec);
     /* Android: stop() returns the codec to Uninitialized; it is configured again before a start */
     c->state = ST_CREATED;
+    if (c->video) um_frame_pool_idle();
     um_format_free(c->cur_fmt);
     c->cur_fmt = NULL;
     pthread_mutex_unlock(&c->mu);
@@ -615,7 +618,7 @@ void um_codec_free(um_codec *c)
     um_format_free(c->cur_fmt);
     pthread_mutex_destroy(&c->mu);
     pthread_cond_destroy(&c->cv);
-    if (c->video) um_frame_pool_use(-1);
+    if (c->video) { um_frame_pool_idle(); um_frame_pool_use(-1); }
     free(c);
 }
 

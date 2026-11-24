@@ -265,6 +265,9 @@ static void test_webm(int w, int h, int lace)
     run_codec(ex, c, 0, &r, 1, s, 0);
     CHECK(r.frames == frames && heard == frames, "surface: %d frames, listener %d", r.frames, heard);
     CHECK(um_surface_pending(s) == 4, "queue keeps the newest 4 (%d)", um_surface_pending(s));
+    /* the stream ended with its codec and surface still there (a game that keeps its video player after a
+       cinematic): no picture waits in the pool for a decoder that asks for none */
+    CHECK(um_frame_pool_count() == 0, "pool empty at the end of a stream (%d kept)", um_frame_pool_count());
     CHECK(um_surface_update(s) == -1, "update without a GL context fails cleanly");
     float m[16];
     um_surface_matrix(s, m);
