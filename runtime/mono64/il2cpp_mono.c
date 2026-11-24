@@ -398,6 +398,124 @@ static inline void attached(void)
 
 // ---------------------------------------------------------------------------------------------
 // the game's P/Invokes: Android libraries (plugins) and libunity itself ("__Internal") through
+// ---------------------------------------------------------------------------------------------
+// UA_ALLOC_CENSUS=<s> (a measurement): Mono's legacy profiler API counts every managed allocation by class
+// (objects, bytes) and, for one allocation in UA_ALLOC_CENSUS_SAMPLE (default 64), the managed method that made it
+// (the first frame outside mscorlib, System*, Mono.* and UnityEngine*: the game's own call site), bytes scaled back
+// up; every <s> seconds the top 30 of each as "[alloc] ..." lines on stderr, rates per second over that period,
+// then the counts start again. A touch of the file alloccensus.req in the game's folder restarts the counts (the
+// fight's own period). Installed before Mono starts (allocation events need it): Mono then allocates through its
+// slow path (no managed allocator), so the game runs slower while it is on. Nothing else changes.
+typedef struct _MonoProfiler MonoProfiler;
+struct ac_ent { const void *key; uint64_t n, b; };
+#define AC_SLOTS 8192
+static struct ac_ent g_ac_cls[AC_SLOTS], g_ac_site[AC_SLOTS];
+static volatile int g_ac_lock;
+static unsigned g_ac_sample = 64, g_ac_tick;
+static double g_ac_t0;
+static const char *(*ac_class_name)(MonoClass *), *(*ac_class_ns)(MonoClass *);
+static char *(*ac_method_full_name)(MonoMethod *, gboolean);
+static MonoClass *(*ac_method_class)(MonoMethod *);
+static MonoImage *(*ac_class_image)(MonoClass *);
+static const char *(*ac_image_name)(MonoImage *);
+static unsigned (*ac_object_size)(MonoObject *);
+static void (*ac_stack_walk)(MonoStackWalk, void *);
+static double ac_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+static void ac_add(struct ac_ent *tab, const void *key, uint64_t n, uint64_t b)
+{
+    size_t h = ((uintptr_t)key >> 4) * 2654435761u % AC_SLOTS;
+    for (int i = 0; i < AC_SLOTS; i++, h = (h + 1) % AC_SLOTS) {
+        if (tab[h].key == key) { tab[h].n += n; tab[h].b += b; return; }
+        if (!tab[h].key) { tab[h].key = key; tab[h].n = n; tab[h].b = b; return; }
+    }
+}
+static gboolean ac_frame(MonoMethod *m, int32_t no, int32_t io, gboolean managed, void *data)
+{
+    (void)no; (void)io;
+    if (!managed || !m) return 0;
+    MonoClass *c = ac_method_class(m);
+    const char *img = c ? ac_image_name(ac_class_image(c)) : "";
+    if (img && (!strcmp(img, "mscorlib") || !strncmp(img, "System", 6) || !strncmp(img, "Mono.", 5) || !strncmp(img, "UnityEngine", 11)))
+        return 0;
+    *(MonoMethod **)data = m;
+    return 1;
+}
+static void ac_alloc(MonoProfiler *p, MonoObject *o, MonoClass *c)
+{
+    (void)p;
+    unsigned sz = ac_object_size ? ac_object_size(o) : 0;
+    MonoMethod *site = NULL;
+    int sample = __sync_add_and_fetch(&g_ac_tick, 1) % g_ac_sample == 0;
+    if (sample && ac_stack_walk) ac_stack_walk(ac_frame, &site);
+    while (__sync_lock_test_and_set(&g_ac_lock, 1)) ;
+    ac_add(g_ac_cls, c, 1, sz);
+    if (sample) ac_add(g_ac_site, site, g_ac_sample, (uint64_t)sz * g_ac_sample);
+    __sync_lock_release(&g_ac_lock);
+}
+static int ac_cmp(const void *a, const void *b) { const struct ac_ent *x = a, *y = b; return x->b < y->b ? 1 : x->b > y->b ? -1 : 0; }
+static void *ac_main(void *arg)
+{
+    int secs = (int)(intptr_t)arg;
+    static struct ac_ent cls[AC_SLOTS], site[AC_SLOTS];
+    for (;;) {
+        for (int i = 0; i < secs * 4; i++) {
+            usleep(250000);
+            if (access("alloccensus.req", F_OK) == 0) {
+                unlink("alloccensus.req");
+                while (__sync_lock_test_and_set(&g_ac_lock, 1)) ;
+                memset(g_ac_cls, 0, sizeof g_ac_cls); memset(g_ac_site, 0, sizeof g_ac_site); g_ac_t0 = ac_now();
+                __sync_lock_release(&g_ac_lock);
+                logf_("[alloc] counts started again (alloccensus.req)");
+                i = 0;
+            }
+        }
+        while (__sync_lock_test_and_set(&g_ac_lock, 1)) ;
+        memcpy(cls, g_ac_cls, sizeof cls); memcpy(site, g_ac_site, sizeof site);
+        memset(g_ac_cls, 0, sizeof g_ac_cls); memset(g_ac_site, 0, sizeof g_ac_site);
+        double t = ac_now(), dt = t - g_ac_t0; g_ac_t0 = t;
+        __sync_lock_release(&g_ac_lock);
+        if (dt <= 0) continue;
+        uint64_t tn = 0, tb = 0;
+        for (int i = 0; i < AC_SLOTS; i++) { tn += cls[i].n; tb += cls[i].b; }
+        qsort(cls, AC_SLOTS, sizeof cls[0], ac_cmp); qsort(site, AC_SLOTS, sizeof site[0], ac_cmp);
+        logf_("[alloc] %.0f s: %.0f objects/s, %.2f MB/s", dt, tn / dt, tb / dt / 1048576);
+        for (int i = 0; i < 30 && cls[i].key; i++)
+            logf_("[alloc]   class %.3f MB/s %.0f/s %s.%s", cls[i].b / dt / 1048576, cls[i].n / dt,
+                  ac_class_ns((MonoClass *)cls[i].key), ac_class_name((MonoClass *)cls[i].key));
+        for (int i = 0; i < 30 && site[i].b; i++) {
+            char *nm = site[i].key && ac_method_full_name ? ac_method_full_name((MonoMethod *)site[i].key, 1) : NULL;
+            logf_("[alloc]   site  %.3f MB/s %.0f/s %s", site[i].b / dt / 1048576, site[i].n / dt, nm ? nm : "(no game frame)");
+            free(nm);
+        }
+    }
+    return NULL;
+}
+static void alloc_census_install(void)
+{
+    const char *e = getenv("UA_ALLOC_CENSUS");
+    if (!e || !*e || atoi(e) <= 0) return;
+    const char *sm = getenv("UA_ALLOC_CENSUS_SAMPLE");
+    if (sm && atoi(sm) > 0) g_ac_sample = (unsigned)atoi(sm);
+    void (*install)(MonoProfiler *, void (*)(MonoProfiler *)) = dlsym(g_mono, "mono_profiler_install");
+    void (*install_alloc)(void (*)(MonoProfiler *, MonoObject *, MonoClass *)) = dlsym(g_mono, "mono_profiler_install_allocation");
+    void (*set_events)(int) = dlsym(g_mono, "mono_profiler_set_events");
+    ac_class_name = dlsym(g_mono, "mono_class_get_name"); ac_class_ns = dlsym(g_mono, "mono_class_get_namespace");
+    ac_method_full_name = dlsym(g_mono, "mono_method_full_name"); ac_method_class = dlsym(g_mono, "mono_method_get_class");
+    ac_class_image = dlsym(g_mono, "mono_class_get_image"); ac_image_name = dlsym(g_mono, "mono_image_get_name");
+    ac_object_size = dlsym(g_mono, "mono_object_get_size"); ac_stack_walk = dlsym(g_mono, "mono_stack_walk");
+    if (!install || !install_alloc || !set_events || !ac_class_name || !ac_class_ns || !ac_method_class || !ac_class_image || !ac_image_name) {
+        logf_("[alloc] this Mono lacks the profiler calls: off"); return;
+    }
+    static char prof_dummy[64];
+    install((MonoProfiler *)prof_dummy, NULL);
+    install_alloc(ac_alloc);
+    set_events(1 << 7 /* MONO_PROFILE_ALLOCATIONS */);
+    g_ac_t0 = ac_now();
+    pthread_t t;
+    if (pthread_create(&t, NULL, ac_main, (void *)(intptr_t)atoi(e)) == 0) pthread_detach(t);
+    logf_("[alloc] on: every %s s, call sites sampled 1 in %u", e, g_ac_sample);
+}
+
 // the loader, when glibc's dlopen cannot load them
 // Mono's ahead-of-time images (<assembly>.dll.so) from UA_MONO64_AOT=<dir> instead of beside the
 // assemblies (a measurement, not a port setting: docs/mono-arm64.md, "Mono's LLVM back end, measured
@@ -698,6 +816,7 @@ static void init_mono(const char *domain_name)
         snprintf(p, sizeof p, "incremental=%d%s%s", g_gc_slice_ms, old && *old ? "," : "", old && *old ? old : "");
         setenv("MONO_GC_PARAMS", p, 1);
     }
+    alloc_census_install();
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     g_domain = m_mono_jit_init_version(domain_name && *domain_name ? domain_name : "IL2CPP Root Domain", "v4.0.30319");

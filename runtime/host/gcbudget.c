@@ -21,11 +21,14 @@
 //                       collected first, the next growth waits for the memory the game keeps. Each one is a
 //                       pause inside the load ("[host] gc grow" with its length, the heap and the used heap
 //                       before and after); frames at play speed are never paused by it.
-//   UA_GC_TIGHT=<n>     (with UA_GC_GROW; default 0 = off) while the system has less than UA_GC_GROW's MB available,
-//                       Boehm's free-space divisor at <n> (GC_set_free_space_divisor: a collection after heap/<n>
-//                       bytes allocated, where it would otherwise grow the heap; its own value, 3, again once more
-//                       than the line + 64 MB is available). Collectors that export the setting: the Mono route's
-//                       libmonobdwgc (and Unity's Mono 2017+ players); Mono 2.6's has none ("[host] gc tight: off").
+//   UA_GC_TIGHT=<n>     (default 0 = off) during a load (UnityMain inside a frame of over 1 s, or within 3 s after
+//                       one), Boehm's free-space divisor at <n> (GC_set_free_space_divisor: a collection after heap/<n>
+//                       bytes allocated, where it would otherwise grow the heap 16 MB at a time); its own value, 3, again
+//                       once frames come at play speed, so play keeps the collector's own pace and pauses. The same on
+//                       every device (no memory line); at the switch back one full collection, so that play's
+//                       allowance before the next one is computed with the collector's own divisor (Boehm computes it
+//                       once per collection: the load's last left play with the load's small one). Collectors that export the setting: the Mono route's libmonobdwgc
+//                       (and Unity's Mono 2017+ players); Mono 2.6's has none ("[host] gc tight: off").
 //
 // A census of the live managed heap (a measurement; Unity's Boehm collector, Mono players and the Mono route):
 //   UA_GC_CENSUS=<n>    after each of the first <n> collections of UA_GC_BUDGET, and whenever a file gccensus.req
@@ -69,6 +72,7 @@ static int g_count;
 static int g_grow_mb;                       // UA_GC_GROW (0: off)
 static int g_tight;                         // UA_GC_TIGHT: Boehm's free-space divisor under UA_GC_GROW's line (0: off)
 static volatile double g_frame_t;           // when UnityMain last finished a frame
+static volatile double g_long_t = -1e9;     // when UnityMain last finished a frame of over 1 s (a load)
 static int g_grow_started;
 static int g_census_on, g_census_left, g_census_frames;   // UA_GC_CENSUS
 
@@ -148,9 +152,11 @@ static void *grow_main(void *arg)
         fprintf(stderr, "[host] gc grow: this Mono lacks the calls it needs: off\n");
         return NULL;
     }
-    fprintf(stderr, "[host] gc grow: on (a collection when the heap grows during a load with under %d MB available)\n", g_grow_mb);
-    // UA_GC_TIGHT: while the system has less than UA_GC_GROW's MB available, Boehm's free-space divisor at this value
-    // (collect after heap/<n> bytes allocated instead of growing the heap; its own value back above the line + 64 MB)
+    if (g_grow_mb > 0)
+        fprintf(stderr, "[host] gc grow: on (a collection when the heap grows during a load with under %d MB available)\n", g_grow_mb);
+    // UA_GC_TIGHT: during a load (UnityMain inside a frame of over 1 s, or within 3 s after one) Boehm's free-space
+    // divisor at this value: it collects after heap/<n> bytes allocated instead of growing the heap; its own value again
+    // once frames come at play speed, so play keeps the collector's own pace
     void (*set_div)(unsigned long) = (void (*)(unsigned long))so_dlsym(h, "GC_set_free_space_divisor");
     unsigned long (*get_div)(void) = (unsigned long (*)(void))so_dlsym(h, "GC_get_free_space_divisor");
     unsigned long div0 = get_div ? get_div() : 0;
@@ -159,16 +165,28 @@ static void *grow_main(void *arg)
     int64_t last = heap(); int last_n = count(0), logged = 0;
     for (;;) {
         usleep(10000);
-        if (g_tight > 0 && set_div && div0 && ++tick % 50 == 0) {
-            long a = mem_available_mb();
-            if (!tight && a >= 0 && a < g_grow_mb) {
+        if (g_tight > 0 && set_div && div0 && ++tick % 5 == 0) {
+            double t = now();
+            int loading = g_frame_t > 0 && (t - g_frame_t > 1.0 || t - g_long_t < 3.0);
+            if (loading && !tight) {
                 set_div((unsigned long)g_tight); tight = 1;
-                if (logged++ < 100) fprintf(stderr, "[host] gc tight: %ld MB available: free-space divisor %lu -> %d\n", a, div0, g_tight);
-            } else if (tight && a > g_grow_mb + 64) {
+                if (logged++ < 200) fprintf(stderr, "[host] gc tight: a load: free-space divisor %lu -> %d (heap %lld MB)\n", div0, g_tight, (long long)(heap() >> 20));
+            } else if (!loading && tight) {
                 set_div(div0); tight = 0;
-                if (logged++ < 100) fprintf(stderr, "[host] gc tight: %ld MB available: free-space divisor back to %lu\n", a, div0);
+                // Boehm computes the allocation that triggers the next collection once per collection, with the
+                // divisor of that moment: the load's last one left play with the load's small allowance (a full
+                // collection every ~16 MB in a fight). One collection now, as the load ends, sets play's own
+                int n0 = count(0);
+                double tc = now();
+                void *d = root(), *th = d ? attach(d) : NULL;
+                if (d) collect(max_gen());
+                if (th) detach(th);
+                last = heap(); last_n = count(0);
+                if (logged++ < 200) fprintf(stderr, "[host] gc tight: play: free-space divisor back to %lu (heap %lld MB), a collection to set play's allowance in %.0f ms%s\n",
+                                            div0, (long long)(last >> 20), (now() - tc) * 1000, last_n != n0 ? "" : " (none ran)");
             }
         }
+        if (g_grow_mb <= 0) continue;
         int64_t hs = heap(); int n = count(0);
         int grew = hs > last, collected = n != last_n;
         last = hs; last_n = n;
@@ -414,8 +432,10 @@ static void census_frame(void)
 void gcbudget_frame(void *user)
 {
     (void)user;
-    if (g_grow_mb > 0) {
-        g_frame_t = now();
+    if (g_grow_mb > 0 || g_tight > 0) {
+        double t = now();
+        if (g_frame_t > 0 && t - g_frame_t > 1.0) g_long_t = t;
+        g_frame_t = t;
         // Mono 2.6's Boehm (Unity's 32-bit Mono players) and the Mono route's (Unity's Mono for aarch64,
         // libmonobdwgc-2.0.so): both grow their heap during a load rather than collect
         if (!g_grow_started && mono_runtime_lib()) {
