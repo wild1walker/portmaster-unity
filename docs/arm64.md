@@ -321,9 +321,12 @@ the release passes `pmu arch-check`, and a launch without the game, an install o
     ua_host: `UA_GC_GROW` on the Mono route and `UA_GC_TIGHT=<n>` (runtime.md: under `UA_GC_GROW`'s line Boehm's
     free-space divisor at n). Gungeon also kept 40 MB of GPU memory in the Ammonomicon's ten precached 960x1080 page
     buffers, a game-side cut both builds get (the port's gungeonpatch, `ammo-buffers`). On the G350, ES-launched, bench
-    build (fixed seed, no damage) warped to each floor's busiest room, `UA_GC_TIGHT=32`: the Keep 151 - 162 MB
-    available, 29.5 - 33 fps; Bullet Hell 121 - 125 MB, 27 - 30 fps; the Forge 110 - 134 MB, 36 - 38 fps (the 32-bit
-    build: 29.8 - 31.1, 29.5 - 31 fps; the Forge 140 MB with `UA_GC_GROW`). The book opens in the same time (2.8 s the
+    build (fixed seed, no damage) warped to each floor's busiest room, `UA_GC_TIGHT=32`: the Keep 151 - 181 MB
+    available, 29.5 - 33 fps; Bullet Hell 121 - 131 MB, 25 - 30 fps; the Forge 110 - 135 MB, 33 - 38 fps (the 32-bit
+    build: 29.8 - 31.1, 29.5 - 31 fps; the Forge 140 MB with `UA_GC_GROW`); the port's release candidate set up through
+    ES in 22 min 52 s. ua_host's GL thread (`UA_GL_REC=auto` on KMSDRM) is worth 1 - 2 fps there and costs 13 - 24 MB;
+    the setup's JIT seed ~19 MB (the port turns both off on that handheld). Repeat runs of the same room differ by
+    10 - 20 MB of MemAvailable (EmulationStation's own memory moves between launches). The book opens in the same time (2.8 s the
     first time, 1.65 s after) with the same pages. A census of the Mono route's live heap (`UA_GC_CENSUS`) needs
     `GC_enumerate_reachable_objects_inner`, which this repository's Mono build does not export ("[census] ... off");
     the census request now works where the game keeps its collector on.
