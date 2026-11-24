@@ -697,7 +697,8 @@ target colour, which one byte cannot give back. On the BattleXP G350 (EmulationS
 first level: 720 MB resident and 134 MB available (all ASTC, with the magenta: 647 and 213; all 137 of the
 first walk as RGBA32: stopped for low memory in the load at 773 MB), 56.6 fps (the same as before), the
 Penitent's colours right. With EmulationStation's 100 MB held, as on dArkOS, that is too close: what is left
-is the Penitent's RGBA32 sprites (about 75 MB in that level).
+is the Penitent's RGBA32 sprites (about 75 MB in that level). (They cannot go exactly: below. What went instead, 2026-11-23: the
+executions and prayers, "Things a game instantiates at the start", further down.)
 
 Why the Penitent's sprites stay RGBA32 (tried 2026-11-17; do not retry without a proof for every GPU the port
 runs on): the sword's stencil shader (`Maikel/StencilMaskSword`) discards a texel when its sampled RGB equals
@@ -853,6 +854,41 @@ the lowest MemAvailable in the run 186 -> 214 MB, 59.6 fps either way. Mali's `g
 several MB from run to run with nothing changed: compare the census's texture totals for a texture cut.
 The two tools are measurements: the ledger's lock around every allocation and the preload's table cost frame rate
 and 16 MB each.
+
+Things a game instantiates at the start that a player sees only now and then (Blasphemous, 2026-11-23, the 64-bit
+build on muOS's RG34XX-SP). The census (`UA_DUMP_TEXTURES=req`) of the first level named 360 MB of textures; reading
+who holds the big ones (the census's holder lines, then the prefabs in the data) found two that load everything at
+once: the Penitent's prefab references every enemy's execution animation (the finishing move on a stunned enemy: 30
+textures, 40 MB), and `InventoryManager` instantiates every prayer's prefab when the game starts, so every prayer's
+effect sheets load whether or not the player has the prayer (27 textures, 46 MB). Both are drawn only when that
+execution or prayer plays. pmu's `lazy` step with those 57 names (port.toml's `[convert.lazy] names`, beside the
+fonts) leaves them out of the preload lists, and Unity loads each the first time it is drawn: the same picture, a
+load in the frame that first needs it. `pmu lazy` rewrites only the APK's PreloadData and ResourceManager lists (the
+OBB stays byte for byte), so an installed game takes it in place. The first level: textures 360 -> 285 MB, the lowest
+MemAvailable 146 -> 250 MB; Crisanta's arena, killed before, loads (83 MB at the lowest); the Amanecidas' still runs
+out (50 MB). The same prayer script on both builds (four prayers cast, through the console, below): 173 -> 244 MB
+available at the lowest, 746 -> 692 MB resident at the most; the prayers' textures loaded at the first cast
+(`PrayerMiriamPortal`, `RegresoAPuerto-Prayer`, `penitent_pr12PrayerV3`, `threeAnguishBigBeam 1`,
+`lightningBolt_Tileable_fxs`) and PR12's effect drew as before; the longest frame after a cast 120 - 235 ms against
+141 - 178 ms (the console's commands and the screenshots alone cost 100 - 300 ms frames, so that is within the
+noise). Six of the names still load from other holders (`MiriamPrayerSequence`, `threeAnguishBigBeamBlue`,
+`threeAnguishSpearEffect`, both `pope_fireBallVortex`, `flagellant_execution_awareness 1`). Not yet seen on screen: an
+execution (a scripted pad did not bring an enemy to the stun; the textures load the same way as the prayers'). On the
+BattleXP G350, launched by EmulationStation (which keeps 60 - 110 MB): the first level 59 -> about 110 MB available,
+45 - 55 fps; Crisanta's arena is still killed by the kernel (the G350 has about 140 MB less free than muOS in the
+same scene, and her arena needs about 170 MB over the first level).
+
+```toml
+[convert]
+steps = ["shaders", "settings", "audio", "quality", "textures", "exactindex", "fmodcatalogs", "video", "lazy"]
+[convert.lazy]
+names = "MSJhengHei-cut|...|Bishop_executionTPORecolor|...|RegresoAPuerto-Prayer|...|miriam-fragments-spritesheet"
+```
+
+What this is not: `UA_UNLOAD_ASSETS` for these names. The fonts are given back because the game never draws them in
+another language; an execution or a prayer may come back any time, and a texture given back is not always loaded
+again for a renderer that already draws it (Hollow Knight's Korean notice, above). The one profile goes to every
+handheld: a cut that is exact on every device, never a lower picture for the 1 GB ones.
 
 Scans of every loaded object at a level's start (Blasphemous, RG34XX-SP, 2026-11-17): a level's first seconds ran at
 31 - 40 fps, and each room change's fade-in started with a 200 ms frame. `UA_PROF` over them, the long frames

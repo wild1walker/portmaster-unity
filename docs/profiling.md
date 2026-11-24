@@ -3165,3 +3165,21 @@ Test release 2026.11.20, EmulationStation stopped, silent:
 - **Crisanta's arena alone** from the first level (G350): MemAvailable 206 MB -> killed within 5 s of the load (ua_host
   anon 253 MB + file 564 MB). That jump holds two zones (D17, D06) during the load; a player arrives from her own zone,
   not yet measured.
+
+Scripted tests through the console, lessons (2026-11-24, the 64-bit build on muOS):
+
+- Menus take 35 - 76 s to come up from run to run: a schedule that presses at fixed times misses. Wait for the log
+  instead: the title takes its first press only after the game logs `tutorials loaded succesfully` (its spelling), the
+  main menu is `[feed] ... watch MainMenu`, and a level any `s: watch D` (a save continues into its own room, not
+  always the first level's).
+- `load <room>` also opens a debug list of the room's doors that takes the pad; `loadnoui <room>` does not. Tutorial
+  pop-ups (a first prayer, a first flask) wait for B.
+- Commands sent in the same second, or while the game stalls in a load, overwrite each other if each is written as a
+  new `console.req`: append to the file and `mv` it into place.
+- The pad's L2 (the prayer) is an axis in Rewired's map; ua_host's scripted `l2` is a key without `AXIS_LTRIGGER`, so the
+  game ignores it. A prayer is cast through the game's own animation: `prayer equip PR12 0` (gives, deciphers, equips in
+  slot 0, fervour full) then `!call Framework.Managers.Core:Logic:Penitent:Animator:Play AuraTransform` (consolefeed's
+  `!call`; calling `PrayerCast.Cast` directly skips the animation). The prayer ids in the data:
+  PR01 03 04 05 07 08 09 10 11 12 14 15 16 101 201 202 203.
+- `execution y` turns on the game's debug executions, but the enemy must still be stunned in reach: the one room with
+  enemies near the start that was tried (D01Z01S03) has shield soldiers on ledges a scripted walk does not reach.

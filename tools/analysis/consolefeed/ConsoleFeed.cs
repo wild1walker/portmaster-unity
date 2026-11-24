@@ -11,8 +11,13 @@
 //                  ("[feed] <s> s: watch <value>"; default Blasphemous's level name,
 //                  Framework.Managers.Core:LevelManager:currentLevel:LevelName), to line the frame-rate lines up with the
 //                  room the game shows; empty: off
-// Blasphemous's console: "load D08Z01S01" (a room; the area's music and enemies as on arrival), "invincible" (toggles),
-// "help". Its Update runs whether or not the console is shown (Debug.isDebugBuild only opens it with F1), so commands
+// A line "!call <type>:<static member>[:<member>...]:<method> [<text>]" calls that method (no parameters, or one string: the
+// rest of the line) on the value the chain reaches, for an action the console has no command for; logged with its answer.
+// Blasphemous's console: "loadnoui D08Z01S01" (a room; the area's music and enemies as on arrival; "load" also opens a
+// debug door list), "invincible" (toggles), "prayer equip PR12 0" (gives, deciphers and equips it, fervour full),
+// "execution y", "help". A prayer is cast with
+// "!call Framework.Managers.Core:Logic:Penitent:Animator:Play AuraTransform" (the game's own animation, which casts the
+// equipped prayer; ua_host's scripted l2 is a key without the trigger's axis, and the game reads the axis). Its Update runs whether or not the console is shown (Debug.isDebugBuild only opens it with F1), so commands
 // work in the release player. Built against the game's UnityEngine.CoreModule.dll for the MonoBehaviour only: build.sh.
 using System;
 using System.Diagnostics;
@@ -55,7 +60,7 @@ public static class UAProbe
             foreach (string raw in lines) {
                 string line = raw.Trim();
                 if (line.Length == 0 || line[0] == '#') continue;
-                Say("[feed] " + Secs() + " s: " + line + Send(line));
+                Say("[feed] " + Secs() + " s: " + line + (line.StartsWith("!call ") ? Call(line.Substring(6).Trim()) : Send(line)));
             }
         } catch (Exception e) { if (threw++ < 5) Say("[feed] threw " + e); }
     }
@@ -70,6 +75,26 @@ public static class UAProbe
         if (m == null) return " (no method " + p[2] + "(string))";
         m.Invoke(inst, new object[] { line });
         return "";
+    }
+
+    // "!call <type>:<static member>[:<member>...]:<method> [<text>]": a method on that value, without parameters or with
+    // one string (the rest of the line); logged with the method's answer
+    static string Call(string spec)
+    {
+        string arg = null;
+        int sp = spec.IndexOf(' ');
+        if (sp > 0) { arg = spec.Substring(sp + 1).Trim(); spec = spec.Substring(0, sp); }
+        string[] p = spec.Split(':');
+        if (p.Length < 3) return " (want <type>:<static member>[:<member>...]:<method>)";
+        string[] chain = new string[p.Length - 1];
+        Array.Copy(p, chain, chain.Length);
+        object inst = Chain(chain);
+        if (inst == null) return " (no value yet)";
+        for (Type k = inst.GetType(); k != null; k = k.BaseType) {
+            MethodInfo m = k.GetMethod(p[p.Length - 1], A | BindingFlags.DeclaredOnly, null, arg == null ? Type.EmptyTypes : new Type[] { typeof(string) }, null);
+            if (m != null) { object r = m.Invoke(inst, arg == null ? null : new object[] { arg }); return " -> " + (r == null ? "done" : r.ToString()); }
+        }
+        return " (no method " + p[p.Length - 1] + "())";
     }
 
     // <type>:<static member>[:<member>...]: fields or properties, the first static, the rest on the value before
