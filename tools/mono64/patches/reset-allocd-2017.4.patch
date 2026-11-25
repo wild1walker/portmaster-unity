@@ -1,0 +1,27 @@
+--- a/external/bdwgc/alloc.c
++++ b/external/bdwgc/alloc.c
+@@ -1038,6 +1038,24 @@
+ {
+     GC_ASSERT(stop_func != 0);
+     return (int)GC_try_to_collect_general(stop_func, FALSE);
++}
++
++/* (portmaster-unity, tools/mono64) GC_ua_reset_allocd: forget what has  */
++/* been allocated since the last collection, as a collection's end does, */
++/* without collecting: the next collection comes after a whole allowance */
++/* from now. ua_host calls it once a level's arrival is over, so what    */
++/* the arrival allocated does not count against the fight's allowance.   */
++GC_API void GC_CALL GC_ua_reset_allocd(void)
++{
++    DCL_LOCK_STATE;
++
++    LOCK();
++    GC_bytes_allocd_before_gc += GC_bytes_allocd;   /* GC_get_total_bytes */
++    GC_bytes_allocd = 0;
++    GC_bytes_dropped = 0;
++    GC_bytes_freed = 0;
++    GC_finalizer_bytes_freed = 0;
++    UNLOCK();
+ }
+ 
+ GC_API void GC_CALL GC_gcollect(void)

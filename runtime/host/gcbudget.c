@@ -89,6 +89,8 @@ static int (*t_max_gen)(void);
 static int64_t (*t_heap)(void);
 static volatile int t_ready, t_on, t_n, t_logged;
 static volatile int g_flag_known, g_flag;   // UA_GC_LOAD_FLAG: the game's own "loading" bool, read each frame
+static volatile double g_arrival_t;         // when the game's last load ended (UA_GC_ARRIVAL_RESET), 0: none pending
+static double g_arrival_s;                  // UA_GC_ARRIVAL_RESET=<s>
 static int g_census_on, g_census_left, g_census_frames;   // UA_GC_CENSUS
 
 void gcbudget_init(void)
@@ -99,6 +101,8 @@ void gcbudget_init(void)
     if (e && *e) g_grow_mb = atoi(e);
     e = getenv("UA_GC_TIGHT");
     if (e && *e) g_tight = atoi(e);
+    e = getenv("UA_GC_ARRIVAL_RESET");
+    if (e && *e) g_arrival_s = atof(e);
     e = getenv("UA_GC_CENSUS");
     if (e && *e) { g_census_on = 1; g_census_left = atoi(e); }
 }
@@ -221,6 +225,21 @@ static void *grow_main(void *arg)
     int64_t last = heap(); int last_n = count(0), logged = 0;
     for (;;) {
         usleep(10000);
+        // UA_GC_ARRIVAL_RESET=<s> (with UA_GC_LOAD_FLAG): <s> seconds after a load ended, with frames at play speed,
+        // Boehm's allocation counters are set as a collection's end sets them (GC_ua_reset_allocd, without collecting):
+        // what the level's arrival allocated after the load's last collection no longer counts against the allowance
+        // of the play that follows (the Keep's fight collected after ~25 - 33 MB, the arrival's included)
+        if (g_arrival_s > 0 && g_arrival_t > 0 && now() - g_arrival_t >= g_arrival_s && now() - g_frame_t < 0.25 && !g_flag) {
+            static void (*reset)(void); static size_t (*since)(void); static int looked;
+            if (!looked++) { reset = (void (*)(void))so_dlsym(h, "GC_ua_reset_allocd"); since = (size_t (*)(void))so_dlsym(h, "GC_get_bytes_since_gc");
+                             if (!reset) fprintf(stderr, "[host] gc arrival: this collector has no GC_ua_reset_allocd: off\n"); }
+            g_arrival_t = 0;
+            if (reset) {
+                size_t b = since ? since() : 0;
+                reset();
+                if (logged++ < 200) fprintf(stderr, "[host] gc arrival: allocation counter reset %.0f s after the load (%.1f MB allocated since the last collection)\n", g_arrival_s, b / 1048576.0);
+            }
+        }
         if (t_ready && ++tick % 5 == 0) {
             double t = now();
             double in = t - g_frame_t;
@@ -531,11 +550,12 @@ static void load_flag_frame(void)
             else fprintf(stderr, "[host] gc tight: UA_GC_LOAD_END=%s: not found (an unpatched game): the load flag's end only\n", ee);
         }
     }
-    if (g_lf.end_flag && *g_lf.end_flag) { *g_lf.end_flag = 0; tight_exit("the load's fade is black", NULL, NULL, NULL); }
+    if (g_lf.end_flag && *g_lf.end_flag) { *g_lf.end_flag = 0; tight_exit("the load's fade is black", NULL, NULL, NULL); g_arrival_t = now(); }
     void *obj = *(void **)((char *)g_lf.static_data + g_lf.s_off);
     int f = obj ? *((volatile unsigned char *)obj + g_lf.i_off) != 0 : 0;
     if (f && !g_flag) tight_enter("the game's load flag");
-    else if (!f && g_flag) tight_exit("the game's load ended", NULL, NULL, NULL);
+    else if (!f && g_flag) { tight_exit("the game's load ended", NULL, NULL, NULL); if (g_arrival_t <= 0) g_arrival_t = now(); }
+    if (f) g_arrival_t = 0;
     g_flag = f;
 }
 
@@ -613,20 +633,24 @@ static void *stall_main(void *arg)
         char c; unsigned long mi, ma;
         if (!st_read(tid, &c, &mi, &ma)) continue;
         if (c == 'R') sr++; else if (c == 'S') ss++; else if (c == 'D') sd++; else so++;
-        if (c != 'R') {
-            // who runs while UnityMain waits: the other threads in R, by name
+        {
+            // the other threads running (run:) or waiting on the disk (disk:<name>:<wchan>) meanwhile
             DIR *d = opendir("/proc/self/task"); struct dirent *de;
             while (d && (de = readdir(d))) {
                 pid_t o = (pid_t)atoi(de->d_name); if (o <= 0 || o == tid) continue;
                 char pp[64], bb[256]; snprintf(pp, sizeof pp, "/proc/self/task/%d/stat", (int)o);
                 FILE *f = fopen(pp, "r"); if (!f) continue;
                 size_t nn = fread(bb, 1, sizeof bb - 1, f); fclose(f); bb[nn] = 0;
-                char *l = strchr(bb, '('), *r2 = strrchr(bb, ')'); if (!l || !r2 || r2[2] != 'R') continue;
-                char nm[48]; snprintf(nm, sizeof nm, "run:%.*s", (int)(r2 - l - 1), l + 1);
+                char *l = strchr(bb, '('), *r2 = strrchr(bb, ')'); if (!l || !r2 || (r2[2] != 'R' && r2[2] != 'D')) continue;
+                char nm[48];
+                if (r2[2] == 'R') snprintf(nm, sizeof nm, "run:%.*s", (int)(r2 - l - 1), l + 1);
+                else { char w[40]; st_wchan(o, w, sizeof w); snprintf(nm, sizeof nm, "disk:%.*s:%s", (int)(r2 - l - 1 > 12 ? 12 : r2 - l - 1), l + 1, w); }
                 int i; for (i = 0; i < nwc && strcmp(wc[i].w, nm); i++) {}
                 if (i < nwc) wc[i].n++; else if (nwc < 16) { snprintf(wc[nwc].w, sizeof wc[nwc].w, "%s", nm); wc[nwc++].n = 1; }
             }
             if (d) closedir(d);
+        }
+        if (c != 'R') {
             char w[48]; st_wchan(tid, w, sizeof w);
             if (!w[0] || !strcmp(w, "0")) continue;
             int i; for (i = 0; i < nwc && strcmp(wc[i].w, w); i++) {}
