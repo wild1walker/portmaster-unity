@@ -1365,3 +1365,16 @@ build logged (gungeonpatch's check mode: `[lazy-cells] built, ticks <n>`), all 4
 inside loads (between the load flag's tight mode and the black frame's collection), none in play. With and without
 lazy-cells (and shared-overrides): 30.1 / 30.0 fps, 57 / 55 frames over 50 ms a minute, lowest available 153 / 150 MB,
 no collection in either fight. The build's G350 Bullet Hell runs across sessions: 30.6, 30.4, 31.3, 31.7, 30.1, 30.0 fps.
+
+**32-bit against 64-bit, one session** (BattleXP G350, ES, bench Bullet Hell, 70 s from warp+20, each launch from
+<= 50 C, A B B A): 32-bit 30.2 / 30.4 fps, 47 / 69 frames over 50 ms a minute, 2.2 / 0 over 100 ms, longest 305 / 80
+ms, lowest available 115 / 129 MB; 64-bit (every piece above) 31.4 / 29.4 fps, 35 / 47, 1.7 / 3.4, 232 / 910 ms (one
+stall without a collection, as seen before), 152 / 153 MB. The frame rates meet within the spread; 64-bit has fewer
+frames over 50 ms and ~30 MB more memory.
+
+**The release candidate, set up by its own setup** (gungeon-rc64c: the G350 through ES and PortMaster's patcher, 22 min
+54 s; muOS in place from the same setup's output): G350 Breach 57.7 fps, the Keep 33.4, the Forge 37.4, lowest
+available 280 / 210 / 138 MB; muOS Breach 59.5, the Keep 60.1, the Forge 56.8, Bullet Hell 45.7 fps. One finding: the
+G350's Keep fight had a 507 ms collection (Boehm's own, 25.8 MB after the load's last one): with that collection now on
+the load's black frame, the level's first allocations (the arrival, the bench's warp) count against play's allowance,
+where the frame-time exit used to collect after them. Bullet Hell and the Forge had none.
