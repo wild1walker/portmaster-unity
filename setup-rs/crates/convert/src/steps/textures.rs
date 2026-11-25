@@ -791,7 +791,18 @@ impl Streams<'_> {
     /// the workers convert these. Left to read() when the streams ahead already hold AHEAD_BUDGET.
     /// False when the streams ahead hold AHEAD_BUDGET already: the caller offers this one again
     /// later (the queue is in the textures' order).
-    fn read_ahead(&mut self, f: &unityfs::DataFile, path: &str, off: u64, size: u64) -> bool {
+    /// `current`: the stream of the texture whose turn it is (path, offset, size). When it is the
+    /// first in the queue it does not count: read() takes it before the conversion starts, so it
+    /// never waits beside the ones read ahead (counted, it kept every second big texture from being
+    /// read ahead: two streams of over half the budget each).
+    fn read_ahead(
+        &mut self,
+        f: &unityfs::DataFile,
+        path: &str,
+        off: u64,
+        size: u64,
+        current: Option<(&str, u64, u64)>,
+    ) -> bool {
         if size > AHEAD_MAX {
             return true;
         }
@@ -804,7 +815,11 @@ impl Streams<'_> {
         } else {
             ReadFrom::File(self.resolve(path))
         };
-        if self.ahead_bytes + size > AHEAD_BUDGET {
+        let taken = match (self.ahead.front(), current) {
+            (Some(a), Some(c)) if a.0 == c.0 && a.1 == c.1 && a.2 == c.2 => a.2,
+            _ => 0,
+        };
+        if self.ahead_bytes - taken + size > AHEAD_BUDGET {
             return false;
         }
         if self.reader.is_none() {
@@ -1350,11 +1365,14 @@ fn convert_file(
                     looked += 1;
                 }
                 // (their streams offered in order, as far as the budget goes)
+                let current = sd
+                    .as_ref()
+                    .map(|(off, size, path)| (path.as_str(), *off, *size));
                 while offered < looked {
                     if let Ok(Some((off, size, path))) =
                         next[offered - k - 1].as_ref().map(stream_data)
                     {
-                        if !streams.read_ahead(f, &path, off, size) {
+                        if !streams.read_ahead(f, &path, off, size, current) {
                             break;
                         }
                     }
