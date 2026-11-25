@@ -464,7 +464,8 @@ pub fn prepare(
             }
         })
     })?;
-    let levels = prof::time(Stage::Mips, || mip_chain(first, ch.mips))?;
+    let mip_threads = if split { threads } else { 1 };
+    let levels = prof::time(Stage::Mips, || mip_chain(first, ch.mips, mip_threads))?;
     Ok(Prepared {
         nlevels: levels.len(),
         levels,
@@ -472,8 +473,9 @@ pub fn prepare(
     })
 }
 
-/// [img, img/2, ...] down to `levels` images (each side halved, at least 1).
-pub fn mip_chain(img: Rgba, levels: usize) -> Result<Vec<Rgba>, Error> {
+/// [img, img/2, ...] down to `levels` images (each side halved, at least 1). The levels made from
+/// big ones (PREP_MIN_PX) are scaled on `threads` cores (downscale_parallel: the same bytes).
+pub fn mip_chain(img: Rgba, levels: usize, threads: usize) -> Result<Vec<Rgba>, Error> {
     let mut out = vec![img];
     while out.len() < levels {
         let last = out.last().unwrap();
@@ -481,7 +483,12 @@ pub fn mip_chain(img: Rgba, levels: usize) -> Result<Vec<Rgba>, Error> {
         if w == 1 && h == 1 {
             break;
         }
-        let next = image::downscale(last.clone(), (w / 2).max(1), (h / 2).max(1))?;
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let next = if threads > 1 && w.saturating_mul(h) >= PREP_MIN_PX {
+            downscale_parallel(last.clone(), nw, nh, threads)?
+        } else {
+            image::downscale(last.clone(), nw, nh)?
+        };
         out.push(next);
     }
     Ok(out)
@@ -1016,6 +1023,20 @@ mod tests {
         img.flip_rows();
         let scaled = image::downscale(img, 128, 32).unwrap();
         assert!(decode_downscale(&t, &raw, 128, 32, 3).unwrap().unwrap() == scaled);
+    }
+
+    #[test]
+    fn mip_levels_on_every_core_are_the_same() {
+        let (w, h) = (2048usize, 1024usize);
+        let px: Vec<u8> = (0..w * h * 4).map(|i| (i * 131 % 253) as u8).collect();
+        let img = Rgba {
+            width: w,
+            height: h,
+            px,
+        };
+        let one = mip_chain(img.clone(), 12, 1).unwrap();
+        assert_eq!(one.len(), 12);
+        assert!(mip_chain(img, 12, 4).unwrap() == one);
     }
 
     #[test]
