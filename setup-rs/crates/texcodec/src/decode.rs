@@ -94,8 +94,17 @@ pub fn compressed_size(width: usize, height: usize, format: i32) -> (usize, usiz
 /// (parse_image_data's "not enough image data"); a size too big to count is too big for any
 /// data. False for the formats this crate does not decode or cannot size (crunched).
 pub fn too_short(len: usize, width: usize, height: usize, format: i32) -> bool {
+    match first_level(width, height, format) {
+        Some(need) => need.is_none_or(|n| len < n),
+        None => false,
+    }
+}
+
+/// The bytes of a width x height image (a texture's first level) in a format decoded here whose
+/// size is known: None for the other formats, Some(None) for a size too big to count.
+fn first_level(width: usize, height: usize, format: i32) -> Option<Option<usize>> {
     let (pw, ph) = compressed_size(width, height, format);
-    let need = match format {
+    Some(match format {
         tf::ALPHA8 => pw.checked_mul(ph),
         tf::RGB24 => pw.checked_mul(ph).and_then(|n| n.checked_mul(3)),
         tf::RGBA32 | tf::ARGB32 | tf::BGRA32 => pw.checked_mul(ph).and_then(|n| n.checked_mul(4)),
@@ -103,9 +112,14 @@ pub fn too_short(len: usize, width: usize, height: usize, format: i32) -> bool {
         tf::DXT3 | tf::DXT5 | tf::BC5 | tf::BC7 => {
             (pw / 4).checked_mul(ph / 4).and_then(|n| n.checked_mul(16))
         }
-        _ => return false,
-    };
-    need.is_none_or(|n| len < n)
+        _ => return None,
+    })
+}
+
+/// The bytes of a texture's first level where the format's size is known (too_short's count): a
+/// texture's data may hold its other mip levels after them.
+pub fn level_size(width: usize, height: usize, format: i32) -> Option<usize> {
+    first_level(width, height, format).flatten()
 }
 
 /// Is the data swizzled for the Switch (UnityPy's TextureSwizzler.is_switch_swizzled)?

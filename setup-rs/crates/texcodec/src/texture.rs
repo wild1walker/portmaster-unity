@@ -625,7 +625,9 @@ pub fn downscale_parallel(img: Rgba, w: usize, h: usize, cores: usize) -> Result
 }
 
 /// The source's rows of blocks (or of pixels) and the bytes each takes, when the data can be cut in
-/// rows (strip_blocks, decode_downscale); None otherwise.
+/// rows (strip_blocks, decode_parallel, decode_downscale); None otherwise. The rows are the first
+/// level's: where the format's size is known, a texture's other mip levels may follow it in the
+/// data (a whole decode reads only the first level too: the same pixels).
 fn row_units(t: &Texture, raw: &[u8]) -> Option<(usize, usize)> {
     // (data too short for the image fails in a whole decode, before its pixels are allocated)
     if uncuttable(t) || decode::too_short(raw.len(), t.width, t.height, t.format) {
@@ -633,10 +635,12 @@ fn row_units(t: &Texture, raw: &[u8]) -> Option<(usize, usize)> {
     }
     let bh = decode::block_size(t.format).map_or(1, |b| b.1);
     let units = decode::compressed_size(t.width, t.height, t.format).1 / bh;
-    if raw.is_empty() || units == 0 || raw.len() % units != 0 {
+    let len =
+        decode::level_size(t.width, t.height, t.format).map_or(raw.len(), |n| n.min(raw.len()));
+    if raw.is_empty() || units == 0 || len % units != 0 {
         return None;
     }
-    Some((bh, raw.len() / units))
+    Some((bh, len / units))
 }
 
 /// textures.py decode_downscale(): downscale(texture_image(tex.image)) a band of output rows at a
@@ -992,6 +996,26 @@ mod tests {
         assert!(banded == whole, "banded differs");
         let par = downscale_parallel(img, 1536, 1536, 4).unwrap();
         assert!(par == whole, "parallel differs");
+    }
+
+    #[test]
+    fn data_with_mip_levels_is_cut_in_rows_too() {
+        // a 256 x 64 RGBA32 texture whose data holds its other mip levels after the first (a length
+        // the rows do not divide): its strips and bands are the first level's rows, the pixels the
+        // whole decode's
+        let (w, h) = (256usize, 64usize);
+        let level: Vec<u8> = (0..w * h * 4).map(|i| (i * 31 % 251) as u8).collect();
+        let mut raw = level.clone();
+        raw.extend((0..w * h * 4 / 3 + 5).map(|i| (i % 7) as u8));
+        let t = tex("m", w, h, tf::RGBA32);
+        assert!(row_units(&t, &raw).is_some());
+        assert_eq!(row_units(&t, &raw), row_units(&t, &level));
+        let whole = decode_rgba(&t, &raw, w, h).unwrap();
+        assert!(decode_parallel(&t, &raw, 3).unwrap().unwrap() == whole);
+        let mut img = whole;
+        img.flip_rows();
+        let scaled = image::downscale(img, 128, 32).unwrap();
+        assert!(decode_downscale(&t, &raw, 128, 32, 3).unwrap().unwrap() == scaled);
     }
 
     #[test]
