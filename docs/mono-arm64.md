@@ -1359,3 +1359,9 @@ session's 32-bit run with `UA_MEM_LEDGER=2`: libunity 138.9 MB of malloc (64-bit
 MB, its Mono heap 228 MB of mappings: libunity is not where the 64-bit build's memory went. That launch's frame rate
 (29.3 fps, 78 frames over 50 ms a minute) is below the earlier runs (30.4 - 31.7) with a census and Mono's counters
 taken at the warp; a clean pair is the next check.
+
+lazy-cells in play (BattleXP G350, ES, bench Bullet Hell, one launch each, no census, counters or ledger): with every
+build logged (gungeonpatch's check mode: `[lazy-cells] built, ticks <n>`), all 47 template builds of the run fell
+inside loads (between the load flag's tight mode and the black frame's collection), none in play. With and without
+lazy-cells (and shared-overrides): 30.1 / 30.0 fps, 57 / 55 frames over 50 ms a minute, lowest available 153 / 150 MB,
+no collection in either fight. The build's G350 Bullet Hell runs across sessions: 30.6, 30.4, 31.3, 31.7, 30.1, 30.0 fps.
