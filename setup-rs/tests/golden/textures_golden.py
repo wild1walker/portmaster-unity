@@ -51,7 +51,7 @@ class Run:
         c = self.c = dict(T.DEFAULTS, **cfg.get('textures', {}))
         self.sharp_rx = re.compile('(?i)' + c['sharp_names']) if c['sharp_names'] else None
         self.enc = T.Astc(c['quality'], c['threads'], c['mode'], c['guided_max_err'], c['guided_line'],
-                          c['guided_near'], self.job.log)
+                          c['guided_near'], self.job.log, c['tiers'])
         if self.enc.mode == 'guided' and c['guide']:
             from pmunity import astc_guide
             self.enc.guide = astc_guide.Reader(c['guide'], c, self.job.log)

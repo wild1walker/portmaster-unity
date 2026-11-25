@@ -69,7 +69,8 @@ pub fn defaults() -> Value {
         "guided_line": 128, "guided_near": 1024, "sharp_names": "", "scale_sharp": 1.0,
         "sharp_block": [4, 4], "keep_max": 64, "min_side": 16, "min_convert": 4, "mips": "keep",
         "inline": true, "files": ".", "threads": 0, "pipeline": "auto", "prepare_split": true,
-        "solo_mb": 128, "strips": true, "guide": "", "inline_streams": false, "spill_mb": 64
+        "solo_mb": 128, "strips": true, "guide": "", "inline_streams": false, "spill_mb": 64,
+        "tiers": {}
     })
 }
 
@@ -166,6 +167,7 @@ impl Settings {
             max_err: self.guided_max_err,
             line: self.guided_line,
             near: self.guided_near,
+            tiers: crate::astc::TierTune::from_json(&self.json["tiers"])?,
         })
     }
 }

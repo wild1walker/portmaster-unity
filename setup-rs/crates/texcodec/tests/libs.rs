@@ -99,7 +99,7 @@ fn libs() {
                         .map(|v| v as u32),
                 };
                 let q = astc::preset(c["quality"].as_str().unwrap()).unwrap();
-                let mut ctx = Context::new(block, q, limits, 3).unwrap();
+                let mut ctx = Context::new(block, q, limits, &[], 3).unwrap();
                 hex(&ctx.compress(&input, w, h, block).unwrap())
             }
             "guided" => {
@@ -110,6 +110,7 @@ fn libs() {
                     max_err: 64,
                     line: 128,
                     near: 1024,
+                    tiers: Default::default(),
                 };
                 let mut enc = Encoder::new(s, None).unwrap();
                 let seed_data = c["seed"]

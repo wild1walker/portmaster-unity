@@ -210,6 +210,24 @@ class AstcGuidedTest(unittest.TestCase):
         self.assertLessEqual(sse(out, src), sse(ref, src) * 1.05)
         self.assertGreater(enc.counts[1], 0)
 
+    def test_tiers_set_the_search_of_their_blocks(self):
+        img = self._image(64, 64, 9)
+        # every block in the "other" tier, set to one partition = every block in the "line" tier
+        ref = T.Astc('fast', 2, 'guided', max_err=-1, line=1 << 30, near=1 << 30)
+        enc = T.Astc('fast', 2, 'guided', max_err=-1, line=-1, near=-1, tiers={'other': {'tune_partition_count_limit': 1}})
+        out = ref.encode(img, (6, 6))
+        self.assertEqual(enc.encode(img, (6, 6)), out)
+        self.assertGreater(ref.counts[3], 0)
+        self.assertEqual(enc.counts[3], 0)
+        self.assertNotEqual(T.Astc('fast', 2, 'guided', max_err=-1, line=-1, near=-1).encode(img, (6, 6)), out)
+        # nothing set: the preset's blocks
+        self.assertEqual(T.Astc('fast', 2, 'guided', tiers={'other': {}}).encode(img, (6, 6)),
+                         T.Astc('fast', 2, 'guided').encode(img, (6, 6)))
+        for bad in ({'far': {}}, {'other': {'tune_speed': 1}}, {'other': {'tune_candidate_limit': 'two'}},
+                    {'other': 1}, [1]):
+            with self.assertRaises(ValueError):
+                T.Astc('fast', 2, 'guided', tiers=bad)
+
     def test_strips_give_the_whole_images_blocks(self):
         from UnityPy.export import Texture2DConverter as C
         rng = random.Random(8)

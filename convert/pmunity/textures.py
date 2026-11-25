@@ -40,6 +40,10 @@ DEFAULTS = {
     'guided_near': 1024,         # (or this close: the principal axis's residual, a sum of squares
                                  # as above) are searched with one partition (or at most two); -1: off.
                                  # docs/setup-speed.md, "Guided ASTC encoding"
+    'tiers': {},                 # guided: astc-encoder search settings set after the preset for the blocks
+                                 # of a tier, {'line' | 'near' | 'other': {'tune_...': number}} (the fields of
+                                 # astcenc_config, Astc.TUNE): e.g. fewer partitioning candidates for the
+                                 # searched blocks. docs/setup-speed.md, "Search settings by tier"
     'sharp_names': '',           # regex: textures given scale_sharp / sharp_block instead
     'scale_sharp': 1.0,
     'sharp_block': [4, 4],
@@ -105,12 +109,32 @@ class Astc:
     # guided: what blocks close to one line are searched with (the preset's other limits kept)
     TIERS = {'line': {'tune_partition_count_limit': 1}, 'near': {'tune_partition_count_limit': 2}, 'other': {}}
     GATHER_COLS = 256                        # blocks across the image of the blocks left to the encoder
+    # `tiers`: the search settings a tier may set after its preset (astcenc_config's fields)
+    TUNE = ('tune_partition_count_limit', 'tune_2partition_index_limit', 'tune_3partition_index_limit',
+            'tune_4partition_index_limit', 'tune_block_mode_limit', 'tune_refinement_limit', 'tune_candidate_limit',
+            'tune_2partitioning_candidate_limit', 'tune_3partitioning_candidate_limit',
+            'tune_4partitioning_candidate_limit', 'tune_db_limit', 'tune_mse_overshoot',
+            'tune_2partition_early_out_limit_factor', 'tune_3partition_early_out_limit_factor',
+            'tune_2plane_early_out_limit_correlation', 'tune_search_mode0_enable')
 
-    def __init__(self, quality, threads, mode='search', max_err=64, line=128, near=1024, log=None):
+    def __init__(self, quality, threads, mode='search', max_err=64, line=128, near=1024, log=None, tiers=None):
         if quality not in self.PRESETS:
             raise ValueError(f'ASTC quality {quality!r}: one of {", ".join(self.PRESETS)}')
         if mode not in self.MODES:
             raise ValueError(f'textures mode {mode!r}: one of {", ".join(self.MODES)}')
+        if tiers is not None and not isinstance(tiers, dict):
+            raise ValueError('textures.tiers: a table of tiers expected')
+        self.tiers = dict(tiers or {})
+        for tier, sets in self.tiers.items():
+            if tier not in self.TIERS:
+                raise ValueError(f'textures.tiers: tier {tier!r}: one of {", ".join(self.TIERS)}')
+            if not isinstance(sets, dict):
+                raise ValueError(f'textures.tiers: {tier}: a table of astc-encoder settings expected')
+            for k, v in sets.items():
+                if k not in self.TUNE:
+                    raise ValueError(f'textures.tiers: {tier}.{k}: not one of {", ".join(self.TUNE)}')
+                if isinstance(v, bool) or not isinstance(v, (int, float)):
+                    raise ValueError(f'textures.tiers: {tier}.{k}: a number expected')
         self.quality, self.threads = quality, threads or os.cpu_count() or 4
         self.guided = guided_module() if mode == 'guided' else None
         if mode == 'guided' and self.guided is None and log:
@@ -129,13 +153,17 @@ class Astc:
             if isinstance(tier, tuple):
                 from .astc_guide import TIERS as GT
                 preset, limits = GT[tier[1]]
+                sets = {}
             else:
                 preset, limits = self.quality, self.TIERS[tier]
+                sets = self.tiers.get(tier, {})
             cfg = A.ASTCConfig(A.ASTCProfile.LDR, block[0], block[1], block_z=1,
                                quality=getattr(A.ASTCQualityPreset, preset.upper()),
                                flags=A.ASTCConfigFlags.USE_DECODE_UNORM8)
             for k, v in limits.items():
                 setattr(cfg, k, min(v, getattr(cfg, k)))
+            for k, v in sets.items():            # (`tiers`: set, the counts as whole numbers)
+                setattr(cfg, k, max(int(v), 0) if isinstance(getattr(cfg, k), int) else float(v))
             self._ctx[key] = A.ASTCContext(cfg, threads=self.threads)
         return self._ctx[key]
 
@@ -768,7 +796,8 @@ def run(job, only=None, recorder=None):
     """recorder: an astc_guide.Recorder (making a guide)."""
     c = dict(DEFAULTS, **job.cfg.get('textures', {}))
     sharp_rx = re.compile('(?i)' + c['sharp_names']) if c['sharp_names'] else None
-    enc = Astc(c['quality'], c['threads'], c['mode'], c['guided_max_err'], c['guided_line'], c['guided_near'], job.log)
+    enc = Astc(c['quality'], c['threads'], c['mode'], c['guided_max_err'], c['guided_line'], c['guided_near'], job.log,
+               c['tiers'])
     if enc.mode == 'guided':
         enc.recorder = recorder
         if c['guide'] and recorder is None:

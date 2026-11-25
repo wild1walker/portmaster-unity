@@ -551,6 +551,59 @@ The extension: `convert/native/guided_astc/guided_astc.c` (CPython's limited API
 manylinux container with UnityPy's), `build.py` for a local build (tests, Mac). Without it the
 step logs that and searches every block.
 
+## Search settings by guided tier (2026-11-25)
+
+`textures.tiers` sets astc-encoder's search settings (`astcenc_config`'s `tune_*` fields, by name)
+after the preset for the blocks of a guided tier: `line` and `near` (the one- and two-partition
+searches of "Guided ASTC encoding" above) and `other` (the rest, searched at the preset). `{}`, the
+default, leaves every block as before. The setting changes blocks, so it is the port's choice, as
+`quality` is. What it was made for:
+
+```toml
+[convert.textures.tiers.other]
+tune_2plane_early_out_limit_correlation = 0   # no 2-plane trials
+tune_2partitioning_candidate_limit = 1        # one full trial a partition count ...
+tune_3partitioning_candidate_limit = 1
+tune_2partition_index_limit = 26              # ... of a candidate picked among more (fast: 18, 12)
+tune_3partition_index_limit = 28
+```
+
+The guided pass fits 4x4 blocks only ("Guided blocks for 6x6" above), so at 5x5 the encoder's time
+is astc-encoder's, and three quarters of it is the searched tier's. A 2D game with 4096x4096
+atlases (752 textures, 2827 MB, scale 0.5, 5x5, `fast`): 7.5 % of its blocks are searched, at
+462 us of CPU each on a Cortex-A53 against 23 us for a one-partition block. 13 of its textures
+(36 Mpix, their first levels as the step prepares them), the encoder alone on an RG34XX-SP
+(ROCKNIX; H700, 4x Cortex-A53; 4 threads), PSNR against the pixels encoded (transparent textures:
+premultiplied RGB and alpha) and over the worst 1 % of 4x4 texel blocks:
+
+| searched tier | encoder | PSNR (worst 1 %) | texture that loses most |
+|---|---|---|---|
+| `fast` | 28.0 s | 42.46 dB (27.28) | |
+| no 2-plane trials | -15.8 % | -0.03 (-0.05) | -0.08 |
+| one 2-partition candidate / one 3-partition candidate | -6.7 % / -4.9 % | -0.03 (-0.03) each | -0.09 / -0.07 |
+| candidate limit 2 / refinement limit 2 | -4.8 % / -1.8 % | -0.04 (-0.06) / -0.01 | |
+| no mode-0 pre-pass | -2.8 % | -0.02 (-0.04) | -0.13 |
+| block mode limit 43 | -11.3 % | -0.32 (-0.42) | |
+| two partitions at most | | -1.57 (-2.36) | |
+| **the settings above** | **22.1 s (-21 %)** | **42.60 dB (27.56)** | **-0.05** (the best +0.47) |
+| the same with index limits 18 / 20 | 20.8 s (-26 %) | 42.48 dB (27.33) | -0.14 |
+| `medium` | 63.0 s | 43.21 dB (27.96) | |
+| `medium`, one candidate, no 2-plane, no mode-0 pre-pass, index limits 82 / 60 | 47.2 s (-25 %) | 43.20 dB (27.98) | |
+
+The estimate that picks a partitioning is cheap next to a full trial of it, so one trial of a
+candidate picked among more beats two trials. What "no 2-plane" costs is blocks whose alpha does
+not follow their colour (soft clouds: -0.05 dB). The same idea at 6x6 `fast`: -31 % for +0.13 dB.
+At 4x4 it does not pay (-8 % for -0.04 dB: two planes and the second candidate earn their time
+there), and the `line` and `near` tiers have nothing to give (under 1 % of the encoder's time).
+
+In the step: three of that game's data files with their `.resS` (331 MB, 297 textures),
+`convert --steps textures` on an RG Cube XX (Knulli; the same chip), cold cache: `astc` 43.6 - 44.9
+-> 36.0, 36.1 s, the step 86.9 - 91.6 -> 80.2, 80.4 s (on the RG34XX-SP 80.2 - 82.7 -> 73.4,
+74.4 s). Tests: the searched tier set to one
+partition gives the one-partition tier's blocks, and bad tier or field names are refused
+(`tiers_set_the_search_of_their_blocks` in texcodec, `test_tiers_set_the_search_of_their_blocks`
+for the Python).
+
 ## The setup on a PC: tools/prepatch (2026-10-31)
 
 [tools/prepatch](../tools/prepatch/README.md) is a web page that runs a port's setup in the browser, with

@@ -34,6 +34,9 @@ extern "C" {
         flags: c_uint,
         partition_limit: c_int,
         index2_limit: c_int,
+        tune_fields: *const u8,
+        tune_values: *const f32,
+        tune_len: usize,
         threads: c_uint,
         status: *mut c_int,
     ) -> *mut c_void;
@@ -78,6 +81,76 @@ fn astc_error(status: c_int) -> Error {
     Error::Astc(msg)
 }
 
+/// The astc-encoder search settings a tier may set after its preset (`tiers`): astcenc_config's
+/// fields, by name, in the order csrc/astcenc_capi.cpp numbers them.
+pub const TUNE_FIELDS: [&str; 16] = [
+    "tune_partition_count_limit",
+    "tune_2partition_index_limit",
+    "tune_3partition_index_limit",
+    "tune_4partition_index_limit",
+    "tune_block_mode_limit",
+    "tune_refinement_limit",
+    "tune_candidate_limit",
+    "tune_2partitioning_candidate_limit",
+    "tune_3partitioning_candidate_limit",
+    "tune_4partitioning_candidate_limit",
+    "tune_db_limit",
+    "tune_mse_overshoot",
+    "tune_2partition_early_out_limit_factor",
+    "tune_3partition_early_out_limit_factor",
+    "tune_2plane_early_out_limit_correlation",
+    "tune_search_mode0_enable",
+];
+
+/// Settings set on a context's config after its preset and limits: (index in TUNE_FIELDS, value).
+pub type Tune = Vec<(u8, f32)>;
+
+/// `tiers`: what each guided tier sets after the preset (textures.py's Astc.tiers).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TierTune {
+    pub line: Tune,
+    pub near: Tune,
+    pub other: Tune,
+}
+
+impl TierTune {
+    /// From the setting's JSON: {"line" | "near" | "other": {field: number, ...}, ...}.
+    pub fn from_json(v: &serde_json::Value) -> Result<TierTune, Error> {
+        let bad = |what: String| Error::Config(format!("textures.tiers: {what}"));
+        let mut out = TierTune::default();
+        let Some(m) = v.as_object() else {
+            return if v.is_null() {
+                Ok(out)
+            } else {
+                Err(bad("a table of tiers expected".into()))
+            };
+        };
+        for (tier, fields) in m {
+            let dst = match tier.as_str() {
+                "line" => &mut out.line,
+                "near" => &mut out.near,
+                "other" => &mut out.other,
+                _ => return Err(bad(format!("tier {tier:?}: one of line, near, other"))),
+            };
+            let Some(fields) = fields.as_object() else {
+                return Err(bad(format!(
+                    "{tier}: a table of astc-encoder settings expected"
+                )));
+            };
+            for (k, x) in fields {
+                let i = TUNE_FIELDS.iter().position(|f| f == k).ok_or_else(|| {
+                    bad(format!("{tier}.{k}: not one of {}", TUNE_FIELDS.join(", ")))
+                })?;
+                let x = x
+                    .as_f64()
+                    .ok_or_else(|| bad(format!("{tier}.{k}: a number expected")))?;
+                dst.push((i as u8, x as f32));
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// An astc-encoder context (astc_encoder_py's ASTCContext) for `threads` threads.
 pub struct Context {
     ptr: *mut c_void,
@@ -90,16 +163,21 @@ unsafe impl Send for Context {}
 
 impl Context {
     /// An LDR context for blocks `block` at `quality` (astcenc's value), USE_DECODE_UNORM8, with
-    /// `limits` lowered after the preset (as textures.py's setattr(cfg, k, min(v, ...))).
+    /// `limits` lowered after the preset (as textures.py's setattr(cfg, k, min(v, ...))), then
+    /// `tune` set (setattr(cfg, k, v)).
     pub fn new(
         block: (u32, u32),
         quality: f32,
         limits: Limits,
+        tune: &[(u8, f32)],
         threads: usize,
     ) -> Result<Context, Error> {
         let mut status = 0;
         let lim = |v: Option<u32>| v.map_or(-1, |v| v as c_int);
-        // SAFETY: plain values in, a context pointer (or NULL and a status) out.
+        let fields: Vec<u8> = tune.iter().map(|t| t.0).collect();
+        let values: Vec<f32> = tune.iter().map(|t| t.1).collect();
+        // SAFETY: plain values and two arrays of tune.len() items in, a context pointer (or NULL
+        // and a status) out.
         let ptr = unsafe {
             tc_astc_new(
                 block.0,
@@ -108,6 +186,9 @@ impl Context {
                 USE_DECODE_UNORM8,
                 lim(limits.partitions),
                 lim(limits.index2),
+                fields.as_ptr(),
+                values.as_ptr(),
+                tune.len(),
                 threads as c_uint,
                 &mut status,
             )
@@ -203,6 +284,8 @@ pub struct EncoderSettings {
     pub max_err: i32,
     pub line: i32,
     pub near: i32,
+    /// what the guided tiers set after the preset (`tiers`)
+    pub tiers: TierTune,
 }
 
 /// textures.py's `Astc`: contexts kept for the whole run, the guided blocks' counts, the guide.
@@ -240,14 +323,16 @@ impl Encoder {
     fn context(&mut self, block: (u32, u32), tier: Tier) -> Result<&mut Context, Error> {
         let key = (block, tier);
         if !self.ctx.contains_key(&key) {
-            let (q, limits) = match tier {
-                Tier::Guide(i) => (preset(guide::TIERS[i].0)?, guide::TIERS[i].1),
+            let t = &self.settings.tiers;
+            let (q, limits, tune): (f32, Limits, &[(u8, f32)]) = match tier {
+                Tier::Guide(i) => (preset(guide::TIERS[i].0)?, guide::TIERS[i].1, &[]),
                 Tier::Line => (
                     self.quality,
                     Limits {
                         partitions: Some(1),
                         index2: None,
                     },
+                    &t.line,
                 ),
                 Tier::Near => (
                     self.quality,
@@ -255,11 +340,12 @@ impl Encoder {
                         partitions: Some(2),
                         index2: None,
                     },
+                    &t.near,
                 ),
-                Tier::Other => (self.quality, Limits::NONE),
+                Tier::Other => (self.quality, Limits::NONE, &t.other),
             };
-            self.ctx
-                .insert(key, Context::new(block, q, limits, self.settings.threads)?);
+            let ctx = Context::new(block, q, limits, tune, self.settings.threads)?;
+            self.ctx.insert(key, ctx);
         }
         Ok(self.ctx.get_mut(&key).unwrap())
     }
@@ -475,6 +561,7 @@ mod tests {
             max_err: 64,
             line: 128,
             near: 1024,
+            tiers: TierTune::default(),
         }
     }
 
@@ -545,6 +632,62 @@ mod tests {
         }
         // one colour, fitted, DXT seed, one partition, two partitions, searched
         assert_eq!(e.counts, [2, 0, 0, 2, 0, 2]);
+    }
+
+    #[test]
+    fn tiers_set_the_search_of_their_blocks() {
+        let mut x = 12345u32;
+        let img: Vec<u8> = (0..24 * 12 * 4)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                (x >> 16) as u8
+            })
+            .collect();
+        // every block in the "other" tier, set to one partition = every block in the "line" tier
+        let line = EncoderSettings {
+            max_err: -1,
+            line: i32::MAX,
+            near: i32::MAX,
+            ..settings(true)
+        };
+        let other = |tiers: TierTune| EncoderSettings {
+            max_err: -1,
+            line: -1,
+            near: -1,
+            tiers,
+            ..settings(true)
+        };
+        let one = TierTune::from_json(&serde_json::json!({
+            "other": {"tune_partition_count_limit": 1}
+        }))
+        .unwrap();
+        assert_eq!(one.other, vec![(0, 1.0)]);
+        let mut a = Encoder::new(line, None).unwrap();
+        let mut b = Encoder::new(other(one), None).unwrap();
+        let mut c = Encoder::new(other(TierTune::default()), None).unwrap();
+        let out = a.encode_rows(&img, 24, 12, (6, 6), None, None).unwrap();
+        assert_eq!(
+            b.encode_rows(&img, 24, 12, (6, 6), None, None).unwrap(),
+            out
+        );
+        assert_ne!(
+            c.encode_rows(&img, 24, 12, (6, 6), None, None).unwrap(),
+            out
+        );
+        assert_eq!((a.counts[3], b.counts[5]), (8, 8));
+        for bad in [
+            serde_json::json!({"far": {}}),
+            serde_json::json!({"other": {"tune_speed": 1}}),
+            serde_json::json!({"other": {"tune_candidate_limit": "two"}}),
+            serde_json::json!({"other": 1}),
+            serde_json::json!([1]),
+        ] {
+            assert!(TierTune::from_json(&bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            TierTune::from_json(&serde_json::Value::Null).unwrap(),
+            TierTune::default()
+        );
     }
 
     #[test]

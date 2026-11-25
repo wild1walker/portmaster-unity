@@ -373,6 +373,7 @@ pub(crate) fn defaults() -> Vec<(&'static str, Json)> {
         ("guided_max_err", Json::Int(64)),
         ("guided_line", Json::Int(128)),
         ("guided_near", Json::Int(1024)),
+        ("tiers", Json::Dict(Vec::new())),
         ("sharp_names", Json::Str(String::new())),
         ("scale_sharp", Json::Float(1.0)),
         ("sharp_block", l(4, 4)),
