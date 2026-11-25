@@ -203,6 +203,7 @@ static pthread_mutex_t pool_mu = PTHREAD_MUTEX_INITIALIZER;
 static um_frame *pool;
 static int pool_n;
 static int pool_users;      /* video codecs and surfaces alive */
+static int pool_idle;       /* no decoder has asked for a picture since a stream ended: nothing is kept */
 #define POOL_MAX 8
 
 /* a video codec or surface made (+1) or freed (-1): when the last one goes, the pool's pictures
@@ -216,6 +217,21 @@ void um_frame_pool_use(int d)
     if (pool_users <= 0) { pool_users = 0; drop = pool; pool = NULL; pool_n = 0; }
     pthread_mutex_unlock(&pool_mu);
     while (drop) { um_frame *n = drop->next; free(drop->data); free(drop); drop = n; }
+}
+
+/* a video stream reached its end, or its codec was stopped: the pooled pictures go, and so do the
+   ones given back from now on, until a decoder asks for a picture again. A game that keeps its
+   video player after a cinematic (a 2017.4 game's intro: its player lives on through the first area) would
+   otherwise hold up to POOL_MAX pictures of the clip's size, unused (1080p: 3.1 MB each) */
+void um_frame_pool_idle(void)
+{
+    um_frame *drop;
+    int n = 0; size_t bytes = 0;
+    pthread_mutex_lock(&pool_mu);
+    drop = pool; pool = NULL; pool_n = 0; pool_idle = 1;
+    pthread_mutex_unlock(&pool_mu);
+    while (drop) { um_frame *nx = drop->next; n++; bytes += drop->cap; free(drop->data); free(drop); drop = nx; }
+    if (n) UM_TRACE("frames: %d pooled pictures freed at the end of a stream (%.1f MB)", n, bytes / 1048576.0);
 }
 
 int um_frame_pool_count(void)
@@ -232,6 +248,7 @@ um_frame *um_frame_get(int width, int height)
     size_t need = (size_t)pw * (ph + ph / 2);
     um_frame *f = NULL;
     pthread_mutex_lock(&pool_mu);
+    pool_idle = 0;
     for (um_frame **pp = &pool; *pp; pp = &(*pp)->next)
         if ((*pp)->cap >= need && (*pp)->cap <= need + need / 4) { f = *pp; *pp = f->next; pool_n--; break; }
     pthread_mutex_unlock(&pool_mu);
@@ -252,7 +269,8 @@ void um_frame_put(um_frame *f)
 {
     if (!f) return;
     pthread_mutex_lock(&pool_mu);
-    if (pool_n < POOL_MAX) { f->next = pool; pool = f; pool_n++; f = NULL; }
+    if (pool_idle) ;                                    /* freed below */
+    else if (pool_n < POOL_MAX) { f->next = pool; pool = f; pool_n++; f = NULL; }
     else {
         /* drop the oldest-sized ones first: a size change leaves frames nobody asks for */
         um_frame **pp = &pool;

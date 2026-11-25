@@ -109,5 +109,6 @@ ssize_t um_nal_convert(const uint8_t *in, size_t n, int nal_len_size, uint8_t *o
 int  um_cpu_count(void);
 int64_t um_now_us(void);
 void um_frame_pool_use(int d);      /* a video codec / surface made (+1) or freed (-1): see um_format.c */
+void um_frame_pool_idle(void);      /* a video stream ended or its codec stopped: see um_format.c */
 
 #endif
