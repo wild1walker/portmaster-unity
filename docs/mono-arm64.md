@@ -1378,3 +1378,8 @@ available 280 / 210 / 138 MB; muOS Breach 59.5, the Keep 60.1, the Forge 56.8, B
 G350's Keep fight had a 507 ms collection (Boehm's own, 25.8 MB after the load's last one): with that collection now on
 the load's black frame, the level's first allocations (the arrival, the bench's warp) count against play's allowance,
 where the frame-time exit used to collect after them. Bullet Hell and the Forge had none.
+
+**Release candidate d** (gungeon-rc64d; the arrival reset, release-cells, ua_host's request files off the frame thread),
+BattleXP G350 through ES from a fresh setup: Breach 57.7 fps; the Keep 37.6 fps with no collection in its fight (the
+arrival's 4.8 MB forgotten 5 s after the load); the Forge 37.5 fps and 153 MB available; Bullet Hell 29.7 fps, 162 MB;
+no frame of the fights waited on the disk (UA_STALL_TRACE).
