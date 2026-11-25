@@ -1328,3 +1328,34 @@ libunity's malloc (the ledger, the same fight): 135 MB, 300,000 blocks; 45 MB of
 (pointer-sized structures, larger on 64-bit), big blocks of 8 and 6 MB (Unity's own allocators' blocks, 0xaa-filled).
 Unity 2017.4 does not know the `memorysetup-*` boot.config keys (2021.1+), so the 1 MB block setting is not in effect
 on this line; its allocator sizes are not settable without changing libunity.
+
+### Exact cuts in the room templates, and where Bullet Hell stands (2026-11-25)
+
+An IL census of every use of the room templates' cell fields (Mono.Cecil over the game's assemblies) decided what
+gungeonpatch may change:
+- `PrototypeDungeonRoom.m_cellData` is used only inside the class (58 reads, 3 writes, no address taken), filled by
+  `OnAfterDeserialize` from the compressed serialized fields: **lazy-cells** makes that expansion on first use (the
+  same objects from the same fields; a lock of the patch's own between Unity's loading thread and the main thread).
+- `PrototypeIndexOverrideData.indices` and the appearance's override fields are used only inside
+  `PrototypeDungeonRoomCellAppearance`: read, copied into new lists or replaced; the one `Clear` has no caller.
+  **shared-overrides** gives the expansion's default appearances and `GetOverridesForTilemap`'s padding one shared
+  empty list and default entry (objects Unity deserializes are not touched: its serializer may fill a list in place).
+- `PrototypeDungeonRoomCellData.additionalPlacedObjectIndices` is changed at run time (RobotDave, RobotRoomFeature,
+  RebuildObjectCellData): left alone. Dropping unplaced templates from a floor's pool: the templates are assets that
+  Unity keeps loaded while the dungeon prefab's tables reference them, and secret, rat and boss rooms are placed from
+  the same tables later in the floor: not exact, not done.
+- Interning duplicate strings (5 MB): `dfFont`'s tokenizer reuses tokens by `ReferenceEquals` on its source string
+  (harmless: equal text, equal tokens), but FullSerializer's cyclic-reference manager tracks objects by identity during
+  FullInspector's deserialization, and an intern table keeps every interned string forever: not done.
+
+muOS, bench Bullet Hell (fixed seed: the same floor, busiest room and 31 rooms each way), live heap after a collection:
+145.7 MB -> 139.9 (lazy-cells; template cells 72,140 -> 53,414: generation reads most of a pool) -> 138.0 MB
+(shared-overrides); Boehm's heap 195 -> 183 -> 181 MB; the fight the same.
+
+BattleXP G350 with EmulationStation, bench Bullet Hell, all of this round's pieces (8-byte granules, the load flag and
+black frame, lazy-cells, shared-overrides): lowest available **143 MB** (105 - 111 before the round; the 32-bit build's
+reference 131), Boehm's heap 188 MB, no collection in the fight, the load's last collection shot black. The same
+session's 32-bit run with `UA_MEM_LEDGER=2`: libunity 138.9 MB of malloc (64-bit, the Keep on muOS: 135.3), libmono 30
+MB, its Mono heap 228 MB of mappings: libunity is not where the 64-bit build's memory went. That launch's frame rate
+(29.3 fps, 78 frames over 50 ms a minute) is below the earlier runs (30.4 - 31.7) with a census and Mono's counters
+taken at the warp; a clean pair is the next check.
