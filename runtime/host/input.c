@@ -40,6 +40,7 @@
 #include "../jni/unityplayer.h"
 
 #include <SDL2/SDL.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -339,21 +340,42 @@ static void script_parse_at(const char *spec, double base)
    into place, so it is never read half-written. For driving a game from a test script (emulated
    rig or handheld) by what its screenshots show. */
 static char g_live[600];
-void input_set_root(const char *root) { snprintf(g_live, sizeof g_live, "%s/input.req", root); }
+// input.req is read by a thread of its own every 0.25 s and handed over here: a file lookup on a busy SD card can
+// block for most of a second, which on the main thread would be a frame
+static pthread_mutex_t g_live_mx = PTHREAD_MUTEX_INITIALIZER;
+static char g_live_spec[2048];
+static int g_live_ready;
+static void *live_poll(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        usleep(250000);
+        FILE *f = fopen(g_live, "r");
+        if (!f) continue;
+        char spec[2048];
+        size_t n = fread(spec, 1, sizeof spec - 1, f);
+        fclose(f);
+        unlink(g_live);
+        spec[n] = 0;
+        pthread_mutex_lock(&g_live_mx);
+        snprintf(g_live_spec, sizeof g_live_spec, "%s", spec); g_live_ready = 1;
+        pthread_mutex_unlock(&g_live_mx);
+    }
+    return NULL;
+}
+void input_set_root(const char *root)
+{
+    snprintf(g_live, sizeof g_live, "%s/input.req", root);
+    pthread_t t; if (pthread_create(&t, NULL, live_poll, NULL) == 0) pthread_detach(t);
+}
 static void live_input(void)
 {
-    static double last;
-    if (!started || !g_live[0]) return;
+    if (!started || !g_live[0] || !__atomic_load_n(&g_live_ready, __ATOMIC_ACQUIRE)) return;
     double t = now_s() - t_start;
-    if (t - last < 0.25) return;
-    last = t;
-    FILE *f = fopen(g_live, "r");
-    if (!f) return;
     char spec[2048];
-    size_t n = fread(spec, 1, sizeof spec - 1, f);
-    fclose(f);
-    unlink(g_live);
-    spec[n] = 0;
+    pthread_mutex_lock(&g_live_mx);
+    snprintf(spec, sizeof spec, "%s", g_live_spec); g_live_ready = 0;
+    pthread_mutex_unlock(&g_live_mx);
     for (char *c = spec; *c; c++) if (*c == '\n' || *c == '\r' || *c == '\t') *c = ' ';
     int before = nscript;
     script_parse_at(spec, t);
@@ -655,7 +677,7 @@ void input_poll(void)
         }
     }
     for (int i = 0; i < MAX_PADS; i++) if ((moved[i] || pads[i].hat_held) && (pads[i].gc || pads[i].virt)) send_axes(&pads[i]);
-    live_input();                       // (cheap: a stat of input.req every 0.25 s)
+    live_input();                       // (input.req, read by live_poll's thread)
     if (next_press < nscript) script_run();
     // the soft keyboard opened or closed (the game sees a centred pad while it is open), or the
     // d-pad changed roles (UA_DPAD_SWAP): the pads' axes again

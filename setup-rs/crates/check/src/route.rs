@@ -349,9 +349,9 @@ pub fn find_data_dirs(path: &str, depth: usize) -> Vec<String> {
             dirs.clear();
             return;
         }
-        let mut sorted = dirs.clone();
-        sorted.sort();
-        for d in &sorted {
+        // (by name, and the walk goes down in that order too: the order found is not the file system's)
+        dirs.sort();
+        for d in dirs.iter() {
             let p = join(root, d);
             if d.ends_with("_Data") && is_data(&p) {
                 found.push(p);
@@ -994,4 +994,30 @@ pub fn main(repo: Option<&port::Repo>, a: &Args) -> u8 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Folders made in an order that is neither by name nor its reverse: the data folders are found
+    // by name, whatever order the file system lists them in.
+    #[test]
+    fn data_dirs_are_found_in_name_order() {
+        let top = std::env::temp_dir().join(format!("check-data-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        for n in ["c", "a", "e", "b", "f", "d"] {
+            let d = top.join(n).join("Game_Data");
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("globalgamemanagers"), b"").unwrap();
+        }
+        let top = top.to_string_lossy().into_owned();
+        let got = find_data_dirs(&top, 4);
+        let _ = std::fs::remove_dir_all(&top);
+        let want: Vec<String> = "abcdef"
+            .chars()
+            .map(|n| format!("{top}/{n}/Game_Data"))
+            .collect();
+        assert_eq!(got, want);
+    }
 }

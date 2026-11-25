@@ -67,6 +67,16 @@ static char g_root[512];
 static double g_interval = 5;
 static char g_req[600];
 static int g_shot_next;                         // frames_shot_next(): a shot of the next swap's frame
+static int g_shot_req;                          // req_poll found shot.req
+static void *req_poll(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        sleep(1);
+        if (access(g_req, F_OK) == 0) { unlink(g_req); __atomic_store_n(&g_shot_req, 1, __ATOMIC_RELEASE); }
+    }
+    return NULL;
+}
 void frames_shot_next(void) { __atomic_store_n(&g_shot_next, 1, __ATOMIC_RELEASE); }
 static int g_shots;
 static int g_width, g_height;
@@ -166,11 +176,10 @@ static void on_swap(void *ctx)
     double t = now();
     if (!g_t_start) g_t_start = t;
     int shot = __atomic_exchange_n(&g_shot_next, 0, __ATOMIC_ACQ_REL);
-    if (t - checked >= 1.0)
-    {
-        checked = t;
-        if (access(g_req, F_OK) == 0) { unlink(g_req); shot = 1; }
-    }
+    (void)checked;
+    // shot.req is looked for by a thread of its own (req_poll): a file lookup on a busy SD card can block for most
+    // of a second, which here would be a frame
+    if (__atomic_exchange_n(&g_shot_req, 0, __ATOMIC_ACQ_REL)) shot = 1;
     glrec_swap();                               // the held frame to the driver first (UA_GL_REC)
     display_present_scaled();                   // a smaller frame up to the window's size (GPU scaler)
     int osk_first = !shot || osk_in_shots(), cursor_first = shot && pointer_in_shots();
@@ -258,6 +267,7 @@ void frames_init(const char *root, int width, int height)
     g_width = width; g_height = height;
     if (getenv("UA_FPS")) g_interval = atof(getenv("UA_FPS"));
     snprintf(g_req, sizeof g_req, "%s/shot.req", root);
+    { pthread_t t; if (pthread_create(&t, NULL, req_poll, NULL) == 0) pthread_detach(t); }
     egl_glue_set_swap_hook(on_swap, NULL);
     egl_glue_set_swap_done_hook(on_swap_done, NULL);
     egl_glue_set_window_hook(on_new_window);

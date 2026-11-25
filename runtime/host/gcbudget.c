@@ -51,6 +51,9 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/syscall.h>
+#include <dirent.h>
+#include <sys/types.h>
 #include <dlfcn.h>
 #include <sys/uio.h>
 #include <sys/syscall.h>
@@ -225,7 +228,10 @@ static void *grow_main(void *arg)
             // while the game's own load flag is set (UA_GC_LOAD_FLAG: UnityMain enters and leaves at its edges), or
             // without one until 3 s after a load's frame (g_long_t: over 2.5 s, or two of over 1 s within 5 s)
             // (the flag's own edges are UnityMain's: load_flag_frame)
-            int loading = g_frame_t > 0 && (in > 1.0 || (!g_flag_known && t - g_long_t < 3.0));
+            // with the game's flag known only the flag decides (UnityMain's edges): a long frame in play (the arrival,
+            // a stall) must not set the tight divisor, or Boehm computes play's allowance with it (once per collection,
+            // at the first check after it) and the fight collects after a few MB (the Keep, G350: 507 ms)
+            int loading = g_frame_t > 0 && !g_flag_known && (in > 1.0 || t - g_long_t < 3.0);
             if (loading) tight_enter(in > 1.0 ? "a long frame" : "after a long frame");
             else if (t_on && !(g_flag_known && g_flag)) { tight_exit("frames at play speed", root, attach, detach); last = heap(); last_n = count(0); }
         }
@@ -533,9 +539,112 @@ static void load_flag_frame(void)
     g_flag = f;
 }
 
+// UA_STALL_TRACE=<ms> (a measurement): a thread samples UnityMain every 20 ms (/proc/self/task/<tid>/stat, wchan, io);
+// once a frame has lasted <ms>, until it ends, and then logs one line: the samples' states (R running, S sleeping,
+// D waiting on the disk), the kernel functions it waited in (wchan, with counts), its page faults (minor, major), the
+// bytes it read and its voluntary / involuntary context switches over the frame: a page fault or read, a lock, the GPU
+// driver or plain CPU (the JIT, the game) tell apart. Nothing changes in the game.
+static volatile pid_t g_main_tid;
+static double g_t_start;
+static int g_stall_ms;
+static int st_read(pid_t tid, char *state, unsigned long *minf, unsigned long *majf)
+{
+    char p[64], b[1024]; snprintf(p, sizeof p, "/proc/self/task/%d/stat", (int)tid);
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    size_t n = fread(b, 1, sizeof b - 1, f); fclose(f); b[n] = 0;
+    char *c = strrchr(b, ')'); if (!c) return 0;
+    // after ")": state ppid pgrp session tty tpgid flags minflt cminflt majflt
+    unsigned long v[8]; char stc;
+    if (sscanf(c + 2, "%c %lu %lu %lu %lu %lu %lu %lu %*s %lu", &stc, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], minf, majf) < 9) return 0;
+    *state = stc; return 1;
+}
+static void st_wchan(pid_t tid, char *w, size_t n)
+{
+    char p[64]; snprintf(p, sizeof p, "/proc/self/task/%d/wchan", (int)tid);
+    FILE *f = fopen(p, "r"); w[0] = 0; if (!f) return;
+    size_t k = fread(w, 1, n - 1, f); fclose(f); w[k] = 0;
+}
+static void st_ctx(pid_t tid, unsigned long *vol, unsigned long *invol, unsigned long *rb)
+{
+    char p[64], l[160]; *vol = *invol = *rb = 0;
+    snprintf(p, sizeof p, "/proc/self/task/%d/status", (int)tid);
+    FILE *f = fopen(p, "r");
+    if (f) { while (fgets(l, sizeof l, f)) { sscanf(l, "voluntary_ctxt_switches: %lu", vol); sscanf(l, "nonvoluntary_ctxt_switches: %lu", invol); } fclose(f); }
+    snprintf(p, sizeof p, "/proc/self/task/%d/io", (int)tid);
+    f = fopen(p, "r");
+    if (f) { while (fgets(l, sizeof l, f)) sscanf(l, "read_bytes: %lu", rb); fclose(f); }
+}
+static void *stall_main(void *arg)
+{
+    (void)arg;
+    struct { char w[48]; int n; } wc[16]; int nwc = 0, sr = 0, ss = 0, sd = 0, so = 0, in_stall = 0;
+    unsigned long mi0 = 0, ma0 = 0, v0 = 0, iv0 = 0, rb0 = 0; double t0 = 0;
+    for (;;) {
+        usleep(20000);
+        // the game's own thread, by name (UnityMain: the frame hook's thread waits for it)
+        static pid_t um; static int looked;
+        if (!um && looked++ < 500) {
+            DIR *d = opendir("/proc/self/task"); struct dirent *de;
+            while (d && (de = readdir(d))) {
+                char pp[64], nm[32] = ""; snprintf(pp, sizeof pp, "/proc/self/task/%s/comm", de->d_name);
+                FILE *f = fopen(pp, "r"); if (!f) continue;
+                if (fgets(nm, sizeof nm, f) && !strncmp(nm, "UnityMain", 9)) um = (pid_t)atoi(de->d_name);
+                fclose(f);
+            }
+            if (d) closedir(d);
+        }
+        pid_t tid = um ? um : g_main_tid; if (!tid) continue;
+        double ft = g_frame_t, t = now();
+        if (ft <= 0) continue;
+        if (!in_stall) {
+            if ((t - ft) * 1000 < g_stall_ms) continue;
+            in_stall = 1; nwc = sr = ss = sd = so = 0; t0 = ft;
+            char c; if (!st_read(tid, &c, &mi0, &ma0)) { in_stall = 0; continue; }
+            st_ctx(tid, &v0, &iv0, &rb0);
+        }
+        if (g_frame_t != t0) {      // the frame ended: one line
+            char c; unsigned long mi, ma, v, iv, rb; st_read(tid, &c, &mi, &ma); st_ctx(tid, &v, &iv, &rb);
+            char wl[400] = ""; size_t o = 0;
+            for (int i = 0; i < nwc && o < sizeof wl - 60; i++) o += snprintf(wl + o, sizeof wl - o, " %s x%d", wc[i].w, wc[i].n);
+            fprintf(stderr, "[stall] frame of %.0f ms at %.1f s: the game thread's samples R %d, S %d, D %d, other %d; waits:%s; page faults %lu minor, %lu major; read %lu KB; switches %lu voluntary, %lu involuntary\n",
+                    (g_frame_t - t0) * 1000, t0 - g_t_start, sr, ss, sd, so, nwc ? wl : " none", mi - mi0, ma - ma0, (rb - rb0) >> 10, v - v0, iv - iv0);
+            in_stall = 0; continue;
+        }
+        char c; unsigned long mi, ma;
+        if (!st_read(tid, &c, &mi, &ma)) continue;
+        if (c == 'R') sr++; else if (c == 'S') ss++; else if (c == 'D') sd++; else so++;
+        if (c != 'R') {
+            // who runs while UnityMain waits: the other threads in R, by name
+            DIR *d = opendir("/proc/self/task"); struct dirent *de;
+            while (d && (de = readdir(d))) {
+                pid_t o = (pid_t)atoi(de->d_name); if (o <= 0 || o == tid) continue;
+                char pp[64], bb[256]; snprintf(pp, sizeof pp, "/proc/self/task/%d/stat", (int)o);
+                FILE *f = fopen(pp, "r"); if (!f) continue;
+                size_t nn = fread(bb, 1, sizeof bb - 1, f); fclose(f); bb[nn] = 0;
+                char *l = strchr(bb, '('), *r2 = strrchr(bb, ')'); if (!l || !r2 || r2[2] != 'R') continue;
+                char nm[48]; snprintf(nm, sizeof nm, "run:%.*s", (int)(r2 - l - 1), l + 1);
+                int i; for (i = 0; i < nwc && strcmp(wc[i].w, nm); i++) {}
+                if (i < nwc) wc[i].n++; else if (nwc < 16) { snprintf(wc[nwc].w, sizeof wc[nwc].w, "%s", nm); wc[nwc++].n = 1; }
+            }
+            if (d) closedir(d);
+            char w[48]; st_wchan(tid, w, sizeof w);
+            if (!w[0] || !strcmp(w, "0")) continue;
+            int i; for (i = 0; i < nwc && strcmp(wc[i].w, w); i++) {}
+            if (i < nwc) wc[i].n++; else if (nwc < 16) { snprintf(wc[nwc].w, sizeof wc[nwc].w, "%s", w); wc[nwc++].n = 1; }
+        }
+    }
+    return NULL;
+}
+
 void gcbudget_frame(void *user)
 {
     (void)user;
+    if (!g_main_tid) {
+        g_main_tid = (pid_t)syscall(SYS_gettid); g_t_start = now();
+        const char *e = getenv("UA_STALL_TRACE");
+        if (e && atoi(e) > 0) { g_stall_ms = atoi(e); pthread_t t; if (pthread_create(&t, NULL, stall_main, NULL) == 0) pthread_detach(t);
+                                fprintf(stderr, "[stall] tracing frames over %d ms\n", g_stall_ms); }
+    }
     load_flag_frame();
     if (g_grow_mb > 0 || g_tight > 0) {
         double t = now();
