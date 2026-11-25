@@ -36,6 +36,26 @@ game's files. Cuphead's port ([portmaster-cuphead](https://github.com/wild1walke
 was written by hand before these tools; it shows what a game may need beyond them (its own code
 patches and a helper assembly).
 
+## Rules for every port
+
+These hold for every port made with these tools, whichever game and whichever handheld.
+
+- **64-bit only.** A release ships aarch64 binaries only, no armhf (`[port] aarch64_only = true`;
+  [arm64.md](arm64.md), "Shipping aarch64 only"). A port moves once its 64-bit build is measured on
+  the handhelds at the 32-bit build's frame rate and memory, with the same picture and game play.
+  Tested so far: Hollow Knight passes, upgrade from the 32-bit release included (2026-11-23).
+  Gungeon does not yet: on a 1 GB handheld its dungeon floors take 120-170 MB more than the 32-bit
+  build (the managed heap, 8-byte references) and it runs out of memory on the G350, so it keeps its
+  armhf build until that is closed. New ports start 64-bit only.
+- **Every speedup on every handheld.** Whatever makes the game faster is on by default on every
+  device, not only on those with 1 GB of RAM: `[runtime]`, and `[runtime_low]` for what changes the
+  picture ([The Low picture at launch](#the-low-picture-at-launch-runtime_low)). `[runtime_lowmem]`
+  is only for what trades something away to fit in memory (a smaller sound budget, half textures)
+  and gains nothing where memory is not short. A new gain is never gated on RAM, screen or device
+  name without a measurement that shows it costs something elsewhere.
+- **Game play is never changed**, and the setup offers no heavier picture
+  ([quality.md](quality.md)).
+
 ## Before you start
 
 - **The computer:** Docker, Python 3.11+ (`pip install -r convert/requirements.txt`; `port.toml`

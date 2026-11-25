@@ -128,6 +128,8 @@ Android and host frames. GNU ld 2.34 cannot write packed relocations, so the enc
 loader's decoder are both ours: a library from the NDK's lld is still the real proof.
 
 ## Shipping aarch64 only
+The rule and which ports have passed it: [porting.md](porting.md), "Rules for every port".
+
 The goal: Unity Mono ports with no armhf binaries, the 32-bit route dropped once the 64-bit one
 matches it on the handhelds (docs/mono-arm64.md, "32-bit or 64-bit only"). This section maps every
 place that picks, builds, packs or ships an armhf or aarch64 piece, and the switch that makes a
