@@ -66,6 +66,8 @@ static void (*gl_PixelStorei)(unsigned, int);
 static char g_root[512];
 static double g_interval = 5;
 static char g_req[600];
+static int g_shot_next;                         // frames_shot_next(): a shot of the next swap's frame
+void frames_shot_next(void) { __atomic_store_n(&g_shot_next, 1, __ATOMIC_RELEASE); }
 static int g_shots;
 static int g_width, g_height;
 
@@ -163,7 +165,7 @@ static void on_swap(void *ctx)
     static int n, total, late, hitch, gc_prev = -1;
     double t = now();
     if (!g_t_start) g_t_start = t;
-    int shot = 0;
+    int shot = __atomic_exchange_n(&g_shot_next, 0, __ATOMIC_ACQ_REL);
     if (t - checked >= 1.0)
     {
         checked = t;

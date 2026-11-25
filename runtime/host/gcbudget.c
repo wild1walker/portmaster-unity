@@ -41,6 +41,7 @@
 #define _GNU_SOURCE
 #include "gcbudget.h"
 #include "hitches.h"
+#include "frames.h"
 #include "../loader/so_loader.h"
 
 #include <pthread.h>
@@ -75,6 +76,16 @@ static volatile double g_frame_t;           // when UnityMain last finished a fr
 static volatile double g_long_t = -1e9;     // when UnityMain last finished a load's frame (see UA_GC_TIGHT)
 static volatile double g_long1 = -1e9;      // when UnityMain last finished a frame of over 1 s
 static int g_grow_started;
+// UA_GC_TIGHT's state, shared by the grow thread and UnityMain (the game's load flag, UA_GC_LOAD_FLAG)
+static pthread_mutex_t t_mx = PTHREAD_MUTEX_INITIALIZER;
+static void (*t_set_div)(unsigned long);
+static unsigned long t_div0;
+static int (*t_count)(int);
+static void (*t_collect)(int);
+static int (*t_max_gen)(void);
+static int64_t (*t_heap)(void);
+static volatile int t_ready, t_on, t_n, t_logged;
+static volatile int g_flag_known, g_flag;   // UA_GC_LOAD_FLAG: the game's own "loading" bool, read each frame
 static int g_census_on, g_census_left, g_census_frames;   // UA_GC_CENSUS
 
 void gcbudget_init(void)
@@ -136,6 +147,42 @@ static long mem_available_mb(void)
     return kb < 0 ? -1 : kb >> 10;
 }
 
+static void tight_enter(const char *why)
+{
+    pthread_mutex_lock(&t_mx);
+    if (t_ready && !t_on) {
+        t_set_div((unsigned long)g_tight); t_on = 1; t_n = t_count(0);
+        if (t_logged++ < 200) fprintf(stderr, "[host] gc tight: a load (%s): free-space divisor %lu -> %d (heap %lld MB)\n", why, t_div0, g_tight, (long long)(t_heap() >> 20));
+    }
+    pthread_mutex_unlock(&t_mx);
+}
+
+// back to play's divisor; if a collection ran with the tight one, one more now (Boehm computes the allocation that
+// triggers its next collection once per collection, with the divisor of that moment: the load's last one would
+// leave play with the load's small allowance, a full collection every ~16 MB in a fight). attach: called off a
+// Mono thread (the grow thread); UnityMain is one already
+static void tight_exit(const char *why, void *(*root)(void), void *(*attach)(void *), void (*detach)(void *))
+{
+    pthread_mutex_lock(&t_mx);
+    if (t_ready && t_on) {
+        t_set_div(t_div0); t_on = 0;
+        if (t_count(0) == t_n) {
+            if (t_logged++ < 200) fprintf(stderr, "[host] gc tight: play (%s): free-space divisor back to %lu (no collection ran meanwhile)\n", why, t_div0);
+        } else {
+            static int shot = -1;
+            if (shot < 0) { const char *e = getenv("UA_GC_TIGHT_SHOT"); shot = e && *e && strcmp(e, "0"); }
+            if (shot) frames_shot_next();       // (a measurement) what the screen shows around this collection
+            double tc = now();
+            void *d = root ? root() : NULL, *th = d && attach ? attach(d) : NULL;
+            if (d || !root) t_collect(t_max_gen());
+            if (th) detach(th);
+            if (t_logged++ < 200) fprintf(stderr, "[host] gc tight: play (%s): free-space divisor back to %lu (heap %lld MB), a collection to set play's allowance in %.0f ms\n",
+                                          why, t_div0, (long long)(t_heap() >> 20), (now() - tc) * 1000);
+        }
+    }
+    pthread_mutex_unlock(&t_mx);
+}
+
 // UA_GC_GROW's thread: polls the heap's size (Boehm's GC_heapsize and GC_gc_no, read without its lock)
 static void *grow_main(void *arg)
 {
@@ -161,39 +208,26 @@ static void *grow_main(void *arg)
     void (*set_div)(unsigned long) = (void (*)(unsigned long))so_dlsym(h, "GC_set_free_space_divisor");
     unsigned long (*get_div)(void) = (unsigned long (*)(void))so_dlsym(h, "GC_get_free_space_divisor");
     unsigned long div0 = get_div ? get_div() : 0;
-    int tight = 0, tick = 0, n_tight = 0;
+    int tick = 0;
     if (g_tight > 0 && (!set_div || !div0)) fprintf(stderr, "[host] gc tight: this collector has no free-space divisor setting: off\n");
+    if (g_tight > 0 && set_div && div0) {
+        pthread_mutex_lock(&t_mx);
+        t_set_div = set_div; t_div0 = div0; t_count = count; t_collect = collect; t_max_gen = max_gen; t_heap = heap; t_ready = 1;
+        pthread_mutex_unlock(&t_mx);
+    }
     int64_t last = heap(); int last_n = count(0), logged = 0;
     for (;;) {
         usleep(10000);
-        if (g_tight > 0 && set_div && div0 && ++tick % 5 == 0) {
+        if (t_ready && ++tick % 5 == 0) {
             double t = now();
             double in = t - g_frame_t;
-            // from the first frame of over 1 s (a floor's load can grow the heap by 100 MB in its first one), until
-            // 3 s after a load's frame (g_long_t: over 2.5 s, or two of over 1 s within 5 s)
-            int loading = g_frame_t > 0 && (in > 1.0 || t - g_long_t < 3.0);
-            if (loading && !tight) {
-                set_div((unsigned long)g_tight); tight = 1; n_tight = count(0);
-                if (logged++ < 200) fprintf(stderr, "[host] gc tight: a load: free-space divisor %lu -> %d (heap %lld MB)\n", div0, g_tight, (long long)(heap() >> 20));
-            } else if (!loading && tight && count(0) == n_tight) {
-                // no collection ran with the tight divisor (a single stall in play, say): play's allowance is still
-                // the one its own divisor set, nothing to redo
-                set_div(div0); tight = 0;
-                if (logged++ < 200) fprintf(stderr, "[host] gc tight: play: free-space divisor back to %lu (no collection ran meanwhile)\n", div0);
-            } else if (!loading && tight) {
-                set_div(div0); tight = 0;
-                // Boehm computes the allocation that triggers the next collection once per collection, with the
-                // divisor of that moment: the load's last one left play with the load's small allowance (a full
-                // collection every ~16 MB in a fight). One collection now, as the load ends, sets play's own
-                int n0 = count(0);
-                double tc = now();
-                void *d = root(), *th = d ? attach(d) : NULL;
-                if (d) collect(max_gen());
-                if (th) detach(th);
-                last = heap(); last_n = count(0);
-                if (logged++ < 200) fprintf(stderr, "[host] gc tight: play: free-space divisor back to %lu (heap %lld MB), a collection to set play's allowance in %.0f ms%s\n",
-                                            div0, (long long)(last >> 20), (now() - tc) * 1000, last_n != n0 ? "" : " (none ran)");
-            }
+            // from the first frame of over 1 s (a floor's load can grow the heap by 100 MB in its first one); then
+            // while the game's own load flag is set (UA_GC_LOAD_FLAG: UnityMain enters and leaves at its edges), or
+            // without one until 3 s after a load's frame (g_long_t: over 2.5 s, or two of over 1 s within 5 s)
+            // (the flag's own edges are UnityMain's: load_flag_frame)
+            int loading = g_frame_t > 0 && (in > 1.0 || (!g_flag_known && t - g_long_t < 3.0));
+            if (loading) tight_enter(in > 1.0 ? "a long frame" : "after a long frame");
+            else if (t_on && !(g_flag_known && g_flag)) { tight_exit("frames at play speed", root, attach, detach); last = heap(); last_n = count(0); }
         }
         if (g_grow_mb <= 0) continue;
         int64_t hs = heap(); int n = count(0);
@@ -438,9 +472,71 @@ static void census_frame(void)
     census("gccensus.req");
 }
 
+// UA_GC_LOAD_FLAG=<assembly>:<[namespace.]class>:<static field holding the instance>:<bool field of it> (with UA_GC_TIGHT;
+// Enter the Gungeon: Assembly-CSharp:GameManager:mr_manager:m_loadingLevel, its IsLoadingLevel): the game's own "a level
+// is loading" bool, read at the end of every frame on UnityMain (the static field from its class's static data, which
+// mono_class_vtable makes without running the class's static constructor: nothing of the game runs or changes). Tight
+// from the frame it turns true; the frame it turns false (Gungeon: the load's fade is black, the level not yet shown)
+// play's divisor again and, if a collection ran meanwhile, play's collection there and then, on UnityMain
+static struct { void *static_data; uint32_t s_off, i_off; volatile unsigned char *end_flag; } g_lf;
+static int g_lf_state;        // 0: not resolved yet, 1: resolved, -1: off
+static void load_flag_frame(void)
+{
+    static const char *spec; static int tries;
+    if (g_lf_state < 0 || g_tight <= 0) return;
+    if (g_lf_state == 0) {
+        if (!spec) { spec = getenv("UA_GC_LOAD_FLAG"); if (!spec || !*spec) { g_lf_state = -1; return; } }
+        if (++tries % 60) return;
+        char a[128], c[128], sf[128], inf[128];
+        if (sscanf(spec, "%127[^:]:%127[^:]:%127[^:]:%127s", a, c, sf, inf) != 4) { fprintf(stderr, "[host] gc tight: UA_GC_LOAD_FLAG=%s: not <assembly>:<class>:<static field>:<field>\n", spec); g_lf_state = -1; return; }
+        void *h = mono_runtime_lib();
+        if (!h) return;
+        void *(*img_loaded)(const char *) = so_dlsym(h, "mono_image_loaded");
+        void *(*from_name)(void *, const char *, const char *) = so_dlsym(h, "mono_class_from_name");
+        void *(*field)(void *, const char *) = so_dlsym(h, "mono_class_get_field_from_name");
+        uint32_t (*offset)(void *) = so_dlsym(h, "mono_field_get_offset");
+        void *(*vtable)(void *, void *) = so_dlsym(h, "mono_class_vtable");
+        void *(*sdata)(void *) = so_dlsym(h, "mono_vtable_get_static_field_data");
+        void *(*root)(void) = so_dlsym(h, "mono_get_root_domain");
+        if (!img_loaded || !from_name || !field || !offset || !vtable || !sdata || !root) {
+            fprintf(stderr, "[host] gc tight: this Mono lacks the calls UA_GC_LOAD_FLAG needs: the frame-time rule only\n"); g_lf_state = -1; return;
+        }
+        void *img = img_loaded(a);
+        if (!img || !root()) { if (tries > 60 * 600) g_lf_state = -1; return; }   // not loaded yet (gives up after ~10 min)
+        char ns[128] = "", *dot = strrchr(c, '.'), *cn = c;
+        if (dot) { *dot = 0; snprintf(ns, sizeof ns, "%s", c); cn = dot + 1; }
+        void *k = from_name(img, ns, cn), *fs = k ? field(k, sf) : NULL, *fi = k ? field(k, inf) : NULL;
+        void *vt = fs && fi ? vtable(root(), k) : NULL, *data = vt ? sdata(vt) : NULL;
+        if (!data) { fprintf(stderr, "[host] gc tight: UA_GC_LOAD_FLAG=%s: not found: the frame-time rule only\n", spec); g_lf_state = -1; return; }
+        g_lf.static_data = data; g_lf.s_off = offset(fs); g_lf.i_off = offset(fi);
+        g_lf_state = 1; g_flag_known = 1;
+        fprintf(stderr, "[host] gc tight: the game's load flag %s (static +%u, field +%u)\n", spec, g_lf.s_off, g_lf.i_off);
+        // UA_GC_LOAD_END=<assembly>:<class>:<static bool field>: set by the game (Gungeon: gungeonpatch's load-black,
+        // GameManager.UaLoadBlack) on a frame whose picture is the load's black fade: play's collection there
+        const char *ee = getenv("UA_GC_LOAD_END");
+        char ea[128], ec[128], ef[128];
+        if (ee && *ee && sscanf(ee, "%127[^:]:%127[^:]:%127s", ea, ec, ef) == 3) {
+            void *eimg = img_loaded(ea);
+            char ens[128] = "", *edot = strrchr(ec, '.'), *ecn = ec;
+            if (edot) { *edot = 0; snprintf(ens, sizeof ens, "%s", ec); ecn = edot + 1; }
+            void *ek = eimg ? from_name(eimg, ens, ecn) : NULL, *ff = ek ? field(ek, ef) : NULL;
+            void *evt = ff ? vtable(root(), ek) : NULL, *edata = evt ? sdata(evt) : NULL;
+            if (edata) { g_lf.end_flag = (volatile unsigned char *)edata + offset(ff); fprintf(stderr, "[host] gc tight: the load's black frame %s\n", ee); }
+            else fprintf(stderr, "[host] gc tight: UA_GC_LOAD_END=%s: not found (an unpatched game): the load flag's end only\n", ee);
+        }
+    }
+    if (g_lf.end_flag && *g_lf.end_flag) { *g_lf.end_flag = 0; tight_exit("the load's fade is black", NULL, NULL, NULL); }
+    void *obj = *(void **)((char *)g_lf.static_data + g_lf.s_off);
+    int f = obj ? *((volatile unsigned char *)obj + g_lf.i_off) != 0 : 0;
+    if (f && !g_flag) tight_enter("the game's load flag");
+    else if (!f && g_flag) tight_exit("the game's load ended", NULL, NULL, NULL);
+    g_flag = f;
+}
+
 void gcbudget_frame(void *user)
 {
     (void)user;
+    load_flag_frame();
     if (g_grow_mb > 0 || g_tight > 0) {
         double t = now();
         // a load's frame: over 2.5 s, or over 1 s within 5 s of another such (a floor's load has several; a single
