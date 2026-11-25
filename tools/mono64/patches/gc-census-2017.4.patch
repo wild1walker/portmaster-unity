@@ -1,0 +1,55 @@
+--- a/external/bdwgc/reclaim.c
++++ b/external/bdwgc/reclaim.c
+@@ -772,3 +772,52 @@
+     }
+   }
+ #endif /* !EAGER_SWEEP && ENABLE_DISCLAIM */
++
++/* (portmaster-unity, tools/mono64) bdwgc 7.6's walk of the reachable    */
++/* objects (GC_enumerate_reachable_objects_inner, GC_get_kind_and_size,  */
++/* as in bdwgc 8): ua_host's UA_GC_CENSUS counts the live heap by class. */
++/* The caller holds the allocation lock, right after a full collection   */
++/* (the mark bits are those of that collection).                         */
++struct GC_ua_enumerate_s {
++  void (*proc)(void *, size_t, void *);
++  void *client_data;
++};
++
++STATIC void GC_ua_do_enumerate(struct hblk *hbp, word ped)
++{
++  struct hblkhdr *hhdr = HDR(hbp);
++  size_t sz = (size_t)hhdr->hb_sz;
++  size_t bit_no;
++  char *p, *plim;
++
++  if (GC_block_empty(hhdr)) return;
++  p = hbp->hb_body;
++  if (sz > MAXOBJBYTES) {
++    plim = p;
++  } else {
++    plim = hbp->hb_body + HBLKSIZE - sz;
++  }
++  for (bit_no = 0; p <= plim; bit_no += MARK_BIT_OFFSET(sz), p += sz) {
++    if (mark_bit_from_hdr(hhdr, bit_no)) {
++      ((struct GC_ua_enumerate_s *)ped)->proc(p, sz, ((struct GC_ua_enumerate_s *)ped)->client_data);
++    }
++  }
++}
++
++GC_API void GC_CALL GC_enumerate_reachable_objects_inner(
++                        void (*proc)(void *, size_t, void *), void *client_data)
++{
++  struct GC_ua_enumerate_s ed;
++
++  ed.proc = proc;
++  ed.client_data = client_data;
++  GC_apply_to_all_blocks(GC_ua_do_enumerate, (word)&ed);
++}
++
++GC_API int GC_CALL GC_get_kind_and_size(const void * p, size_t * psize)
++{
++  hdr * hhdr = HDR(p);
++
++  if (psize != NULL) *psize = (size_t)hhdr->hb_sz;
++  return hhdr -> hb_obj_kind;
++}

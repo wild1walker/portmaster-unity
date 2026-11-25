@@ -146,6 +146,8 @@ fi
 #   invoke-info (the lines that have one: 2017.4): mono_unity_runtime_invoke_info exported, the runtime-invoke
 #     wrapper and compiled code mono_jit_runtime_invoke keeps for a method, for the bridge's cached invoke
 #     (UA_MONO64_FAST_INVOKE, docs/mono-arm64.md)
+#   gc-census (2017.4: bdwgc 7.6 lacks them): GC_enumerate_reachable_objects_inner and GC_get_kind_and_size, as
+#     in bdwgc 8, for ua_host's UA_GC_CENSUS (the live heap by class)
 rm -rf "$D/.ua-patches"; mkdir -p "$D/.ua-patches"
 MA=${MONO64_MANAGED_ALLOC:-auto}
 if [ "$MA" = auto ]; then [ "$LINE" = 6000.0 ] && MA=1 || MA=0; fi
@@ -157,6 +159,7 @@ if [ -f "$HERE/patches/thread-exit-$LINE.patch" ] && { [ "$LINE" = 6000.0 ] || [
   cp "$HERE/patches/thread-exit-$LINE.patch" "$D/.ua-patches/"
 fi
 [ -f "$HERE/patches/invoke-info-$LINE.patch" ] && cp "$HERE/patches/invoke-info-$LINE.patch" "$D/.ua-patches/"
+[ -f "$HERE/patches/gc-census-$LINE.patch" ] && cp "$HERE/patches/gc-census-$LINE.patch" "$D/.ua-patches/"
 # --- (end of the source patches)
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
@@ -176,7 +179,7 @@ export CFLAGS="-fPIC -O2 -g"
 # 8-byte granules (GC_GRANULE_BYTES=8, one word: the 32-bit collector'"'"'s granule and SGen'"'"'s
 # alignment on aarch64) for the lines a game has run with them: Mono'"'"'s objects are multiples of 8
 # bytes, and bdwgc'"'"'s 64-bit default of 16 rounds every other one up by 8 (Hollow Knight, 6000.0:
-# 98.7 -> 91.8 MB live; Enter the Gungeon, 2017.4: the Keep's heap 280 -> 196 - 262 MB, 162 -> 212 MB available
+# 98.7 -> 91.8 MB live; Enter the Gungeon, 2017.4: the heap in the Keep 280 -> 196 - 262 MB, 162 -> 212 MB available
 # on muOS, docs/mono-arm64.md). MONO64_GRANULE=8|16 chooses for any line.
 # A tree built with other flags has its collector built again.
 GCFLAGS="-DDONT_ADD_BYTE_AT_END"
