@@ -31,7 +31,7 @@ if [ "$ARCH" = arm64 ]; then
     # hot-arm64.txt: the functions of ours the game threads run most (from UA_PROF recordings), each in its own
     # section (-ffunction-sections) renamed .text.hot.<name>: the linker puts them together before the rest of .text
     HOT=; [ -f hot-arm64.txt ] && HOT=$(grep -v "^#" hot-arm64.txt | while read n; do [ -n "$n" ] && printf -- "--rename-section .text.%s=.text.hot.%s " "$n" "$n"; done)
-    for f in ua_host input pointer osk frames framerate gcbudget uinav monoinvoke jitlog jitwarm monoaot quality glhooks hitches prof threads futex gltrace glfill gltexdump monodump glopt glpersist glstate glarena glpresent glmemo gpuidle glpass glspec glrename glrec glrec_fg glmerge msaafix display display_sdl fbdev gldriver $STEAM plugins plugstubs fmodstub wwise desktopenv mono64 unityhooks fmodasync unitypool unityverts unitymath unitybeh unityprefetch nativebeh unityscripts icallcount unityicalls unitylayers memledger monoimage glprobe; do gcc $F -ffunction-sections -c $f.c -o $O/$f.o; [ -z "$HOT" ] || objcopy $HOT $O/$f.o; OBJS="$OBJS $O/$f.o"; done
+    for f in ua_host input pointer osk frames framerate gcbudget uinav monoinvoke jitlog jitwarm guiwarm monoaot quality glhooks hitches prof threads futex gltrace glfill gltexdump monodump glopt glpersist glstate glarena glpresent glmemo gpuidle glpass glspec glrename glrec glrec_fg glmerge msaafix display display_sdl fbdev gldriver $STEAM plugins plugstubs fmodstub wwise desktopenv mono64 unityhooks fmodasync unitypool unityverts unitymath unitybeh unityprefetch nativebeh unityscripts icallcount unityicalls unitylayers memledger monoimage glprobe; do gcc $F -ffunction-sections -c $f.c -o $O/$f.o; [ -z "$HOT" ] || objcopy $HOT $O/$f.o; OBJS="$OBJS $O/$f.o"; done
     gcc $F -c wwise_tramp.S -o $O/wwise_tramp.o; OBJS="$OBJS $O/wwise_tramp.o"
     gcc $F -c wwplay.c -o $O/wwplay.o; gcc -O3 -ffast-math -g -w -c wwplay_vorbis.c -o $O/wwplay_vorbis.o; OBJS="$OBJS $O/wwplay.o $O/wwplay_vorbis.o"
     gcc $F -O3 -c fmplay.c -o $O/fmplay.o; OBJS="$OBJS $O/fmplay.o"
@@ -91,6 +91,7 @@ docker run --rm --pull=never -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-h
   arm-linux-gnueabihf-gcc $F -c jitlog.c -o out/jitlog.o
   arm-linux-gnueabihf-gcc $F -c monoaot.c -o out/monoaot.o
   arm-linux-gnueabihf-gcc $F -c jitwarm.c -o out/jitwarm.o
+  arm-linux-gnueabihf-gcc $F -c guiwarm.c -o out/guiwarm.o
   arm-linux-gnueabihf-gcc $F -c quality.c -o out/quality.o
   arm-linux-gnueabihf-gcc $F -c glhooks.c -o out/glhooks.o
   arm-linux-gnueabihf-gcc $F -c hitches.c -o out/hitches.o
@@ -148,7 +149,7 @@ docker run --rm --pull=never -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-h
   arm-linux-gnueabihf-gcc $F -c unityscripts.c -o out/unityscripts.o
   arm-linux-gnueabihf-gcc $F -c icallcount.c -o out/icallcount.o
   arm-linux-gnueabihf-gcc $F -c unityicalls.c -o out/unityicalls.o
-  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/uinav.o out/monoinvoke.o out/jitlog.o out/monoaot.o out/jitwarm.o out/quality.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glfill.o out/gltexdump.o out/monodump.o out/glopt.o out/glpersist.o out/glstate.o out/glarena.o out/glpresent.o out/glmemo.o out/gpuidle.o out/glpass.o out/glspec.o out/glrename.o out/glrec.o out/glrec_fg.o out/glmerge.o out/msaafix.o \
+  arm-linux-gnueabihf-g++ -o out/ua_host out/ua_host.o out/input.o out/pointer.o out/osk.o out/frames.o out/framerate.o out/gcbudget.o out/uinav.o out/monoinvoke.o out/jitlog.o out/monoaot.o out/jitwarm.o out/guiwarm.o out/quality.o out/glhooks.o out/hitches.o out/prof.o out/threads.o out/futex.o out/gltrace.o out/glfill.o out/gltexdump.o out/monodump.o out/glopt.o out/glpersist.o out/glstate.o out/glarena.o out/glpresent.o out/glmemo.o out/gpuidle.o out/glpass.o out/glspec.o out/glrename.o out/glrec.o out/glrec_fg.o out/glmerge.o out/msaafix.o \
     out/display.o out/display_sdl.o out/fbdev.o out/gldriver.o ${STEAM:+out/steamstub.o} out/plugins.o out/plugstubs.o out/fmodstub.o out/fmplay.o out/wwise.o out/wwise_tramp.o out/wwplay.o out/wwplay_vorbis.o out/desktopenv.o out/mono64.o out/unityhooks.o out/fmodasync.o out/unitypool.o out/unityverts.o out/unitymath.o out/unitybeh.o out/unityprefetch.o out/nativebeh.o out/unityscripts.o out/icallcount.o out/unityicalls.o out/unitylayers.o out/memledger.o out/monoimage.o out/glprobe.o ../loader/out/libsoloader.a ../android/out/libandroidshims.a \
     ../jni/out/libfakejni.a ../media/out/libuamedia.a -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx -Wl,--dynamic-list=exports.list \
     -lSDL2 -lz -ldl -lpthread -lm
