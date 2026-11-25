@@ -390,6 +390,21 @@ Memory: the bundle's stream in memory adds at most 32 MB, and its serialized fil
 `spill_mb` (64 MB) while the bundle is packed (when the converted textures are no longer held);
 plain files (Blasphemous's `resources.assets`, Hollow Knight) go as before. On S1 pmu's peak rose from 121-123 to 151-153 MB (the handheld has ~700 MB free beside the firmware). Blasphemous's `resources.assets` (the exact_shaders walk and 848 textures, 2121 -> 534 MB) in the arm64 container at 600 MB without swap: peak 363 MB before, 362 MB after, the same files.
 
+**The read-ahead budget** (2026-11-25): the streams read ahead may hold `AHEAD_BUDGET` (32 MB), and
+that count included the stream of the texture whose turn it is, which `read()` takes before its
+conversion starts. Two streams of over half the budget each then never fitted: the second was not
+read ahead, and when its turn came it was passed over for good. A game whose 4096x4096 BC7 atlases
+keep their mip levels (22 MB each) had every second atlas read by the main thread with every core
+idle, while the reader thread read the one after it. The current texture's stream no longer
+counts: the next texture is read while this one is converted, and the budget is what waits beside
+it (so at most one stream more is held than before). Three of that game's data files with their
+`.resS` (331 MB, 297 textures, scale 0.5, ASTC 5x5 `fast`) on an RG Cube XX (Knulli; H700, the
+card reading about 18 MB/s), cold cache, a test build with a switch for the change: `read` 15.7 -
+20.4 -> 4.6 - 5.3 s, the step 10 - 12 s shorter (of 79 - 92 s), 0.35 more of the 4 cores busy,
+pmu's peak RSS the same (192 -> 193 MB), every converted file the same (their digest). On an
+RG34XX-SP (ROCKNIX, the same chip, a faster card): `read` 11.9 -> 5.4 s, the step 6 s shorter (of
+72 s), the same files. Still read by the main thread: the first texture of each data file.
+
 The shaders and audio steps of S1 (three files each, muOS, two runs of each): 25.0 / 24.0 s before,
 25.0 / 21.0 s with deferred commits, the same files and journal; the syncs move behind the next
 file's work, which S1 has little of: Cuphead's whole shaders and audio steps (54 and 50 files,
