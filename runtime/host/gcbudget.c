@@ -21,8 +21,8 @@
 //                       collected first, the next growth waits for the memory the game keeps. Each one is a
 //                       pause inside the load ("[host] gc grow" with its length, the heap and the used heap
 //                       before and after); frames at play speed are never paused by it.
-//   UA_GC_TIGHT=<n>     (default 0 = off) during a load (UnityMain inside a frame of over 1 s, or within 3 s after
-//                       one), Boehm's free-space divisor at <n> (GC_set_free_space_divisor: a collection after heap/<n>
+//   UA_GC_TIGHT=<n>     (default 0 = off) during a load (UnityMain inside a frame of over 2.5 s, or of over 1 s within
+//                       5 s of another, or within 3 s after such a frame; a single stall in play is not a load), Boehm's free-space divisor at <n> (GC_set_free_space_divisor: a collection after heap/<n>
 //                       bytes allocated, where it would otherwise grow the heap 16 MB at a time); its own value, 3, again
 //                       once frames come at play speed, so play keeps the collector's own pace and pauses. The same on
 //                       every device (no memory line); at the switch back one full collection, so that play's
@@ -72,7 +72,8 @@ static int g_count;
 static int g_grow_mb;                       // UA_GC_GROW (0: off)
 static int g_tight;                         // UA_GC_TIGHT: Boehm's free-space divisor under UA_GC_GROW's line (0: off)
 static volatile double g_frame_t;           // when UnityMain last finished a frame
-static volatile double g_long_t = -1e9;     // when UnityMain last finished a frame of over 1 s (a load)
+static volatile double g_long_t = -1e9;     // when UnityMain last finished a load's frame (see UA_GC_TIGHT)
+static volatile double g_long1 = -1e9;      // when UnityMain last finished a frame of over 1 s
 static int g_grow_started;
 static int g_census_on, g_census_left, g_census_frames;   // UA_GC_CENSUS
 
@@ -154,7 +155,7 @@ static void *grow_main(void *arg)
     }
     if (g_grow_mb > 0)
         fprintf(stderr, "[host] gc grow: on (a collection when the heap grows during a load with under %d MB available)\n", g_grow_mb);
-    // UA_GC_TIGHT: during a load (UnityMain inside a frame of over 1 s, or within 3 s after one) Boehm's free-space
+    // UA_GC_TIGHT: during a load (a frame of over 2.5 s, or two of over 1 s within 5 s, and 3 s after) Boehm's free-space
     // divisor at this value: it collects after heap/<n> bytes allocated instead of growing the heap; its own value again
     // once frames come at play speed, so play keeps the collector's own pace
     void (*set_div)(unsigned long) = (void (*)(unsigned long))so_dlsym(h, "GC_set_free_space_divisor");
@@ -167,7 +168,8 @@ static void *grow_main(void *arg)
         usleep(10000);
         if (g_tight > 0 && set_div && div0 && ++tick % 5 == 0) {
             double t = now();
-            int loading = g_frame_t > 0 && (t - g_frame_t > 1.0 || t - g_long_t < 3.0);
+            double in = t - g_frame_t;
+            int loading = g_frame_t > 0 && (in > 2.5 || (in > 1.0 && t - g_long1 < 5.0) || t - g_long_t < 3.0);
             if (loading && !tight) {
                 set_div((unsigned long)g_tight); tight = 1;
                 if (logged++ < 200) fprintf(stderr, "[host] gc tight: a load: free-space divisor %lu -> %d (heap %lld MB)\n", div0, g_tight, (long long)(heap() >> 20));
@@ -434,7 +436,12 @@ void gcbudget_frame(void *user)
     (void)user;
     if (g_grow_mb > 0 || g_tight > 0) {
         double t = now();
-        if (g_frame_t > 0 && t - g_frame_t > 1.0) g_long_t = t;
+        // a load's frame: over 2.5 s, or over 1 s within 5 s of another such (a floor's load has several; a single
+        // stall in play, e.g. a shader program linked on first use, is not a load)
+        if (g_frame_t > 0 && t - g_frame_t > 1.0) {
+            if (t - g_frame_t > 2.5 || t - g_long1 < 5.0) g_long_t = t;
+            g_long1 = t;
+        }
         g_frame_t = t;
         // Mono 2.6's Boehm (Unity's 32-bit Mono players) and the Mono route's (Unity's Mono for aarch64,
         // libmonobdwgc-2.0.so): both grow their heap during a load rather than collect

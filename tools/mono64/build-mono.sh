@@ -143,6 +143,9 @@ fi
 #   managed-alloc (MONO64_MANAGED_ALLOC=1|0; default 1 for 6000.0, 0 for the others): the JIT's
 #     allocations of small objects, arrays and strings off the thread's Boehm free list
 #     (docs/mono-arm64.md, "A managed allocator for Boehm")
+#   invoke-info (the lines that have one: 2017.4): mono_unity_runtime_invoke_info exported, the runtime-invoke
+#     wrapper and compiled code mono_jit_runtime_invoke keeps for a method, for the bridge's cached invoke
+#     (UA_MONO64_FAST_INVOKE, docs/mono-arm64.md)
 rm -rf "$D/.ua-patches"; mkdir -p "$D/.ua-patches"
 MA=${MONO64_MANAGED_ALLOC:-auto}
 if [ "$MA" = auto ]; then [ "$LINE" = 6000.0 ] && MA=1 || MA=0; fi
@@ -153,6 +156,7 @@ fi
 if [ -f "$HERE/patches/thread-exit-$LINE.patch" ] && { [ "$LINE" = 6000.0 ] || [ "$MA" = 1 ]; }; then
   cp "$HERE/patches/thread-exit-$LINE.patch" "$D/.ua-patches/"
 fi
+[ -f "$HERE/patches/invoke-info-$LINE.patch" ] && cp "$HERE/patches/invoke-info-$LINE.patch" "$D/.ua-patches/"
 # --- (end of the source patches)
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"

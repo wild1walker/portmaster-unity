@@ -516,6 +516,40 @@ static void alloc_census_install(void)
     logf_("[alloc] on: every %s s, call sites sampled 1 in %u", e, g_ac_sample);
 }
 
+// UA_MONO_COUNTERS=<file> (a measurement): each time <file> appears (checked once a second; it is deleted) Mono's own
+// counters go to the log (mono_counters_dump: metadata sizes - MonoClass, MonoMethod, signatures, inflated generics -,
+// the JIT's code space and counts, the collector's), then glibc's malloc totals (mallinfo: every library's) and Boehm's
+// heap: where the Mono runtime's memory is, next to the census's per-library mappings
+#include <malloc.h>
+static void *mc_main(void *arg)
+{
+    const char *f = arg;
+    void (*enable)(int) = dlsym(g_mono, "mono_counters_enable");
+    void (*dump)(int, FILE *) = dlsym(g_mono, "mono_counters_dump");
+    size_t (*heap)(void) = dlsym(g_mono, "GC_get_heap_size");
+    size_t (*freeb)(void) = dlsym(g_mono, "GC_get_free_bytes");
+    for (;;) {
+        sleep(1);
+        if (access(f, F_OK) != 0) continue;
+        unlink(f);
+        logf_("[counters] Mono's counters:");
+        if (enable && dump) { enable(-1); dump(0x00ffff00 /* MONO_COUNTER_SECTION_MASK */, stderr); fflush(stderr); }
+        struct mallinfo mi = mallinfo();
+        logf_("[counters] malloc: in use %.1f MB (main arena %.1f MB, mmapped %.1f MB, free in arenas %.1f MB); Boehm heap %.1f MB, free %.1f MB",
+              ((unsigned)mi.uordblks + (unsigned)mi.hblkhd) / 1048576.0, (unsigned)mi.arena / 1048576.0, (unsigned)mi.hblkhd / 1048576.0,
+              (unsigned)mi.fordblks / 1048576.0, heap ? heap() / 1048576.0 : 0, freeb ? freeb() / 1048576.0 : 0);
+    }
+    return NULL;
+}
+static void mono_counters_install(void)
+{
+    const char *f = getenv("UA_MONO_COUNTERS");
+    if (!f || !*f) return;
+    pthread_t t;
+    if (pthread_create(&t, NULL, mc_main, (void *)strdup(f)) == 0) pthread_detach(t);
+    logf_("[counters] on: %s", f);
+}
+
 // the loader, when glibc's dlopen cannot load them
 // Mono's ahead-of-time images (<assembly>.dll.so) from UA_MONO64_AOT=<dir> instead of beside the
 // assemblies (a measurement, not a port setting: docs/mono-arm64.md, "Mono's LLVM back end, measured
@@ -817,6 +851,7 @@ static void init_mono(const char *domain_name)
         setenv("MONO_GC_PARAMS", p, 1);
     }
     alloc_census_install();
+    mono_counters_install();
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     g_domain = m_mono_jit_init_version(domain_name && *domain_name ? domain_name : "IL2CPP Root Domain", "v4.0.30319");
@@ -1282,9 +1317,72 @@ API MonoArray *il2cpp_array_new_full(MonoClass *ac, uintptr_t *lengths, uintptr_
 
 // ---------------------------------------------------------------------------------------------
 // invoking managed code, exceptions
+// UA_MONO64_FAST_INVOKE (default 1): libunity calls every script message (Update, LateUpdate, OnEnable, coroutine
+// steps ...) through il2cpp_runtime_invoke, ~700 times a frame in an Enter the Gungeon fight, and mono_runtime_invoke's
+// path (its error object, the profiler's checks, mono_jit_runtime_invoke's domain, its lookup of the method's
+// RuntimeInvokeInfo in a hazard-pointer hash table, the class's initialisation check) costs ~2.5 us a call on the
+// BattleXP G350's A35 before the runtime-invoke wrapper runs. Our runtime (tools/mono64/patches/invoke-info) exports
+// mono_unity_runtime_invoke_info: the wrapper and the compiled code that lookup finds, once the method's first call
+// has made them and its class is initialised (it never goes back). They are kept per method here, and a call does
+// what mono_runtime_invoke does with them, nothing else: *exc = NULL, then the same wrapper with the same object,
+// arguments, exception pointer and code. So the same method runs (no virtual dispatch, as before), its exceptions are
+// caught by the same wrapper with the same stack trace (Unity logs them alike), a return value is boxed alike.
+// The general path stays for: no exception pointer, an instance method without an instance (Mono warns and returns
+// NULL), the profiler's method events on, a method before its first call, a runtime without the export. IL2CPP
+// players have one domain (g_domain), so the table needs no domain key.
+// (Not mono_method_get_unmanaged_thunk: its native-to-managed wrapper dispatches virtually and adds its own frame to
+// every exception's stack trace; tools/mono64/fitest compares the two ways.)
+typedef MonoObject *(*invoke_fn)(void *obj, void **params, MonoObject **exc, void *code);
+#define FI_SLOTS 8192
+static struct { MonoMethod *m; invoke_fn f; void *code; } g_fi[FI_SLOTS];   // published by m (release)
+static pthread_mutex_t g_fi_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_fi_on = -1;
+static int (*m_invoke_info)(MonoMethod *, void **, void **);
+static int (*m_prof_events)(void);
+static inline size_t fi_slot(MonoMethod *m) { return ((uintptr_t)m >> 4) * 2654435761u % FI_SLOTS; }
+static int fast_lookup(MonoMethod *m, invoke_fn *f, void **code)
+{
+    size_t h = fi_slot(m);
+    for (int i = 0; i < 64; i++, h = (h + 1) % FI_SLOTS) {
+        MonoMethod *k = __atomic_load_n(&g_fi[h].m, __ATOMIC_ACQUIRE);
+        if (k == m) { *f = g_fi[h].f; *code = g_fi[h].code; return 1; }
+        if (!k) break;
+    }
+    return 0;
+}
+static void fast_keep(MonoMethod *m)
+{
+    void *f = NULL, *code = NULL;
+    if (!m_invoke_info(m, &f, &code)) return;          // not made yet, or not initialised yet: asked again next time
+    pthread_mutex_lock(&g_fi_lock);
+    size_t h = fi_slot(m);
+    for (int i = 0; i < 64; i++, h = (h + 1) % FI_SLOTS) {
+        if (g_fi[h].m == m) break;
+        if (!g_fi[h].m) { g_fi[h].f = (invoke_fn)f; g_fi[h].code = code; __atomic_store_n(&g_fi[h].m, m, __ATOMIC_RELEASE); break; }
+    }
+    pthread_mutex_unlock(&g_fi_lock);
+}
 API MonoObject *il2cpp_runtime_invoke(MonoMethod *m, void *obj, void **params, MonoObject **exc)
 {
     attached();
+    if (g_fi_on < 0) {
+        const char *e = getenv("UA_MONO64_FAST_INVOKE");
+        m_invoke_info = (int (*)(MonoMethod *, void **, void **))dlsym(g_mono, "mono_unity_runtime_invoke_info");
+        m_prof_events = (int (*)(void))dlsym(g_mono, "mono_profiler_get_events");
+        g_fi_on = (!e || strcmp(e, "0")) && m_invoke_info && m_prof_events;
+        logf_("cached invoke: %s", g_fi_on ? "on (each method's runtime-invoke wrapper and code kept after its first call)"
+                                           : m_invoke_info ? "off" : "off (the runtime has no mono_unity_runtime_invoke_info)");
+    }
+    if (g_fi_on && exc && !(m_prof_events() & (1 << 16) /* MONO_PROFILE_METHOD_EVENTS */)) {
+        invoke_fn f; void *code;
+        if (fast_lookup(m, &f, &code) && (obj || (m_mono_method_get_flags(m, NULL) & 0x10 /* STATIC */))) {
+            *exc = NULL;
+            return f(obj, params, exc, code);
+        }
+        MonoObject *r = m_mono_runtime_invoke(m, obj, params, exc);
+        if (!fast_lookup(m, &f, &code)) fast_keep(m);
+        return r;
+    }
     return m_mono_runtime_invoke(m, obj, params, exc);
 }
 API MonoObject *il2cpp_runtime_invoke_convert_args(MonoMethod *m, void *obj, MonoObject **params, int n, MonoObject **exc)

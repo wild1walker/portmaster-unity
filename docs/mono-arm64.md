@@ -1219,3 +1219,50 @@ no longer the main cost.
 Route 1 of [arm64-routes.md](arm64-routes.md#route-1-built-and-measured-2026-11-20), built as `UA_FMOD_ASYNC=1`
 (exact: everything that came after the update still comes after it): the 64-bit UnityMain gives back 0.3 ms of CPU
 a frame on Knulli and 2.5 % of its cycles, the frame rate the same; off by default.
+
+## The cached invoke (2026-11-25)
+
+libunity enters the game's scripts through `il2cpp_runtime_invoke` about 700 times a frame in an Enter the
+Gungeon fight (every `Update`, `LateUpdate`, coroutine step ...). On the BattleXP G350's A35 the profile of
+Bullet Hell's busiest room (64-bit against 32-bit) put the 64-bit build's own extra cost there: Mono's
+runtime and its wrappers 0.85 -> 2.7 ms a frame, spread over `mono_runtime_invoke`'s error object and
+profiler checks, `mono_jit_runtime_invoke`'s domain and its lookup of the method's `RuntimeInvokeInfo`
+(a hazard-pointer hash), the class's initialisation check, and the runtime-invoke wrapper's LMF calls.
+(On the RG34XX-SP's A53 and Hollow Knight the same path was 0.35 - 0.5 ms, above: not worth a cache there.)
+
+**First try, not kept: `mono_method_get_unmanaged_thunk`.** A thunk per argument-free instance method
+gave 31.1 / 30.9 fps against 29.1 / 28.6 / 29.4 without it (G350, ES launch, bench, A B A B A), but a
+side-by-side test (tools/mono64/fitest) found two differences from `mono_runtime_invoke`: the thunk's
+native-to-managed wrapper dispatches virtually (a base class's method called on a subclass ran the
+override), and it adds its own frame, `(wrapper native-to-managed) Base:Throw (Base,System.Exception&)`,
+to every exception's stack trace (Unity logs that trace), and replaces the throwing frame for a
+`throw null` and an empty-trace `TypeInitializationException`.
+
+**What is kept: the same wrapper, without the lookup.** The port's runtime exports
+`mono_unity_runtime_invoke_info` (tools/mono64/patches/invoke-info-2017.4.patch): for a method whose
+first call has made its info and whose class is initialised (it never goes back), the runtime-invoke
+wrapper and compiled code `mono_jit_runtime_invoke` would use. The bridge keeps them per method after
+that first call and then does only what Mono would do with them: `*exc = NULL`, the wrapper with the same
+object, arguments, exception pointer and code. So every signature is covered (return values boxed by the
+same wrapper, static methods, arguments), the same method runs, the same frame catches. The general
+path stays for no exception pointer, an instance method without an instance, the profiler's method
+events, a method whose first compile failed (its info is never made: a failing type initialiser at JIT
+time), and a runtime without the export. IL2CPP players have one domain, so the table has no domain key.
+
+The test (`tools/mono64/fitest/run.sh <libmonobdwgc-2.0.so> <class libraries>`, the arm64 container):
+17 methods, each on a `Base` and on a `Derived` object (an override), each way on a fresh object, log,
+fields, exception type, message, stack trace and inner exception compared, plus a return value, a
+static method and arguments: `RESULT 0 differ` with the cache's wrapper (16 byte and 8 byte granules);
+the thunk differed in every case that threw and in the override (25 of 35).
+
+G350 (ES launch, bench Bullet Hell, 70 - 80 s of fight, one pair so far): cached 30.2 fps against 30.0
+without (`UA_MONO64_FAST_INVOKE=0`), no collection in either fight. The pair is within the runs' spread;
+the cached run had one 1.35 s frame mid-fight (no collection, no load; uncached runs earlier had single
+0.9 s frames too) whose cause is not found yet. More pairs were cut short by a G350 hang at a
+launch (before ua_host was up, as earlier hangs; power cycle).
+
+A gotcha found on the way: ua_host makes every glibc library in `lib/` the host of its DllImport
+names, so a kept copy (`libmonobdwgc-2.0.so.rc`) was loaded as a second, uninitialised Mono runtime, and
+the host's helpers that look the runtime up by name (`jitwarm`, the hitch namer) found that one
+(`Assertion at object.c:673, condition 'callbacks.compile_method' not met`, then a crash). The scan now
+takes only `<name>.so` and `<name>.so.<digits>` (runtime/host/plugins.c).

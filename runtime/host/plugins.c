@@ -252,7 +252,11 @@ static void scan_libdir(void)
     if (!dir) return;
     struct dirent64 *e;
     while ((e = readdir64(dir))) {
-        if (!strstr(e->d_name, ".so")) continue;
+        // <name>.so or <name>.so.<version digits>: not a copy kept beside one (libmonobdwgc-2.0.so.rc, .bak), which
+        // would be a second, uninitialised copy of a library loaded already (its SONAME is not what dlopen matches)
+        const char *so = strstr(e->d_name, ".so");
+        while (so && strspn(so + 3, ".0123456789") != strlen(so + 3)) so = strstr(so + 3, ".so");
+        if (!so) continue;
         char p[PATH_MAX + 260];
         snprintf(p, sizeof p, "%s/%s", g_libdir, e->d_name);
         elf_facts f;
