@@ -148,6 +148,8 @@ fi
 #     (UA_MONO64_FAST_INVOKE, docs/mono-arm64.md)
 #   gc-census (2017.4: bdwgc 7.6 lacks them): GC_enumerate_reachable_objects_inner and GC_get_kind_and_size, as
 #     in bdwgc 8, for ua_host's UA_GC_CENSUS (the live heap by class)
+#   reset-allocd (2017.4): GC_ua_reset_allocd, what a collection's end does to the allocation counters, without
+#     collecting: ua_host's UA_GC_ARRIVAL_RESET (a level's arrival does not count against the fight's allowance)
 rm -rf "$D/.ua-patches"; mkdir -p "$D/.ua-patches"
 MA=${MONO64_MANAGED_ALLOC:-auto}
 if [ "$MA" = auto ]; then [ "$LINE" = 6000.0 ] && MA=1 || MA=0; fi
@@ -160,6 +162,7 @@ if [ -f "$HERE/patches/thread-exit-$LINE.patch" ] && { [ "$LINE" = 6000.0 ] || [
 fi
 [ -f "$HERE/patches/invoke-info-$LINE.patch" ] && cp "$HERE/patches/invoke-info-$LINE.patch" "$D/.ua-patches/"
 [ -f "$HERE/patches/gc-census-$LINE.patch" ] && cp "$HERE/patches/gc-census-$LINE.patch" "$D/.ua-patches/"
+[ -f "$HERE/patches/reset-allocd-$LINE.patch" ] && cp "$HERE/patches/reset-allocd-$LINE.patch" "$D/.ua-patches/"
 # --- (end of the source patches)
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
