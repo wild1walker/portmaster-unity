@@ -519,6 +519,7 @@ exact_shaders = "^Maikel/MaikelSpriteMasterShader"   # the shaders' names (a reg
 exact_keywords = "PALETTE_ON"                         # the keywords a material must have, all of them
 exact_index = "blue"                                  # step exactindex: one byte a texel where provably exact
 exact_index_skip = "^ReplicateSprite$"                # scripts that copy a renderer's sprite elsewhere
+exact_index_skip_dormant = true                       # ... unless they copy only to renderers that never draw
 # exact_names = "..."                                 # textures kept by name (a script's own use)
 # steps = [..., "textures", "exactindex", ...]
 ```
@@ -554,6 +555,17 @@ is). Proven, or left as the game has it:
   two-byte (index, alpha) form would sample as (r, g, 0, 1), and Blasphemous's RGBA32 palette textures have texels
   like (255, 204, 0, 255) that a test for it would take);
 - every texel reads back as the shader read it (index where the alpha is not 0, the alpha).
+
+**`exact_index_skip_dormant`** (the porter vouches for the game's code): a script of `exact_index_skip` does not
+count when, read with its class's layout (monotree.rs), it names only its own GameObject and renderer and other
+SpriteRenderers, and each of those copy targets is dormant: its GameObject inactive (`m_IsActive` 0), no clip with a
+curve on a GameObject at any path that can name it (every suffix of its path: an Animator anywhere above), and
+nothing that names it, its Transform, its renderer or a script on it or below it, except its own hierarchy and the
+copying script (a raw match where the layout is not known counts). A dormant renderer's own sprite is no use either.
+What the data cannot show: code that finds an object by name or walks a hierarchy; the porter reads the game's code
+first. Blasphemous: `ReplicateSprite` on the Penitent's Body copies to `SwordMask` and `SwordEffectRenderer`, both
+inactive in his prefab, named by nothing but their own `GhostTrailGenerator` (the decompiled code names neither):
+81 textures as R8 instead of 24, 476 -> 119 MB; the render check below: 3,240 pairs (81 textures, 24 programs, 14 palettes, three vertex colours) and 40 for the one palette texture left RGBA32 (soft alpha), every byte the same.
 
 The plan (textures, K) goes into the journal with the textures step, so a setup that stops goes on with the same
 one. Blasphemous: 24 textures to R8 (399 -> 100 MB: the TPO-recolour executions, the Penitent's respawn, lever and

@@ -730,7 +730,10 @@ only (192 among those that are not), so there the key never matches. An R8 textu
 index, so a rewritten shader would have to know "this texel is the key" without its bytes: a decision made at
 setup is right on one kind of GPU and wrong on the other, and a byte-identical render on Mesa cannot be had. A
 form exact on every GPU needs the key bytes sampled on that GPU (another texture bound to that program) or a
-per-GPU choice at run time; neither exists.
+per-GPU choice at run time; neither exists. (2026-11-24: the question does not arise. `ReplicateSprite` copies his
+sprite only to `SwordMask` and `SwordEffectRenderer`, inactive in his prefab, and nothing in the data or the code
+turns them on: the sword's programs never run. With `exact_index_skip_dormant = true` (rust-setup.md) his sheets go
+as R8 like the others: 81 textures instead of 24, 476 -> 119 MB, the render check byte for byte the same.)
 
 Text for every language, loaded in every language: a game may keep the fonts of all its languages
 referenced from its text objects (a component that swaps the font by language, a fallback list), and Unity
@@ -915,6 +918,36 @@ active Animator loads every sprite its clips name when it is bound, whatever the
 execution, 92 MB of sheets in her arena's own shared assets) loads with her arena although the step names it (also
 with its override controllers and clips named, tried with a pmu that names those classes): the lists decide what a
 scene preloads, not what its live objects load.
+
+Prefabs a scene's script names (2026-11-24): Crisanta's boss script (`CrisantaBehaviour`, twice in her arena's scene)
+holds her two ending prefabs in `executionPrefab` and `trueEndingExecutionPrefab`, and Unity loads a scene's live
+references with it, the prefab and everything its animators reach. pmu's `lazyref` step (after `lazy`) takes
+`<file>:<GameObject name>@<script class>` entries: it clears, in every MonoBehaviour of that script class, the 12-byte
+PPtr to the prefab (the script read from `m_Script`, its class from the MonoScript), drops the prefab's closure from
+the PreloadData and ResourceManager dependency lists of the files that could name it, and adds a resource-table entry
+`pmu-lazy/<name, lower case>` for it (sorted, as Unity reads the table; the prefab's file named through
+globalgamemanagers' externals). It plans everything first and leaves a prefab as it is when a check fails (another
+object naming it, a reference it cannot read). The game's code then has to load the prefab by that name where it
+reads the field: asmpatch's `blasphemous-crisanta-lazy` (tools/asmpatch/README.md). The ResourceManager's own
+container, NetworkManager's prefab list (names every prefab, loads none) and PreloadData are not uses. A step that
+grows globalgamemanagers fits the setup's convert, not `pmu lazy` in place (that keeps every file's length). muOS:
+the arena 346 -> 251 MB of textures; at the ending `ACT_CrisantaExecution(Clone)` spawns, active (its sheets load
+when its animation plays).
+
+```toml
+[convert]
+steps = [..., "lazy", "lazyref"]
+[convert.lazyref]
+objects = "sharedassets1061.assets:ACT_CrisantaExecution@CrisantaBehaviour|sharedassets1061.assets:ACT_TrueEndingCrisantaExecution@CrisantaBehaviour"
+```
+
+A zone kept loaded (2026-11-24): Blasphemous's `LevelManager.StreamingLevels` loads, after each room change, every
+room of the current zone and keeps them (up to 26 rooms of 4 scenes: 107 scenes in Crisanta's arena). On the BattleXP
+G350 her arena itself loaded and ran (161 MB free) and the game was killed seconds later, while the rest of the zone
+streamed in. asmpatch's `blasphemous-near-rooms` keeps only the near rooms (the doors' rooms, the last, the
+prie-dieu's): muOS, the arena 64,188 -> 50,929 objects, 133 -> 157 MB free at the lowest, 60 fps. Textures stay
+about the same (250 MB): the zone's rooms share most of their art; what they held alone was objects. A room the
+player has not walked next to loads when entered (about 6 s on the G350, as entering another zone does).
 
 Art a game keeps referenced everywhere but draws in one place: Blasphemous's persistent UI holds the main menu's
 animations, its DLC screens and the two logos in every level (133 textures, 51 MB). The lists cannot help (the menu

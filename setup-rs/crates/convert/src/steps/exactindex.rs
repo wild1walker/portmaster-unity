@@ -291,6 +291,12 @@ struct Go {
     controllers: Vec<Key>,
     /// a script of exact_index_skip on it (read when the GameObject is: the scripts' names are known by then)
     skipped: bool,
+    /// those scripts (exact_index_skip_dormant reads their references)
+    skip_scripts: Vec<Key>,
+    /// m_IsActive is 0
+    inactive: bool,
+    /// its Transform (or RectTransform)
+    transform: Option<Key>,
 }
 
 /// The plan: which textures, which form, the reserved index; and the shaders to rewrite.
@@ -402,6 +408,7 @@ fn plan_inner(
     type Bindings = (Vec<(u32, i64, i64)>, Vec<Key>);
     let mut clip_pptr: HashMap<Key, Bindings> = HashMap::new();
     let mut mat_tex: Vec<(Key, Vec<Key>)> = Vec::new();
+    let mut go_curve_paths: HashSet<u32> = HashSet::new();
     const PASS2: [i32; 10] = [
         MATERIAL, GAME_OBJECT, SPRITE_RENDERER, SPRITE, CONTROLLER, OVERRIDE, CLIP, TRANSFORM, RECT_TRANSFORM, ANIMATOR,
     ];
@@ -438,6 +445,7 @@ fn plan_inner(
                 GAME_OBJECT => {
                     let g = gos.entry(k.clone()).or_default();
                     g.name = text_of(t.get("m_Name"));
+                    g.inactive = t.get("m_IsActive").and_then(Value::as_int) == Some(0);
                     for c in arr(t.get("m_Component")) {
                         let c = match c {
                             Value::Pair(p) => &p.1,
@@ -458,7 +466,10 @@ fn plan_inner(
                                             (super::exacttex::file_name(&f, n, fid), &skip)
                                         {
                                             let cls = scripts.get(&(sn, pid)).map_or("", String::as_str);
-                                            g.skipped |= s.is_match(cls);
+                                            if s.is_match(cls) {
+                                                g.skipped = true;
+                                                g.skip_scripts.push(ck.clone());
+                                            }
                                         }
                                     }
                                 }
@@ -481,7 +492,9 @@ fn plan_inner(
                     let father = t.get("m_Father").and_then(|v| key(&f, n, v));
                     if let Some(go) = go {
                         let fg = father.and_then(|fk| open_go(&f, n, &fk));
-                        gos.entry(go.clone()).or_default().father = fg.clone();
+                        let e = gos.entry(go.clone()).or_default();
+                        e.father = fg.clone();
+                        e.transform = Some(k.clone());
                         if let Some(fg) = fg {
                             gos.entry(fg).or_default().children.push(go);
                         }
@@ -534,6 +547,14 @@ fn plan_inner(
                         .filter_map(|v| key(&f, n, v))
                         .collect();
                     clip_pptr.insert(k, (binds, keys));
+                    // the paths of every curve on a GameObject (m_IsActive), for exact_index_skip_dormant
+                    for g in arr(b.and_then(|b| b.get("genericBindings"))) {
+                        if g.get("typeID").and_then(Value::as_int) == Some(GAME_OBJECT as i128) {
+                            if let Some(p) = g.get("path").and_then(Value::as_int) {
+                                go_curve_paths.insert(p as u32);
+                            }
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -548,6 +569,13 @@ fn plan_inner(
         eprintln!("[exact-stats] census {} shaders {} scripts {} gos {} (children {} skipped {}) renderers {} sprite_tex {} ctrl {} clips {} (entries {}) mat_tex {} ({})",
             census.len(), shaders.len(), scripts.len(), gos.len(), ch, sc, renderers.len(), sprite_tex.len(), ctrl_clips.len(), clip_pptr.len(), cb, mat_tex.len(), mt);
     }
+    // renderers that never draw (exact_index_skip_dormant): their own sprites are no use either
+    let dormant: HashSet<Key> =
+        if matches!(opt(c, "exact_index_skip_dormant").to_str().as_str(), "true" | "True" | "1") {
+            dormant_unskip(job, &names, &census, &mut gos, &renderers, &go_curve_paths, &scripts_full, &open)
+        } else {
+            HashSet::new()
+        };
     // the renderers' material test, now that every palette material is known
     let mut palette_renderer: HashMap<Key, bool> = HashMap::new();
     for n in &names {
@@ -601,6 +629,9 @@ fn plan_inner(
         *e = *e && ok;
     }
     for (r, (_, _, sprite)) in &renderers {
+        if dormant.contains(r) {
+            continue;
+        }
         if let Some(s) = sprite {
             mark(&mut use_ok, s, ours(r));
             if palette_renderer.get(r) == Some(&true) {
@@ -966,6 +997,192 @@ fn plan_inner(
 }
 
 /// The GameObject of a Transform key, in the same file.
+/// `exact_index_skip_dormant`: a script of exact_index_skip that copies its renderer's sprite only to
+/// renderers that never draw does not count. A copy target is dormant when its GameObject is inactive
+/// (m_IsActive 0), no clip has a curve on a GameObject at any path that names it (m_IsActive), and no
+/// object names it, its Transform or its renderer, except its own components and hierarchy and the
+/// scripts that copy to it (a raw match in an object whose layout is not known counts). The game's code
+/// can still find such an object by name or by walking a hierarchy: the porter checks the game's code
+/// first and says so with this setting (Blasphemous: ReplicateSprite's SwordMask and SwordEffectRenderer).
+#[allow(clippy::too_many_arguments)]
+fn dormant_unskip(
+    job: &Job,
+    names: &[super::exacttex::Name],
+    census: &HashMap<super::exacttex::Name, (HashSet<i32>, HashSet<super::exacttex::Name>)>,
+    gos: &mut HashMap<Key, Go>,
+    renderers: &HashMap<Key, (Key, bool, Option<Key>)>,
+    go_curve_paths: &HashSet<u32>,
+    scripts_full: &HashMap<Key, (String, String)>,
+    open: &dyn Fn(&str) -> Option<DataFile>,
+) -> HashSet<Key> {
+    let mut out = HashSet::new();
+    // the hashes of every path that can name a GameObject below some Animator: each suffix of its path
+    let suffix_hashes = |gos: &HashMap<Key, Go>, gk: &Key| -> Vec<u32> {
+        let mut chain = Vec::new();
+        let mut g = Some(gk.clone());
+        for _ in 0..256 {
+            let Some(k) = g else { break };
+            let Some(x) = gos.get(&k) else { break };
+            chain.insert(0, x.name.clone());
+            g = x.father.clone();
+        }
+        let mut v = vec![crc32(b"")];
+        for i in 0..chain.len() {
+            v.push(crc32(chain[i..].join("/").as_bytes()));
+        }
+        v
+    };
+    let mut gen: Option<crate::monotree::Generator> = None;
+    // per skipped GameObject: its scripts, the renderers they copy to (none other named), dormant so far
+    let mut plans: Vec<(Key, Vec<Key>, Vec<Key>)> = Vec::new();
+    for (gk, g) in gos.iter() {
+        if !g.skipped || g.skip_scripts.is_empty() {
+            continue;
+        }
+        let mut targets: Vec<Key> = Vec::new();
+        let mut ok = true;
+        for sk in &g.skip_scripts {
+            let Some(f) = open(&sk.0) else { ok = false; break };
+            // what it names, read with its class's layout (monotree): its own GameObject, its script, its own
+            // renderer (what it copies from) and other renderers (what it copies to); anything else: not known
+            let Some(refs) = exact_refs(&f, &sk.0, sk.1, MONO_BEHAVIOUR, scripts_full, &mut gen, job) else {
+                ok = false;
+                break;
+            };
+            let script = f.sf.bytes(sk.1).ok().and_then(|b| {
+                let fid = i32::from_le_bytes(b.get(16..20)?.try_into().ok()?);
+                let pid = i64::from_le_bytes(b.get(20..28)?.try_into().ok()?);
+                Some((super::exacttex::file_name(&f, &sk.0, fid)?, pid))
+            });
+            for k in refs {
+                if &k == gk || Some(&k) == script.as_ref() {
+                    continue;
+                }
+                match renderers.get(&k) {
+                    Some((rgo, _, _)) if rgo == gk => {}
+                    Some(_) => targets.push(k),
+                    None => {
+                        if std::env::var_os("PMU_EXACTINDEX_DEBUG").is_some() {
+                            eprintln!("[exactindex] dormant: {}:{} names {}:{}, not a renderer", sk.0, sk.1, k.0, k.1);
+                        }
+                        ok = false;
+                    }
+                }
+            }
+        }
+        if std::env::var_os("PMU_EXACTINDEX_DEBUG").is_some() {
+            eprintln!("[exactindex] dormant: {}:{} ({}): scripts {}, named renderers ok {ok}, targets {:?}", gk.0, gk.1, g.name, g.skip_scripts.len(),
+                targets.iter().map(|t| (t.1, gos.get(&renderers[t].0).map(|x| (x.name.clone(), x.inactive)))).collect::<Vec<_>>());
+        }
+        if !ok || targets.is_empty() {
+            continue;
+        }
+        let dormant = targets.iter().all(|t| {
+            let tgo = &renderers[t].0;
+            gos.get(tgo).is_some_and(|x| x.inactive)
+                && suffix_hashes(gos, tgo).iter().all(|h| !go_curve_paths.contains(h))
+        });
+        if dormant {
+            plans.push((gk.clone(), g.skip_scripts.clone(), targets));
+        }
+    }
+    if plans.is_empty() {
+        return out;
+    }
+    // what may not be named: the targets, their GameObjects and Transforms
+    let mut owner: HashMap<Key, usize> = HashMap::new();
+    for (i, (_, _, ts)) in plans.iter().enumerate() {
+        for t in ts {
+            owner.insert(t.clone(), i);
+            let tgo = renderers[t].0.clone();
+            if let Some(tr) = gos.get(&tgo).and_then(|x| x.transform.clone()) {
+                owner.insert(tr, i);
+            }
+            owner.insert(tgo, i);
+        }
+    }
+    const SKIP: [i32; 7] = [GAME_OBJECT, TRANSFORM, RECT_TRANSFORM, SPRITE_RENDERER, PRELOAD_DATA, ASSET_BUNDLE, MONO_SCRIPT];
+    // the dormant GameObjects and everything below them; their components (scripts of an inactive GameObject do
+    // not run) may name them, and are named in turn only by them
+    let mut below: HashMap<Key, usize> = HashMap::new();
+    for (i, (_, _, ts)) in plans.iter().enumerate() {
+        let mut stack: Vec<Key> = ts.iter().map(|t| renderers[t].0.clone()).collect();
+        while let Some(k) = stack.pop() {
+            if below.insert(k.clone(), i).is_some() {
+                continue;
+            }
+            if let Some(g) = gos.get(&k) {
+                stack.extend(g.children.iter().cloned());
+            }
+        }
+    }
+    let mut allowed: HashSet<Key> = plans.iter().flat_map(|p| p.1.iter().cloned()).collect();
+    let dfiles: HashSet<super::exacttex::Name> = below.keys().map(|k| k.0.clone()).collect();
+    for n in &dfiles {
+        let Some(f) = open(n) else { continue };
+        for o in &f.sf.objects {
+            if SKIP.contains(&o.class_id) || o.class_id == GAME_OBJECT {
+                continue;
+            }
+            let Ok(b) = f.sf.bytes(o.path_id) else { continue };
+            if b.len() < 12 || o.class_id != MONO_BEHAVIOUR {
+                continue;
+            }
+            let fid = i32::from_le_bytes(b[0..4].try_into().unwrap());
+            let pid = i64::from_le_bytes(b[4..12].try_into().unwrap());
+            if fid == 0 {
+                if let Some(&i) = below.get(&(n.clone(), pid)) {
+                    let k = (n.clone(), o.path_id);
+                    owner.insert(k.clone(), i);
+                    allowed.insert(k);
+                }
+            }
+        }
+    }
+    let want: HashSet<Key> = owner.keys().cloned().collect();
+    let want_files: HashSet<&str> = want.iter().map(|k| &*k.0).collect();
+    let mut failed: HashSet<usize> = HashSet::new();
+    for n in names {
+        if !census.get(n).is_some_and(|c| c.1.iter().any(|x| want_files.contains(&**x))) {
+            continue;
+        }
+        let Some(f) = open(n) else { continue };
+        for o in &f.sf.objects {
+            if SKIP.contains(&o.class_id) || allowed.contains(&(n.clone(), o.path_id)) {
+                continue;
+            }
+            let Ok(b) = f.sf.bytes(o.path_id) else { continue };
+            let mut hit = HashSet::new();
+            raw_refs(&f, n, &b, &want, &mut hit);
+            if hit.is_empty() {
+                continue;
+            }
+            if let Some(exact) = exact_refs(&f, n, o.path_id, o.class_id, scripts_full, &mut gen, job) {
+                hit.retain(|k| exact.contains(k));
+            }
+            for h in hit {
+                eprintln!("[exactindex] dormant check: {}:{} named by {}:{} class {}", h.0, h.1, n, o.path_id, o.class_id);
+                failed.insert(owner[&h]);
+            }
+        }
+    }
+    for (i, (gk, _, ts)) in plans.iter().enumerate() {
+        if failed.contains(&i) {
+            continue;
+        }
+        let name = gos.get(gk).map(|g| g.name.clone()).unwrap_or_default();
+        if let Some(g) = gos.get_mut(gk) {
+            g.skipped = false;
+        }
+        out.extend(ts.iter().cloned());
+        eprintln!(
+            "exactindex: {}:{} ({name}): its exact_index_skip script copies only to {} renderers that never draw (exact_index_skip_dormant)",
+            gk.0, gk.1, ts.len()
+        );
+    }
+    out
+}
+
 fn open_go(f: &DataFile, n: &str, tk: &Key) -> Option<Key> {
     if &*tk.0 != n {
         return None;
@@ -1144,7 +1361,7 @@ pub fn fingerprint(job: &Job) -> Vec<(String, String)> {
 
 fn kept_settings(c: &Json, index: bool) -> Json {
     Json::List(
-        ["exact_shaders", "exact_keywords", "exact_index_skip"]
+        ["exact_shaders", "exact_keywords", "exact_index_skip", "exact_index_skip_dormant"]
             .iter()
             .map(|k| Json::Str(opt(c, k).to_str()))
             .chain([Json::Bool(index), Json::Str(super::texmemo::tool_id())])

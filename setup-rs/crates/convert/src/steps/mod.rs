@@ -12,6 +12,7 @@ pub mod fmodcatalogs;
 pub mod fusedpost;
 pub mod grabfetch;
 pub mod lazy;
+pub mod lazyref;
 pub mod metal;
 pub mod quality;
 pub mod settings;
@@ -62,6 +63,11 @@ pub fn builtin() -> Vec<(String, StepFn)> {
         (
             lazy::STEP.into(),
             Arc::new(|job: &mut Job, _: &Args| lazy::run(job)),
+        ),
+        // pmu's own: prefabs a scene's script names, loaded by name when used (with an asmpatch patch)
+        (
+            lazyref::STEP.into(),
+            Arc::new(|job: &mut Job, _: &Args| lazyref::run(job)),
         ),
         // pmu's own: palette-indexed textures in one byte a texel (textures.exact_index)
         (
