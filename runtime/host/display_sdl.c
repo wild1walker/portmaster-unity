@@ -388,8 +388,10 @@ int display_sdl_open(const char *title, egl_host_display *out, int *width, int *
     }
     if (pw && tries[t].major >= 3 && glpresent_wanted()) {
         const char *asp = getenv("UA_ASPECT");
-        // (KMSDRM, where it was measured, and X11, where display_test.sh checks it; not yet Wayland)
-        int pt_driver = driver && (!strcasecmp(driver, "KMSDRM") || !strcasecmp(driver, "x11"));
+        // (KMSDRM, where it was measured; X11 and Wayland, where display_test.sh checks it: ROCKNIX's
+        // sway, a Mali Wayland driver there; the window's swaps on the present thread as they were
+        // on Unity's render thread, the main thread still pumping the events)
+        int pt_driver = driver && (!strcasecmp(driver, "KMSDRM") || !strcasecmp(driver, "x11") || !strcasecmp(driver, "wayland"));
         if (!(asp && *asp) && !pt_driver)
             fprintf(stderr, "[display] UA_PRESENT_THREAD: not on SDL's %s driver: off\n", driver ? driver : "?");
         if (!(asp && *asp) && pt_driver) {
