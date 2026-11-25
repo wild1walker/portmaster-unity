@@ -1295,3 +1295,15 @@ build (libmono 30). Mono's own counters: MonoClass 3.1 MB, MonoMethod 1.6 MB, in
 0.5 MB, JIT code 7 MB in mempools plus 13 MB of mapped code space: its metadata is not where the gap is. This Mono is
 built without `ENABLE_OVERRIDABLE_ALLOCATORS` (`mono_set_allocator_vtable` installs nothing), so its own malloc
 is not separated yet.
+
+On the BattleXP G350 (ES launch, bench, Bullet Hell's busiest room, the cached invoke toggled every 20 s within
+the run with `UA_MONO64_FAST_INVOKE_TOGGLE`), one launch per granule: 16 bytes 31.3 fps, 43 frames over 50 ms a
+minute, 4 over 100 ms, longest 272 ms; 8 bytes 31.7 fps, 42, 0, longest 69 ms; no collection in either fight.
+Bullet Hell's live heap is only 7 MB smaller with 8-byte granules (147 against 154 MB after a collection) and
+its Boehm heap was 239 against 214 MB (where the play allowance's growth happened to end), lowest available
+105 against 111 MB: there the heap's size is set by play's allowance (the divisor 3: about two thirds of the
+live heap again), not by the granule. The cached invoke's toggled windows (10 s each, the fight's intensity
+changing under them) did not separate it from the general path (28.3 / 30.0 fps off against 31.3 / 32.0 on,
+the "on" side including the calmer end of the fight). The floor's last tight collection (450 ms) was shot
+on the arrival, the floor's title card over the elevator, before the first room; the earlier ones on the
+"Reloading" screen.
