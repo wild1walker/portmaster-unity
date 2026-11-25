@@ -421,6 +421,27 @@ their blocks could cut.
 a pmu run of six files, `TEXB`); the setups run the textures step in one pmu. GPU encoding: no gain
 at the same picture (worktree gpu-astc).
 
+## Big textures with mip levels on every core (2026-11-25)
+
+A 2D game whose 4096x4096 BC7 atlases keep their mip levels (752 textures, 2827 MB, scale 0.5, ASTC
+5x5, `fast`), on an RG Cube XX (Knulli; H700, 4x Cortex-A53, 1 GB, the card reading about 18 MB/s)
+and an RG34XX-SP (ROCKNIX, the same chip). The sample S2: three of its data files with their
+`.resS` (331 MB, 297 textures), `convert --steps textures` on a fresh copy, the cache dropped
+before each run. Over the step only 2.5 of the 4 cores were busy (`/proc/stat`); sampled every
+second: seconds at 0.2 - 0.6 cores (reading), at 1 (mip levels), at 2.4 (decoding and scaling), at
+3.8 (encoding). Two of the causes were texcodec's:
+
+| change (each leaves every converted file the same) | where | S2 on the Cube XX |
+|---|---|---|
+| data that holds a texture's other mip levels after the first is cut in rows too: the rows are the first level's, whose size is known for the formats decoded here (a whole decode reads only that level as well). `row_units` took only data whose length the rows divide, so a big texture with mip levels was decoded on one core and never went through `decode_downscale`'s bands | `texture.rs` `row_units`, `decode.rs` `level_size` | `prepare` 21.7 - 22.8 -> 16.7 - 17.1 s; pmu's peak RSS 186 - 194 -> 160 - 169 MB (the bands never hold a whole 4096x4096 RGBA image) |
+| the mip levels made from 1 Mpix or more are scaled by `downscale_parallel` (the same bytes as `downscale`), not on one core | `texture.rs` `mip_chain` | `mips` 7.2 -> 4.1 - 4.3 s |
+
+S2 with both (a test build with a switch for each change): 86.9 - 91.6 s over five runs -> 78.8 s,
+2.3 - 2.5 -> 2.8 cores busy; on the RG34XX-SP 80.2 - 82.7 -> 71.6 s. Same output: the digest of
+S2's converted files is the same with the changes and without, on both handhelds; unit tests
+`data_with_mip_levels_is_cut_in_rows_too` (it fails with the old row count) and
+`mip_levels_on_every_core_are_the_same`.
+
 ## ASTC guide files (2026-10-28)
 
 `pmunity astc-guide` (astc_guide.py) runs the texture step on a PC with a recorder: each texture
