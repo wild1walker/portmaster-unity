@@ -544,7 +544,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 157 86d9f60cc8267f8d
-file port-rel/mygame.zip 644 487379 0cab2ea87601228d zip 161 f116b55abe2a7e03
+file port-rel/mygame.zip 644 487428 16569f3920685917 zip 161 aea0a42397b7b12e
 file port-rel/testing_thread.txt 644 950 11138a6488584ab2
 file port-rel/zip/Vk.sh 644 7757 2bd69ca22b7cf9e1
 file port-rel/zip/mygame/README.md 644 2347 ac43b2226132b7df
@@ -592,7 +592,7 @@ file port-rel/zip/mygame/setup/pmunity/port.py 644 216981 aca79c16bb106bb6
 file port-rel/zip/mygame/setup/pmunity/prefs.py 644 5443 98865dbae877ae71
 file port-rel/zip/mygame/setup/pmunity/quality.py 644 35554 d2f1b9c00c6d7ab8
 file port-rel/zip/mygame/setup/pmunity/retarget.py 644 12378 533cd5f3987d0bb4
-file port-rel/zip/mygame/setup/pmunity/route.py 644 40789 f8427cd98f7e0891
+file port-rel/zip/mygame/setup/pmunity/route.py 644 40898 937e8563612a888d
 file port-rel/zip/mygame/setup/pmunity/settings.py 644 2673 c620504eb8155a71
 file port-rel/zip/mygame/setup/pmunity/shaders/__init__.py 644 0 cbf29ce484222325
 file port-rel/zip/mygame/setup/pmunity/shaders/blob.py 644 17466 a2212deecc3202fd

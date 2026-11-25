@@ -23,6 +23,7 @@ static void *root(void) { return (void *)0x10; }
 static void *attach(void *d) { (void)d; g_attached++; return (void *)0x20; }
 static void detach(void *t) { (void)t; g_detached++; }
 void *mono_runtime_lib(void) { return (void *)1; }
+void frames_shot_next(void) {}   /* frames.c: the UA_GC_TIGHT_SHOT screenshot, not under test here */
 void *so_dlopen(const char *name, int flags) { (void)flags; return !strcmp(name, "libmono.so") ? (void *)1 : NULL; }
 void *so_dlsym(void *h, const char *n)
 {
