@@ -352,6 +352,15 @@ translates Direct3D shaders with Unity's open-source
 [libpmhwdec](https://github.com/Knifethrower/pmhwdec), which a port ships, and the runtime's support
 for it (his pull requests #10, H.264 and HEVC, and #12, VP8). He also found and fixed the loader's freezes in
 2017.4's video player and thread start (#16, #17) and wrote asmpatch's `playmaker-typelookup` (#18).
+His later pull requests: a port's hooks without `.sh` (#19), setup paths relative to the port folder
+(#20, a FUSE deadlock on Knulli's A133P kernel), donors built with 2018.x editors (#21), the 64-bit
+host's glibc heap settings (#22), sprites that follow a texture scaled in another file (#23), video
+pictures freed when a stream ends (#24), IMGUI's default skin loaded at the title (#25, `UA_GUI_WARM`),
+big textures with mip levels decoded and scaled on every core (#27), the setup's texture read-ahead
+budget (#28), astc-encoder search settings by guided tier (#29) and builds below one folder reported
+in name order (#30). [Ronax](https://github.com/ronaxdevil)'s
+[Broforce port](https://github.com/ronaxdevil/Portmaster_Broforce) gave three fixes: 200 MB kept spare
+beside the APK and OBB, Mono's build volume as an absolute path, and an empty `tests.am` for bdwgc.
 [Bogodroid](https://github.com/binarycounter/Bogodroid) (binarycounter, and geoffwoollams' Unity 7 work in
 [his fork](https://github.com/geoffwoollams/bogodroid)) showed what Unity 7's player needs (no
 `libmain.so`, the system's ICU) and which phone services games call (Play Billing, In-App Review,
