@@ -614,6 +614,10 @@ Text atlases stay at `sharp_block` (4x4). 8x8 (2 bits a texel) is
 visibly blocky in Hollow Knight; testers on Discord found 6x6 good enough, and side by side on the
 handheld the two are hard to tell apart.
 
+Where the texture step's time matters at 5x5 or 6x6, `tiers` shortens the search of the blocks left
+to astc-encoder: a fifth of the encoder's time at 5x5 `fast` with no lower PSNR on the game it was
+measured on ([setup-speed.md](setup-speed.md#search-settings-by-guided-tier-2026-11-25)).
+
 A small soft picture drawn many times its size is the exception: its blocks show. Hollow Knight's light
 around the Knight (`light_effect_v02`, RGBA32 128x121, on screen in almost every scene) went to 48x45 in
 6x6 blocks, and testers on Discord saw staircase lines and, on a 4:3 3.5" screen, "giant macro blocks"

@@ -544,7 +544,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 157 86d9f60cc8267f8d
-file port-rel/mygame.zip 644 486878 938151d2ea376d8d zip 161 fa5b762e12daae68
+file port-rel/mygame.zip 644 487379 0cab2ea87601228d zip 161 f116b55abe2a7e03
 file port-rel/testing_thread.txt 644 950 11138a6488584ab2
 file port-rel/zip/Vk.sh 644 7757 2bd69ca22b7cf9e1
 file port-rel/zip/mygame/README.md 644 2347 ac43b2226132b7df
@@ -592,7 +592,7 @@ file port-rel/zip/mygame/setup/pmunity/port.py 644 216981 aca79c16bb106bb6
 file port-rel/zip/mygame/setup/pmunity/prefs.py 644 5443 98865dbae877ae71
 file port-rel/zip/mygame/setup/pmunity/quality.py 644 35554 d2f1b9c00c6d7ab8
 file port-rel/zip/mygame/setup/pmunity/retarget.py 644 12378 533cd5f3987d0bb4
-file port-rel/zip/mygame/setup/pmunity/route.py 644 40898 937e8563612a888d
+file port-rel/zip/mygame/setup/pmunity/route.py 644 40789 f8427cd98f7e0891
 file port-rel/zip/mygame/setup/pmunity/settings.py 644 2673 c620504eb8155a71
 file port-rel/zip/mygame/setup/pmunity/shaders/__init__.py 644 0 cbf29ce484222325
 file port-rel/zip/mygame/setup/pmunity/shaders/blob.py 644 17466 a2212deecc3202fd
@@ -608,7 +608,7 @@ file port-rel/zip/mygame/setup/pmunity/shaders/spirv.py 644 11634 73ec1402029243
 file port-rel/zip/mygame/setup/pmunity/shaders/step.py 644 18140 15561626eb1eabee
 file port-rel/zip/mygame/setup/pmunity/shaders/vulkan.py 644 50304 c07bb0e1662378f7
 file port-rel/zip/mygame/setup/pmunity/streaming.py 644 14765 9149613c11108e0c
-file port-rel/zip/mygame/setup/pmunity/textures.py 644 43360 27efb2a05356984c
+file port-rel/zip/mygame/setup/pmunity/textures.py 644 45607 eb271fe4fce91de4
 file port-rel/zip/mygame/setup/pmunity/typetrees.py 644 8809 841ba4f1f4644f45
 file port-rel/zip/mygame/setup/pmunity/unity_io.py 644 26258 3e06207770f2e627
 file port-rel/zip/mygame/setup/pmunity/unity_version.py 644 3892 5395de281731aee6

@@ -19,9 +19,11 @@ extern "C" {
 
 /// A context for blocks bw x bh at `quality` (astcenc's preset value, e.g. 10 = fast) with `flags`;
 /// partition_limit / index2_limit: when >= 0, tune_partition_count_limit /
-/// tune_2partition_index_limit are lowered to them (min with the preset's). NULL on error (status).
+/// tune_2partition_index_limit are lowered to them (min with the preset's); tune_fields / tune_values:
+/// tune_len settings set after that (a field by its index in astc.rs TUNE_FIELDS). NULL on error (status).
 astcenc_context* tc_astc_new(unsigned bw, unsigned bh, float quality, unsigned flags, int partition_limit,
-                             int index2_limit, unsigned threads, int* status)
+                             int index2_limit, const unsigned char* tune_fields, const float* tune_values,
+                             size_t tune_len, unsigned threads, int* status)
 {
 	astcenc_config config;
 	astcenc_error err = astcenc_config_init(ASTCENC_PRF_LDR, bw, bh, 1, quality, flags, &config);
@@ -34,6 +36,33 @@ astcenc_context* tc_astc_new(unsigned bw, unsigned bh, float quality, unsigned f
 		if (index2_limit >= 0 && static_cast<unsigned>(index2_limit) < config.tune_2partition_index_limit)
 		{
 			config.tune_2partition_index_limit = static_cast<unsigned>(index2_limit);
+		}
+		// (`tiers`: settings set after the preset and the limits, as textures.py's setattr(cfg, k, v); the fields
+		// in astc.rs TUNE_FIELDS' order. astcenc_context_alloc brings each into its valid range.)
+		for (size_t i = 0; i < tune_len; i++)
+		{
+			float v = tune_values[i];
+			unsigned u = v > 0.0f ? static_cast<unsigned>(v) : 0u;
+			switch (tune_fields[i])
+			{
+			case 0: config.tune_partition_count_limit = u; break;
+			case 1: config.tune_2partition_index_limit = u; break;
+			case 2: config.tune_3partition_index_limit = u; break;
+			case 3: config.tune_4partition_index_limit = u; break;
+			case 4: config.tune_block_mode_limit = u; break;
+			case 5: config.tune_refinement_limit = u; break;
+			case 6: config.tune_candidate_limit = u; break;
+			case 7: config.tune_2partitioning_candidate_limit = u; break;
+			case 8: config.tune_3partitioning_candidate_limit = u; break;
+			case 9: config.tune_4partitioning_candidate_limit = u; break;
+			case 10: config.tune_db_limit = v; break;
+			case 11: config.tune_mse_overshoot = v; break;
+			case 12: config.tune_2partition_early_out_limit_factor = v; break;
+			case 13: config.tune_3partition_early_out_limit_factor = v; break;
+			case 14: config.tune_2plane_early_out_limit_correlation = v; break;
+			case 15: config.tune_search_mode0_enable = v; break;
+			default: break;
+			}
 		}
 	}
 	astcenc_context* ctx = nullptr;
