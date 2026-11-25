@@ -107,7 +107,9 @@ crates/convert/tests/madeup) checked by the Python and by pmu at the same paths:
 stdout, stderr and every file `port new --data` leaves. The same cases are frozen in
 `pmu/tests/golden/check.txt` (test `check_golden`, no Python; written 2026-11-22 from a run whose
 every output was the Python's; `PMU_CHECK_BLESS=1` writes it again; without `$PMU_TPK` the cases
-that read objects are left out).
+that read objects are left out). Several builds below one folder are reported in their folders'
+name order, on both sides: until 2026-11-25 the walk went down the sub-folders in the order the
+file system lists them, and `check_golden` passed only where that was the golden file's order.
 
 ```bash
 PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk PMU_PARITY_PYTHON=<venv>/bin/python \

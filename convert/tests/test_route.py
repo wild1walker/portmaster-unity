@@ -257,6 +257,15 @@ class RouteTest(unittest.TestCase):
             R.port_new(c)
             self.assertEqual(c.written, {})
 
+    def test_data_dirs_in_name_order(self):
+        # (folders made in an order that is neither by name nor its reverse: the order found is by name,
+        # whatever order the file system lists them in)
+        b = Build(self)
+        for n in 'caebfd':
+            b.file(f'{n}/Game_Data/globalgamemanagers')
+        self.assertEqual(R.find_data_dirs(b.root),
+                         [os.path.join(os.path.abspath(b.root), n, 'Game_Data') for n in 'abcdef'])
+
     def test_cli(self):
         b = linux_build(self, '2022.3.4f1', il2cpp=True)
         import contextlib

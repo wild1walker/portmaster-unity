@@ -242,7 +242,8 @@ def find_data_dirs(path, depth=4):
         if root[len(path):].count(os.sep) >= depth:
             dirs[:] = []
             continue
-        for d in sorted(dirs):
+        dirs.sort()     # by name, and os.walk goes down in that order too: the order found is not the file system's
+        for d in dirs:
             p = os.path.join(root, d)
             if d.endswith('_Data') and _is_data(p):
                 found.append(p)
