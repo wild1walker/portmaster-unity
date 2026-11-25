@@ -969,8 +969,8 @@ port needs there, measured on the BattleXP G350 (dArkOS) with Hollow Knight and 
   driver waits in each swap for the GPU, so the render thread and the GPU took turns: Hollow Knight's
   Greenpath 17.5 -> 25.1 fps) and `UA_GL_REC = "auto"` (the driver calls on a thread of their own
   wherever the present thread runs: 25 -> 30-33; Enter the Gungeon's fight 29.8 -> 31.1). Both do
-  nothing on the fbdev handhelds, so a port can set them everywhere; `UA_GL_REC=2` (the frame
-  recorder) is for handhelds with swap.
+  nothing on the fbdev handhelds, so a port can set them everywhere (ROCKNIX's sway too, SDL's Wayland
+  driver, since 2026-11-24); `UA_GL_REC=2` (the frame recorder) is for handhelds with swap.
 - **Filling the screen:** there is no display-engine scaler (sunxi's, which the H700 handhelds use for
   free). `UA_RENDER_SIZE` still works: on the SDL path the present thread scales Unity's smaller window
   to the panel in one linear blit (without it, two GPU blits before each swap). A 16:9 game shown at

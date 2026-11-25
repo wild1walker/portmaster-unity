@@ -13,6 +13,8 @@
 //                           shown by the present thread (checked as the others, and that it showed them)
 //   TEST_RENDER=WxH         Unity's window when it is not the whole window (UA_ASPECT): on X11, the frame in the
 //                           middle of the presented window and black bars around it
+//   TEST_GRIM=1             (Wayland, a wlroots compositor: sway) the compositor's picture, taken with grim
+//                           (wlr-screencopy): the last frame in the middle of the output
 #define _GNU_SOURCE
 #include "../display.h"
 #include "../glpresent.h"
@@ -31,6 +33,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 static int failures, checks;
 #define CHECK(c) do { checks++; if (!(c)) { failures++; fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -290,6 +293,35 @@ static void check_x11_window(SDL_Window *w)
 }
 #endif
 
+// TEST_GRIM=1: the compositor's picture (grim, sway's wlr-screencopy): the frame really reached the screen.
+// The window is fullscreen on the only output, so the output's middle is the window's.
+static void check_wayland_output(void)
+{
+    if (!getenv("TEST_GRIM")) return;
+    static const char path[] = "/tmp/test_display_grim.ppm";
+    unsigned char rgb[3] = { 0 };
+    int ok = 0, shots = 0, w = 0, h = 0;
+    for (int k = 0; k < 20 && !ok; k++) {       // (the compositor shows the last frame at its next repaint)
+        if (k) SDL_Delay(50);
+        char cmd[96];
+        snprintf(cmd, sizeof cmd, "grim -t ppm %s", path);
+        if (system(cmd) != 0) continue;
+        FILE *f = fopen(path, "rb");
+        int max = 0;
+        if (f && fscanf(f, "P6 %d %d %d", &w, &h, &max) == 3 && max == 255 && w > 0 && h > 0 && fgetc(f) != EOF &&
+            !fseek(f, ((long)(h / 2) * w + w / 2) * 3, SEEK_CUR) && fread(rgb, 1, 3, f) == 3) {
+            shots++;
+            ok = !memcmp(rgb, g_last, 3);
+        }
+        if (f) fclose(f);
+    }
+    fprintf(stderr, "test: Wayland output %dx%d center %d,%d,%d (last frame %d,%d,%d), %d screenshot(s)\n",
+            w, h, rgb[0], rgb[1], rgb[2], g_last[0], g_last[1], g_last[2], shots);
+    CHECK(shots > 0);
+    CHECK(ok);
+    unlink(path);
+}
+
 int main(void)
 {
     const char *expect = getenv("TEST_EXPECT") ? getenv("TEST_EXPECT") : "sdl";
@@ -357,6 +389,7 @@ int main(void)
 #if defined(SDL_VIDEO_DRIVER_X11)
     check_x11_window(w);
 #endif
+    check_wayland_output();
     CHECK(!display_quit_requested());
     SDL_Event q;
     memset(&q, 0, sizeof q);
