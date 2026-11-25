@@ -1307,3 +1307,24 @@ changing under them) did not separate it from the general path (28.3 / 30.0 fps 
 the "on" side including the calmer end of the fight). The floor's last tight collection (450 ms) was shot
 on the arrival, the floor's title card over the elevator, before the first room; the earlier ones on the
 "Reloading" screen.
+
+### What the Keep's live heap is, class by class (2026-11-25)
+
+`UA_GC_CENSUS` now works on the 2017.4 runtime (tools/mono64/patches/gc-census-2017.4.patch). muOS, Enter the
+Gungeon in the Keep's first fight, 8-byte granules: 2.2 million reachable objects, 157 MB (heap 196 MB). The room
+prototypes' cells are the largest holder by far, about 65 MB: `PrototypeDungeonRoomCellData` 210,000 objects 20.8 MB,
+their `PrototypeDungeonRoomCellAppearance` 9.6 MB, `PrototypeIndexOverrideData` 253,000 objects 5.8 MB, and the
+lists inside them (`List<int>` 483,000, 18.4 MB; the appearance's `List<PrototypeIndexOverrideData>` 210,000, 8.0 MB;
+their arrays 2.9 MB). The rest: strings 9.4 MB (5 MB of it copies of a value another string holds), the floor's
+`CellData` 7.9 MB, `bool[]` 6.8 MB, tk2d sprite definitions 6.5 MB plus their tileset metadata 2.4 MB, dfGUI
+controls ~8 MB. In the Breach the prototypes are 30,000 cells (6 MB): a floor's room pool brings the rest. They
+are Unity-serialized asset data, and the game changes them at run time (`GetOverridesForTilemap` pads
+`m_overrideIndices` with new entries for each tileset it asks about, `MirrorData` copies them), so sharing or
+dropping them is not exact without proving every reader agrees; not taken yet. Gungeon loads one language's text
+(`StringTableManager`: the current language and English as its backup), so Hollow Knight's lazy-text cut has no
+counterpart here.
+
+libunity's malloc (the ledger, the same fight): 135 MB, 300,000 blocks; 45 MB of it in blocks of 64 bytes to 1 KB
+(pointer-sized structures, larger on 64-bit), big blocks of 8 and 6 MB (Unity's own allocators' blocks, 0xaa-filled).
+Unity 2017.4 does not know the `memorysetup-*` boot.config keys (2021.1+), so the 1 MB block setting is not in effect
+on this line; its allocator sizes are not settable without changing libunity.
