@@ -176,11 +176,12 @@ export CFLAGS="-fPIC -O2 -g"
 # 8-byte granules (GC_GRANULE_BYTES=8, one word: the 32-bit collector'"'"'s granule and SGen'"'"'s
 # alignment on aarch64) for the lines a game has run with them: Mono'"'"'s objects are multiples of 8
 # bytes, and bdwgc'"'"'s 64-bit default of 16 rounds every other one up by 8 (Hollow Knight, 6000.0:
-# 98.7 -> 91.8 MB live). MONO64_GRANULE=8|16 chooses for any line.
+# 98.7 -> 91.8 MB live; Enter the Gungeon, 2017.4: the Keep's heap 280 -> 196 - 262 MB, 162 -> 212 MB available
+# on muOS, docs/mono-arm64.md). MONO64_GRANULE=8|16 chooses for any line.
 # A tree built with other flags has its collector built again.
 GCFLAGS="-DDONT_ADD_BYTE_AT_END"
 GRANULE='"${MONO64_GRANULE:-auto}"'
-if [ "$GRANULE" = auto ]; then case $B in unity-6000.0-mbe) GRANULE=8 ;; *) GRANULE=16 ;; esac; fi
+if [ "$GRANULE" = auto ]; then case $B in unity-6000.0-mbe|unity-2017.4-mbe) GRANULE=8 ;; *) GRANULE=16 ;; esac; fi
 case $GRANULE in
   8) GCFLAGS="$GCFLAGS -DGC_GRANULE_BYTES=8 -DGC_GRANULE_WORDS=1" ;;
   16) ;;

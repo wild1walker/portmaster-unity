@@ -1266,3 +1266,32 @@ names, so a kept copy (`libmonobdwgc-2.0.so.rc`) was loaded as a second, uniniti
 the host's helpers that look the runtime up by name (`jitwarm`, the hitch namer) found that one
 (`Assertion at object.c:673, condition 'callbacks.compile_method' not met`, then a crash). The scan now
 takes only `<name>.so` and `<name>.so.<digits>` (runtime/host/plugins.c).
+
+### 8-byte granules for 2017.4, and the tight divisor's load detection (2026-11-25)
+
+Enter the Gungeon's managed heap is most of the 64-bit build's extra memory on a 1 GB handheld (its DLLs are
+file-mapped, 7 MB resident and clean; its Mali memory is lower than the 32-bit build's). The 2017.4 runtime
+now uses one-word granules too (`MONO64_GRANULE` default 8 for 2017.4 as for 6000.0). Checks: fitest 0 differ,
+the managed `alloctest` 0 fails. muOS, the real APK, Quick Start into the Keep (`mu-fight.sh`, 250 s, vsync-bound
+at 60 fps), the RC's host with `UA_GC_TIGHT=32`, lowest MemAvailable up to the fight's end:
+
+| granule | runs | lowest available | Boehm heap in the fight | in use after a collection |
+|---|---|---|---|---|
+| 16 bytes | 3 | 175, 167, 143 MB | 280 MB | 190 - 193 MB |
+| 8 bytes | 3 | 265, 183, 188 MB | 196 - 262 MB | 167 MB |
+
+The fights the same (60 fps, no collection, 0 - 1.5 frames over 100 ms a minute either way). The loads'
+collections average 320 ms against 230 ms (49 against 38 in the run's loads), all on load screens.
+
+The second 8-byte run first showed 183 MB: with `UA_GC_TIGHT` entered only on a frame of over 2.5 s (the earlier
+fix for a single stall), the Keep's load grew the heap by 100 MB in its first frame of 1.6 s. Tight mode is again
+entered on any frame of over 1 s; the collection at the switch back runs only if a collection ran meanwhile (a
+stall in play usually runs none, and then nothing is redone). With the arrival's switch photographed
+(`playG.sh`'s `watchshot:`): the Keep's collection (457 ms) was on the floor's "Reloading" screen.
+
+Where the malloc heap goes (muOS, the Keep, `UA_MEM_LEDGER=2` and `UA_MONO_COUNTERS`): 216 - 228 MB in use; libunity
+135 MB of it (32-bit: 115); the rest (Mono, the GPU driver, the host) ~80 - 90 MB, against ~50 MB on the 32-bit
+build (libmono 30). Mono's own counters: MonoClass 3.1 MB, MonoMethod 1.6 MB, inflated generics 3 MB, signatures
+0.5 MB, JIT code 7 MB in mempools plus 13 MB of mapped code space: its metadata is not where the gap is. This Mono is
+built without `ENABLE_OVERRIDABLE_ALLOCATORS` (`mono_set_allocator_vtable` installs nothing), so its own malloc
+is not separated yet.

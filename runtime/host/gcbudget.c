@@ -21,11 +21,11 @@
 //                       collected first, the next growth waits for the memory the game keeps. Each one is a
 //                       pause inside the load ("[host] gc grow" with its length, the heap and the used heap
 //                       before and after); frames at play speed are never paused by it.
-//   UA_GC_TIGHT=<n>     (default 0 = off) during a load (UnityMain inside a frame of over 2.5 s, or of over 1 s within
-//                       5 s of another, or within 3 s after such a frame; a single stall in play is not a load), Boehm's free-space divisor at <n> (GC_set_free_space_divisor: a collection after heap/<n>
+//   UA_GC_TIGHT=<n>     (default 0 = off) during a load (UnityMain inside a frame of over 1 s, or within 3 s after a
+//                       frame of over 2.5 s or two of over 1 s within 5 s), Boehm's free-space divisor at <n> (GC_set_free_space_divisor: a collection after heap/<n>
 //                       bytes allocated, where it would otherwise grow the heap 16 MB at a time); its own value, 3, again
 //                       once frames come at play speed, so play keeps the collector's own pace and pauses. The same on
-//                       every device (no memory line); at the switch back one full collection, so that play's
+//                       every device (no memory line); at the switch back, if a collection ran meanwhile, one full collection, so that play's
 //                       allowance before the next one is computed with the collector's own divisor (Boehm computes it
 //                       once per collection: the load's last left play with the load's small one). Collectors that export the setting: the Mono route's libmonobdwgc
 //                       (and Unity's Mono 2017+ players); Mono 2.6's has none ("[host] gc tight: off").
@@ -155,13 +155,13 @@ static void *grow_main(void *arg)
     }
     if (g_grow_mb > 0)
         fprintf(stderr, "[host] gc grow: on (a collection when the heap grows during a load with under %d MB available)\n", g_grow_mb);
-    // UA_GC_TIGHT: during a load (a frame of over 2.5 s, or two of over 1 s within 5 s, and 3 s after) Boehm's free-space
+    // UA_GC_TIGHT: during a load (a frame of over 1 s; 3 s after a frame of over 2.5 s or two of over 1 s) Boehm's free-space
     // divisor at this value: it collects after heap/<n> bytes allocated instead of growing the heap; its own value again
     // once frames come at play speed, so play keeps the collector's own pace
     void (*set_div)(unsigned long) = (void (*)(unsigned long))so_dlsym(h, "GC_set_free_space_divisor");
     unsigned long (*get_div)(void) = (unsigned long (*)(void))so_dlsym(h, "GC_get_free_space_divisor");
     unsigned long div0 = get_div ? get_div() : 0;
-    int tight = 0, tick = 0;
+    int tight = 0, tick = 0, n_tight = 0;
     if (g_tight > 0 && (!set_div || !div0)) fprintf(stderr, "[host] gc tight: this collector has no free-space divisor setting: off\n");
     int64_t last = heap(); int last_n = count(0), logged = 0;
     for (;;) {
@@ -169,10 +169,17 @@ static void *grow_main(void *arg)
         if (g_tight > 0 && set_div && div0 && ++tick % 5 == 0) {
             double t = now();
             double in = t - g_frame_t;
-            int loading = g_frame_t > 0 && (in > 2.5 || (in > 1.0 && t - g_long1 < 5.0) || t - g_long_t < 3.0);
+            // from the first frame of over 1 s (a floor's load can grow the heap by 100 MB in its first one), until
+            // 3 s after a load's frame (g_long_t: over 2.5 s, or two of over 1 s within 5 s)
+            int loading = g_frame_t > 0 && (in > 1.0 || t - g_long_t < 3.0);
             if (loading && !tight) {
-                set_div((unsigned long)g_tight); tight = 1;
+                set_div((unsigned long)g_tight); tight = 1; n_tight = count(0);
                 if (logged++ < 200) fprintf(stderr, "[host] gc tight: a load: free-space divisor %lu -> %d (heap %lld MB)\n", div0, g_tight, (long long)(heap() >> 20));
+            } else if (!loading && tight && count(0) == n_tight) {
+                // no collection ran with the tight divisor (a single stall in play, say): play's allowance is still
+                // the one its own divisor set, nothing to redo
+                set_div(div0); tight = 0;
+                if (logged++ < 200) fprintf(stderr, "[host] gc tight: play: free-space divisor back to %lu (no collection ran meanwhile)\n", div0);
             } else if (!loading && tight) {
                 set_div(div0); tight = 0;
                 // Boehm computes the allocation that triggers the next collection once per collection, with the

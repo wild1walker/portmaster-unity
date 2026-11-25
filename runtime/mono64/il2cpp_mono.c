@@ -541,8 +541,10 @@ static void *mc_main(void *arg)
     }
     return NULL;
 }
+static void fi_toggle_install(void);
 static void mono_counters_install(void)
 {
+    fi_toggle_install();
     const char *f = getenv("UA_MONO_COUNTERS");
     if (!f || !*f) return;
     pthread_t t;
@@ -1361,6 +1363,29 @@ static void fast_keep(MonoMethod *m)
         if (!g_fi[h].m) { g_fi[h].f = (invoke_fn)f; g_fi[h].code = code; __atomic_store_n(&g_fi[h].m, m, __ATOMIC_RELEASE); break; }
     }
     pthread_mutex_unlock(&g_fi_lock);
+}
+// UA_MONO64_FAST_INVOKE_TOGGLE=<file> (a measurement): each time <file> appears (checked every 0.2 s, then deleted) the
+// cached invoke is turned off or on again, logged with the time: an A/B inside one run, the same room and heat
+static void *fi_toggle_main(void *arg)
+{
+    const char *f = arg;
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        usleep(200000);
+        if (access(f, F_OK) != 0) continue;
+        unlink(f);
+        if (__atomic_load_n(&g_fi_on, __ATOMIC_RELAXED) < 0 || !m_invoke_info || !m_prof_events) continue;   // not decided yet, or no export
+        int on = !__atomic_load_n(&g_fi_on, __ATOMIC_RELAXED);
+        __atomic_store_n(&g_fi_on, on, __ATOMIC_RELAXED);
+        struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+        logf_("cached invoke toggled %s at %.1f s", on ? "on" : "off", (t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) / 1e9);
+    }
+    return NULL;
+}
+static void fi_toggle_install(void)
+{
+    const char *tg = getenv("UA_MONO64_FAST_INVOKE_TOGGLE");
+    if (tg && *tg) { pthread_t t; if (pthread_create(&t, NULL, fi_toggle_main, (void *)strdup(tg)) == 0) pthread_detach(t); }
 }
 API MonoObject *il2cpp_runtime_invoke(MonoMethod *m, void *obj, void **params, MonoObject **exc)
 {
