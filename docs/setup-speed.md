@@ -640,6 +640,53 @@ partition gives the one-partition tier's blocks, and bad tier or field names are
 (`tiers_set_the_search_of_their_blocks` in texcodec, `test_tiers_set_the_search_of_their_blocks`
 for the Python).
 
+## Where a setup's hour goes, today (2026-11-26)
+
+Hollow Knight (6x6, `medium`, scale 0.375; main at 2162ed2, with #27 - #29):
+
+| step | BattleXP G350, 64-bit (2026-11-23, before #27 - #29, `tiers` off) | arm64 container on the Mac, the whole setup (`tools/port/rehearse.sh`, the game on the USB drive) |
+|---|---|---|
+| convert: shaders, settings, audio | 16 s + 8 s | 21 s + 9 s |
+| convert: textures | **2834 s** (47 min) | 253 s |
+| convert: video (`on`; the G350 decodes VP8 in hardware: clips kept) | 0 | 77 s (opening 1017 files) |
+| convert: lazy | 45 s | 170 s (opening 1509 files: the drive) |
+| packing (android-data) | 279 s: planning and asmpatch 41 s, the tree 55 s, verify and the 1.8 GB APK 183 s | 432 s |
+| installing | 4 s | 10 s |
+| **whole setup** | **~54 min** | **16.3 min** |
+
+The container's textures step alone (`--cpus 4`, 1.5 GB, a fresh copy of the game): `tiers` off 345 s (astc-encoder 263 s of CPU), the
+medium tiers of "Search settings by guided tier" (one candidate, no 2-plane, no mode-0 pre-pass, index limits 82 / 60) 262 s (212 s). On the
+handheld the textures step is still ~90 % of the setup, and astc-encoder is most of it.
+
+The samples on the muOS RG34XX-SP (H700; `convert --steps textures` on a fresh copy, the cache dropped, one hold each):
+
+| sample | setting | wall | astc-encoder (CPU) |
+|---|---|---|---|
+| Hollow Knight: globalgamemanagers(.assets), sharedassets0, 6, 34 (223 MB, 80 textures, 99 levels) | 6x6 `medium` (the port's High) | 76 / 75 s | 123 s |
+| | 6x6 `medium`, medium tiers | 57 s (-25 %) | 83 s |
+| | 6x6 `fast` (the port's Low) | 51 s (-33 %; 48 s in a compare run) | 62 s |
+| | 6x6 `fast`, the fast tiers (no 2-plane, one candidate, index limits 26 / 28) | 52 s (no gain over `fast`) | |
+| | 5x5 `medium` / `fast` | 65 / 47 s | 98 / 62 s |
+| Cuphead S1-like: globalgamemanagers, sharedassets3, 8, atlas_player, atlas_bakery, tex_screen_fx (118 MB, 193 textures) | 4x4 `fast`, the ASTC guide | 53 s | 16.5 s (decoding and scaling are most of it) |
+| | the same with the fast tiers | 59 s | 16.6 s (the guide sets the guided levels' searches) |
+
+The PSNR of the Hollow Knight sample (every block, against the pixels encoded): `medium` 34.21 dB (worst 1 % of blocks 19.40),
+`fast` 33.68 dB (18.90); 5x5: 37.35 (21.54) and 36.72 (21.03).
+
+**Not worth doing (measured)**:
+
+- *Identical textures encoded once*: Hollow Knight's whole game (3432 textures converted, 3279 MB of image data) has 30 textures
+  whose image data, format, size and choice repeat an earlier one's: 7.2 MB, 0.2 % (a counter in the textures step, not kept). Cuphead
+  had none (above).
+- *Textures already in a format Mali reads*: ETC2 and ASTC textures are not in `convertible()`: the step leaves them as they are already.
+- *Batching tiny textures*: astc-encoder's per-call cost (four threads started, a context reset) is microseconds against Hollow
+  Knight's 3495 calls and 263 s.
+- *Unpacking only the needed files*: of Hollow Knight's GOG installer (5122 MB unpacked) the setup does not need UnityPlayer.so,
+  the launcher's libraries, MonoBleedingEdge and Plugins: 45 MB, under 1 % of the unpacking's writes.
+- *Packing straight into the APK*: the APK (1.8 GB, stored) is one file, so every byte of the game is written into it once whatever
+  the tree does; what writing the converted files straight into it would save is the tree's copy of the 380 inlined files (the G350:
+  part of the tree's 55 s, of a 54-minute setup), against the regression run and the rig reading the tree.
+
 ## The setup on a PC: tools/prepatch (2026-10-31)
 
 [tools/prepatch](../tools/prepatch/README.md) is a web page that runs a port's setup in the browser, with
