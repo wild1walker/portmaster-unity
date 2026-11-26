@@ -626,6 +626,9 @@ static int ignored(const char *cls_full, const char *cls, const char *fname)
 static int skip_field(const struct plan *p, const char *ns, const char *fname)
 {
     (void)p;
+    // the port's own patches' bookkeeping (tools/asmpatch): e.g. PlayMaker's "<asmpatch>loopCountsReset", a snapshot
+    // of a count of loop-count writes across every FSM, so it follows objects the check leaves out too
+    if (!strncmp(fname, "<asmpatch>", 10)) return 1;
     if (strncmp(ns, "System.Collections", 18)) return 0;
     static const char *const hashy[] = { "buckets", "_buckets", "m_buckets", "hashCode", "_hashCode", "next", "_next", NULL };
     for (int i = 0; hashy[i]; i++) if (!strcmp(fname, hashy[i])) return 1;

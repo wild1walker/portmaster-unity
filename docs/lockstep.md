@@ -60,6 +60,7 @@ differences, or the game is not deterministic under the checker and nothing it s
 | `UA_LOCKSTEP_IGNORE=<class>[.<field>][,...]` | fields left out of the hash; a class alone: its scripts and their transforms left out (what the checker cannot fix, such as an object living as long as its particles; a class by its short or full name) |
 | `UA_LOCKSTEP_UNITY_CLOCK=0` | leave Unity's own monotonic clock alone |
 | `UA_LOCKSTEP_AUDIO=0` | the silent sound output on the clock again, not paced by frames |
+| `UA_LOCKSTEP_LOADS=0` | scene loads not held to the frame |
 | `UA_LOCKSTEP_NUDGE=<class>.<field>@<frame>[+<delta>]` | a test aid that changes the game: `<delta>` added to that number field of every script of the class after `<frame>` |
 
 ## What makes a replay the same
@@ -95,9 +96,12 @@ differences, or the game is not deterministic under the checker and nothing it s
   `isPlaying`, a clip ending) then follows the frames (`UA_LOCKSTEP_AUDIO=0`: on the clock again). Only with
   the silent output: with a sound device the clock is the card's.
 - **Loads.** Unity reads a scene on its loading threads (`Loading.PreloadManager`, `Loading.AsyncRead`)
-  while frames go on; how many frames that takes depends on the card. After every frame the checker waits
-  until those threads sleep (`W` lines: how long), so a load's reading is done in the same frames however
-  fast the card is.
+  while frames go on; how many frames that takes depends on the card. The internal call behind
+  `SceneManager.LoadScene(Async)` is wrapped (64-bit players) to note the `AsyncOperation` it returns, and after
+  each frame UnityMain waits until every noted load has read its scene (progress 0.9 or done; `L` lines: how
+  long; 10 s gives up, logged; `UA_LOCKSTEP_LOADS=0`: off). After every frame the checker also waits until the
+  loading threads sleep (`W` lines). Waiting for the threads alone was not enough: Hollow Knight's save load
+  once finished a frame later.
 
 ## What it sees, and what it does not
 
@@ -111,7 +115,9 @@ Not seen (a change there shows only when it reaches the above):
 - inactive GameObjects and their scripts; static fields; physics bodies' velocities and other native-only
   state (Rigidbody2D, Animator, particle systems), except through the transforms and scripts they move;
 - which engine object a reference points at (only its class and whether it is alive), `IntPtr` fields,
-  `UnityEngine.Object`'s own fields (native pointers, instance ids), `System.Guid` fields (`Guid.NewGuid` is
+  `UnityEngine.Object`'s own fields (native pointers, instance ids), the port's own patches' bookkeeping
+  (fields named `<asmpatch>...`: PlayMaker's `loopCountsReset` counts writes across every FSM, the left-out
+  objects' too), `System.Guid` fields (`Guid.NewGuid` is
   random each run: InControl names its devices so), delegates, reflection objects, and the hash-derived fields
   of `System.Collections` and their nested types (`_buckets`, `Entry.hashCode`, `next`: object hash codes
   follow addresses and instance ids, a `Dictionary` keyed by GameObjects has others each run; the entries'
@@ -174,9 +180,21 @@ Best A against A so far: 4992 of 5000 frames the same with `UA_LOCKSTEP_IGNORE=A
 (the 8 that differ: one `PlayAudioAndRecycle` returned to the pool 8 frames apart), 4987 of 5000 with the sound
 paced and only `ParticleSystemAutoDestroy` ignored (the same object, 13 frames). Every load landed in the same
 frame in those runs; one later pair had the save's load finish a frame apart (1215 against 1216), so the
-loading-thread wait is not yet a guarantee. A vs A with 0 differences over the whole session is not reached yet.
+loading-thread wait was not a guarantee (now loads are held: below).
 
-Open: the save load's frame (the wait for the loading threads sees threads asleep, not a load done: holding the
-frame until `AsyncOperation.isDone` or Unity's preload queue is empty would be exact); sound objects recycled on a
-clip's end (FMOD's mixer runs ahead of the paced output by its own buffer); particle systems (their seed and
-simulation are Unity's own).
+With the loads held (`L` lines; 2026-11-27), same record, `UA_LOCKSTEP_IGNORE=ParticleSystemAutoDestroy,PlayAudioAndRecycle,ObjectPool`:
+
+| pair | frames the same | what still differed |
+|---|---|---|
+| x1, x2 | 4992 of 5000 | 3731: PlayMaker's `<asmpatch>loopCountsReset` (the patch's write count, which counts the left-out objects' FSMs too): now left out |
+| v1, v2 | 4991 of 5000 | 3989-3997: a `ParticleSystemAutoRecycle` (the particle case) |
+| t1, t2 (also `ParticleSystemAutoRecycle` ignored) | 896 of 5000 | 897: `AudioLoopMaster` (the menu's music sync) a frame apart, so the save's load started a frame later |
+
+All three loads landed in the same frames whenever they started in the same frame (held 1.2-2.7 s each, none
+gave up). A vs A with 0 differing frames is still not reached: the sound output paced by frames does not make
+the mixer's progress exact (FMOD's mixer runs ahead by its own buffer), and the menu's music sync then moves the
+game a frame now and then.
+
+Open: the sound mixer's progress (FMOD's own thread; exact would be FMOD's output in non-realtime mode, mixed
+on the frame); sound objects recycled on a clip's end; particle systems (their seed and simulation are Unity's
+own).
