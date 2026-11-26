@@ -21,6 +21,7 @@
 //                               loading threads ("Loading.*") are asleep: a scene's files are read in the same
 //                               frames however fast the card is
 //   UA_LOCKSTEP_CLOCK=0         leave the managed clocks alone (below)
+//   UA_LOCKSTEP_LOADS=0         scene loads not held to the frame (hold_loads below; 64-bit players)
 //   UA_LOCKSTEP_AUDIO=0         the silent sound output (ANDROID_SLES_OUTPUT=none) on the clock, not paced by frames
 //   UA_LOCKSTEP_UNITY_CLOCK=0   leave Unity's own clock on UnityMain alone (unity_clock below)
 //   UA_LOCKSTEP_EVENT_CLOCK=0   the input events keep the real uptime as their times
@@ -185,8 +186,65 @@ static int name_is(const char *name, const char *want)
     size_t n = strlen(want);
     return !strncmp(name, want, n) && (name[n] == 0 || name[n] == '(');
 }
+// Scene loads held to the frame (UA_LOCKSTEP_LOADS, on unless 0; 64-bit players): the internal call behind
+// SceneManager.LoadScene(Async) is wrapped to note the AsyncOperation it returns, and after
+// each frame UnityMain waits until every noted load has read its scene (progress 0.9, or done): what a load does
+// on its own threads is then over before the next frame however fast the card is, and its main-thread part comes
+// in the same frames every run. A wait over 10 s gives up (logged).
+static FILE *g_hash;
+static double now_ms(void);
+#define MAX_OPS 16
+static int g_loads = 1;
+static void *g_ops[MAX_OPS];                // the native AsyncOperation (2023+) or the managed one
+static int g_nops, g_ops_native, g_load_timeouts;
+static long g_loads_noted;
+static double g_load_wait_ms;
+typedef uintptr_t (*any_fn)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+static any_fn r_load;
+static float (*r_progress)(void *);         // AsyncOperation.get_progress(_Injected): the managed object or the native one
+static int (*r_isdone)(void *);
+static void note_op(uintptr_t op, int native)
+{
+    if (!op || g_nops >= MAX_OPS) return;
+    g_ops_native = native;
+    g_ops[g_nops++] = (void *)op;
+    g_loads_noted++;
+}
+#if defined(__aarch64__)
+// (any arguments of the integer class, up to 8: passed through as they came)
+static uintptr_t w_load(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e, uintptr_t f, uintptr_t g, uintptr_t h)
+{ uintptr_t op = r_load(a, b, c, d, e, f, g, h); note_op(op, g_ops_native); return op; }
+#endif
+static void hold_loads(long frame)
+{
+    if (!g_nops || !r_progress) { g_nops = 0; return; }
+    double t0 = now_ms();
+    for (int i = 0; i < g_nops; i++) {
+        for (;;) {
+            if ((r_isdone && (r_isdone(g_ops[i]) & 0xff)) || r_progress(g_ops[i]) >= 0.9f) break;
+            if (now_ms() - t0 > 10000) { g_load_timeouts++; fprintf(stderr, "[lockstep] frame %ld: a load still reading after 10 s: not held\n", frame); break; }
+            struct timespec ts = { 0, 500000 }; nanosleep(&ts, NULL);
+        }
+    }
+    g_nops = 0;
+    double ms = now_ms() - t0;
+    g_load_wait_ms += ms;
+    if (g_hash) fprintf(g_hash, "L %ld %.1f\n", frame, ms);
+}
 static const void *wrap_icall(const char *name, const void *fn)
 {
+#if defined(__aarch64__)
+    if (g_loads && name && fn) {
+        const char *c = strstr(name, "::");
+        if (c && (name_is(c + 2, "LoadSceneAsyncNameIndexInternal") || name_is(c + 2, "LoadSceneAsyncNameIndexInternal_Injected"))) {
+            g_ops_native = strstr(c, "_Injected") != NULL; r_load = (any_fn)fn; return (const void *)w_load;
+        }
+        if (name_is(name, "UnityEngine.AsyncOperation::get_progress_Injected") || (!r_progress && name_is(name, "UnityEngine.AsyncOperation::get_progress")))
+            r_progress = (float (*)(void *))fn;
+        if (name_is(name, "UnityEngine.AsyncOperation::get_isDone_Injected") || (!r_isdone && name_is(name, "UnityEngine.AsyncOperation::get_isDone")))
+            r_isdone = (int (*)(void *))fn;
+    }
+#endif
     if (g_clock && name && fn) {
         if (name_is(name, "UnityEngine.Time::get_realtimeSinceStartup")) return (const void *)w_realtime;
         if (name_is(name, "UnityEngine.Time::get_realtimeSinceStartupAsDouble")) return (const void *)w_realtime_d;
@@ -1086,6 +1144,8 @@ void lockstep_init(void)
     if (g_mode != M_HASH) up_set_input_tap(tap);
     // the silent sound output (ANDROID_SLES_OUTPUT=none, a test run's) takes a frame's time of sound after each frame
     // instead of on the clock: the game's sound clock (AudioSource.time, isPlaying, a clip's end) follows the frames
+    const char *ld = getenv("UA_LOCKSTEP_LOADS");
+    if (ld && !strcmp(ld, "0")) g_loads = 0;
     const char *au = getenv("UA_LOCKSTEP_AUDIO");
     g_audio = !(au && !strcmp(au, "0"));
     if (g_audio) android_sles_set_paced(1);
@@ -1106,6 +1166,7 @@ void lockstep_frame(void)
     if (g_hash && g_started) hash_frame(frame);
     int n = give_inputs(frame);
     if (n && g_hash) fprintf(g_hash, "I %ld %d\n", frame, n);
+    hold_loads(frame);
     if (g_audio) android_sles_pace(frame, g_fps);
     settle(frame);
     if (g_hash && frame % 60 == 0) fflush(g_hash);
@@ -1127,7 +1188,7 @@ void lockstep_flush(void)
         fclose(g_hash); g_hash = NULL;
     }
     fprintf(stderr, "[lockstep] %ld frames (the clock fixed from frame %ld); hashing %.2f ms a frame (%ld frames, %llu objects followed, %d classes), "
-            "%.0f ms waited for loading threads, capture step set again %d times; clock reads: realtime %ld+%ld, TickCount %ld+%ld, Stopwatch %ld, DateTime %ld; pad events dropped %d\n",
-            frame, g_start_frame, g_hashed ? g_hash_ms / g_hashed : 0, g_hashed, (unsigned long long)g_walk_nodes, g_nplans, g_wait_ms, g_reapplied,
+            "%.0f ms waited for loading threads, %ld scene loads held (%.0f ms, %d gave up), capture step set again %d times; clock reads: realtime %ld+%ld, TickCount %ld+%ld, Stopwatch %ld, DateTime %ld; pad events dropped %d\n",
+            frame, g_start_frame, g_hashed ? g_hash_ms / g_hashed : 0, g_hashed, (unsigned long long)g_walk_nodes, g_nplans, g_wait_ms, g_loads_noted, g_load_wait_ms, g_load_timeouts, g_reapplied,
             g_clock_reads[0], g_clock_reads[1], g_clock_reads[2], g_clock_reads[3], g_clock_reads[4], g_clock_reads[5], g_dropped);
 }

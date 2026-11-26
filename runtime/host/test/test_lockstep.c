@@ -12,6 +12,7 @@
 //   replay   (after record, its file) the same events after the same frames, the pad's own dropped, quit after the last
 //   nudge    UA_LOCKSTEP_NUDGE=Hero.hp@2+5: hp 5 more after frame 2, logged
 //   settle   a thread named Loading.* busy 150 ms: the frame waits for it
+//   (hash, 64-bit) a scene load noted through its wrapped internal call: the frame waits until it has read (progress 0.9)
 #define _GNU_SOURCE
 #include "../lockstep.h"
 #include "../../jni/unityplayer.h"
@@ -197,6 +198,11 @@ static struct { const char *name; const void *fn; } icalls[16];
 static int nicalls;
 static void add_icall(const char *name, const void *fn) { if (nicalls < 16) { icalls[nicalls].name = name; icalls[nicalls++].fn = fn; } }
 static const void *icall(const char *name) { for (int i = nicalls - 1; i >= 0; i--) if (!strcmp(icalls[i].name, name)) return icalls[i].fn; return NULL; }
+// a scene load (2023+'s form: the native AsyncOperation back): read after 5 looks at its progress
+static int fake_op, progress_calls;
+static uintptr_t fake_load(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d) { (void)a; (void)b; (void)c; (void)d; return (uintptr_t)&fake_op; }
+static float fake_progress(void *op) { return op == &fake_op && ++progress_calls >= 5 ? 0.9f : 0.5f; }
+static int fake_isdone(void *op) { (void)op; return 0; }
 static void *jit_init(const char *f, const char *v) { (void)f; (void)v; return (void *)1; }
 static float realtime_orig(void) { return -1; }
 
@@ -319,6 +325,12 @@ int main(int argc, char **argv)
         void *(*init)(const char *, const char *) = lockstep_dlsym_hook("mono_jit_init_version", (void *)jit_init);
         CHECK(init != jit_init && init("x", "v") == (void *)1, "mono_jit_init_version not wrapped");
         CHECK(icall("UnityEngine.Time::get_deltaTime") == (void *)realtime_orig, "another icall wrapped");
+        add("UnityEngine.SceneManagement.SceneManagerAPIInternal::LoadSceneAsyncNameIndexInternal_Injected", (const void *)fake_load);
+        add("UnityEngine.AsyncOperation::get_progress_Injected", (const void *)fake_progress);
+        add("UnityEngine.AsyncOperation::get_isDone_Injected", (const void *)fake_isdone);
+        uintptr_t (*load)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t) =
+            (uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t))
+            icall("UnityEngine.SceneManagement.SceneManagerAPIInternal::LoadSceneAsyncNameIndexInternal_Injected");
         typedef SO_ABI float (*rt_fn)(void);
         rt_fn rt = (rt_fn)icall("UnityEngine.Time::get_realtimeSinceStartup");
         int32_t (*tick)(void) = (int32_t (*)(void))icall("System.Environment::get_TickCount");
@@ -326,7 +338,15 @@ int main(int argc, char **argv)
               "the clocks not registered: realtime %p tick %p", (void *)rt, (void *)tick);
         scene();
         lockstep_init();
+#if defined(__aarch64__)
+        CHECK(load && (void *)load != (void *)fake_load && load(1, 2, 3, 4, 0, 0, 0, 0) == (uintptr_t)&fake_op, "the load call not wrapped or not passed through");
+#else
+        CHECK(load == (void *)fake_load, "the load call wrapped on 32-bit");
+#endif
         frame();
+#if defined(__aarch64__)
+        CHECK(progress_calls == 5, "the load not held to its read: %d looks at its progress", progress_calls);
+#endif
         CHECK(seeded == 42 && captured > 0.0166f && captured < 0.0167f, "clock: captureDeltaTime %g, seed %d", captured, seeded);
         float r1 = rt ? rt() : 0, r1b = rt ? rt() : 0; int32_t t1 = tick ? tick() : 0;
         frame();
