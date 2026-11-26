@@ -5,13 +5,15 @@
 # default pmu-target) and the crate cache to another (RS_CARGO_VOLUME, default pmu-cargo): Docker's
 # bind mounts of the host's disks are slow, and broke incremental builds (which stay off).
 # RS_ROOT (required) is the folder of the shared setup (env.sh); RS_MOUNTS adds -v mounts (test data,
-# scratch: volumes or read-only host folders).
+# scratch: volumes or read-only host folders). RS_IMAGE and RS_PLATFORM name another image and its
+# platform (build_pmu.sh: ua-rust-cross, linux/amd64 on x86-64 hosts); RS_TARGET_DIR another folder in
+# the target volume.
 set -euo pipefail
 wt=$(cd "$1" && pwd); shift
 : "${RS_ROOT:?set RS_ROOT (source the shared env.sh)}"
-tgt=/target/$(basename "$wt")
+tgt=${RS_TARGET_DIR:-/target/$(basename "$wt")}
 mounts=(-v "$wt:$wt" -v "${RS_TARGET_VOLUME:-pmu-target}:/target" -v "${RS_CARGO_VOLUME:-pmu-cargo}:/opt/cargo/registry")
 for m in ${RS_MOUNTS:-}; do mounts+=(-v "$m"); done
-exec docker run --rm --pull=never --platform linux/arm64 --memory "${RS_MEM:-1g}" "${mounts[@]}" \
+exec docker run --rm --pull=never --platform "${RS_PLATFORM:-linux/arm64}" --memory "${RS_MEM:-1g}" "${mounts[@]}" \
   -e CARGO_TARGET_DIR="$tgt" -e CARGO_INCREMENTAL=0 -e CARGO_BUILD_JOBS="${RS_JOBS:-2}" -e PMU_TEST_DATA="${PMU_TEST_DATA:-}" \
-  -e PMU_SCRATCH="${PMU_SCRATCH:-}" -w "$wt/setup-rs" ua-rust "$@"
+  -e PMU_SCRATCH="${PMU_SCRATCH:-}" -w "$wt/setup-rs" "${RS_IMAGE:-ua-rust}" "$@"

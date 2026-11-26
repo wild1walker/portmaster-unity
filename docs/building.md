@@ -48,16 +48,19 @@ runtime/build.sh                    # -> runtime/host/out/ua_host (+ device chec
 pulls Debian or Ubuntu base images from Docker Hub) and uses it as it is afterwards: every build
 script checks for its image first (`docker image inspect`). With the images there
 (`unity-android-loader-build`, `ua-host-armhf`, `ua-jni-build`, `ua-android-shims`,
-`ua-media-*`, `ua-build-arm64`, `ua-emu-armhf`, `ua-port-rehearse`, `ua-rust`; `docker image ls`),
+`ua-media-*`, `ua-build-arm64`, `ua-emu-armhf`, `ua-port-rehearse`, `ua-rust`, on x86-64 hosts
+also `ua-rust-cross`; `docker image ls`),
 nothing is pulled. To rebuild an image after its Dockerfile changed, remove it (`docker image rm
 <name>`).
 
 **pmu** (the setup's tool): `setup-rs/tools/build_pmu.sh <out>` (`port package` runs it) builds in
-the `ua-rust` image ([rust-setup.md](rust-setup.md#building-and-testing)) from a copy of setup-rs in
-`$TMPDIR` (default `/tmp`; removed afterwards). Its build output and the crate cache stay in two
-Docker volumes, shared by every checkout: `pmu-target` (`RS_TARGET_VOLUME`, a few GB) and
-`pmu-cargo` (`RS_CARGO_VOLUME`); `docker volume rm pmu-target` gives the space back (the next build
-starts from scratch).
+the `ua-rust` image ([rust-setup.md](rust-setup.md#building-and-testing)), on an x86-64 host in
+`ua-rust-cross` (the same compilers as cross compilers: no emulation; `PMU_IMAGE` picks either), from
+a copy of setup-rs in `$TMPDIR` (default `/tmp`; removed afterwards). Its build output and the crate
+cache stay in Docker volumes: `pmu-target` (`pmu-target-cross` for `ua-rust-cross`;
+`RS_TARGET_VOLUME`, a few GB per checkout, each in a folder of its own) and `pmu-cargo`
+(`RS_CARGO_VOLUME`, shared); `docker volume rm pmu-target` gives the space back (the next build starts
+from scratch).
 
 ## Converting and running a game by hand
 

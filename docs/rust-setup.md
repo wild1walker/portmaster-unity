@@ -657,7 +657,24 @@ cache (`RS_CARGO_VOLUME`), shared by every worktree; `RS_MEM` (1g; `build_pmu.sh
 own disk, which grows with every worktree's build (a few GB each) and does not shrink by itself:
 where that disk is short, `RS_TARGET_VOLUME` can be an absolute folder on another disk (Docker
 mounts it instead of the volume; slower, and builds stay whole, as incremental ones are off). `build_pmu.sh` copies setup-rs to `$TMPDIR` (default `/tmp`)
-first, so the binary names no checkout's folders.
+first, so the binary names no checkout's folders, and builds in a target folder of each checkout's own
+(`/target/pmu-release-<hash of the checkout's path>`; `RS_TARGET_DIR` in `rs.sh`): the copy keeps the
+files' times, by which Cargo decides what to compile again, so checkouts sharing one folder took
+each other's builds whenever the other's files were newer (a pmu of one commit with another's code).
+
+**On an x86-64 host** `build_pmu.sh` builds in `ua-rust-cross` (`setup-rs/docker/Dockerfile.cross`,
+on top of `ua-rust`, whose class database it copies): amd64 Debian bookworm with Rust 1.88.0 and the
+same compilers as Debian cross compilers (GCC 12.2 for C, the bullseye GCC 10.2.1 for the
+astc-encoder and crunch C++, binutils 2.40, musl 1.2.3), in the volume `pmu-target-cross` with all
+cores. Nothing runs emulated: a clean build takes about 10 minutes where `ua-rust` under QEMU takes two
+hours or more. Compared with `ua-rust`'s build of the same commit, every C and C++ object has the same
+code and data (the C objects' `.comment` names the cross package, `12.2.0-14` against
+`12.2.0-14+deb12u1`). The binaries are not byte-identical: Cargo hashes the host (`rustc -vV`) into
+each crate's metadata, which is in every mangled symbol name, so the Rust code is laid out
+differently. What they make is the same: a whole convert (shaders, settings, audio, quality,
+textures) of a Unity 2018.4 game's data with each, all 155 files byte-identical (sha256).
+`PMU_IMAGE=ua-rust` builds emulated as before. The tests still run in `ua-rust` (`rs.sh`; they run
+the reference Python).
 
 ```bash
 RS_ROOT=<the shared setup's folder> setup-rs/tools/rs.sh <worktree> cargo test
