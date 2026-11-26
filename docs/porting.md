@@ -165,6 +165,16 @@ loader). Hollow Knight's release (portmaster-hollowknight, 2026-11-09) carries b
   `sed` too) and takes the 64-bit build where it is older; a version it can not read counts as new enough.
   A 32-bit build set up before that check, on such a system, gets a message naming `HK_ROUTE=64` instead
   of a game that closes.
+- **The 32-bit GL driver.** The 32-bit libraries can be there without a 32-bit GLES 3 driver: muOS on
+  the TrimUI Smart Pro has `/lib/ld-linux-armhf.so.3` (PortMaster's `DEVICE_HAS_ARMHF=Y`, glibc new
+  enough) and a 32-bit fbdev libEGL, but no GLES 3 functions in its 32-bit libGLESv2. A tester's log
+  of Hollow Knight 2026.11.19 there (2026-11-26): `32-bit build (32-bit libraries: yes)`, `[present]
+  GLES 3 functions missing`, `[glrec] no GLES 3 driver`, then Unity's "Your device does not match the
+  hardware requirements of this application." dialog, which ua_host does not show: a black screen
+  until the exit hotkey. `HK_ROUTE=64` and a new setup are the way out on that release. The 64-bit-only
+  releases ("Rules for every port" above) end it; a launcher that keeps a 32-bit route has to check the
+  32-bit driver for GLES 3 too, not only the loader. (The 2026.11.19 README thought TrimUI handhelds
+  had no 32-bit libraries.)
 - **Which build, in order:** `HK_ROUTE` in port.env (with or without `export`), then a finished build's
   mark (`.setup_done`, then `.setup_done64`), only then a setup under way (`gamedata/.setup`, `.setup64`),
   then the libraries. With the work folders first, a stopped 32-bit setup's folder took a finished 64-bit
