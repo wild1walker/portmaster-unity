@@ -1,0 +1,27 @@
+# ua-rust-cross: setup/pmu built on an x86-64 PC without emulation (setup-rs/tools/build_pmu.sh picks it on
+# x86-64 hosts). The same compilers as ua-rust (Dockerfile + Dockerfile.gcc10) as Debian cross compilers, so
+# the objects are those ua-rust makes: Rust 1.88.0 with the aarch64 musl target, GCC 12.2 for C
+# (aarch64-linux-musl-gcc: the musl-tools wrapper over aarch64-linux-gnu-gcc), GCC 10.2.1 for the
+# astc-encoder and crunch C++ (TC_CXX: the Python wheel's compiler, Dockerfile.gcc10), binutils 2.40,
+# musl 1.2.3 (arm64 multiarch). UnityPy's class database and licence (build_pmu.sh: PMU_TPK) come from
+# ua-rust's /opt/pylibs.
+#   docker build -t ua-rust-cross -f setup-rs/docker/Dockerfile.cross setup-rs/docker   (needs ua-rust)
+FROM --platform=linux/arm64 ua-rust AS ref
+FROM --platform=linux/amd64 debian:bookworm
+RUN echo "deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250101T000000Z bullseye main" \
+        > /etc/apt/sources.list.d/bullseye.list \
+    && dpkg --add-architecture arm64 && apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates git pkg-config make \
+       gcc g++ gcc-12-aarch64-linux-gnu gcc-aarch64-linux-gnu g++-10-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+       musl-dev:arm64 musl:arm64 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && printf '#!/bin/sh\nexec "${REALGCC:-aarch64-linux-gnu-gcc}" "$@" -specs "/usr/lib/aarch64-linux-musl/musl-gcc.specs"\n' \
+        > /usr/bin/aarch64-linux-musl-gcc && chmod 755 /usr/bin/aarch64-linux-musl-gcc \
+    && ls /usr/lib/aarch64-linux-musl/musl-gcc.specs /usr/share/doc/musl/copyright >/dev/null \
+    && aarch64-linux-gnu-gcc --version | head -1 && aarch64-linux-gnu-g++-10 --version | head -1
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.88.0 -t aarch64-unknown-linux-musl
+COPY --from=ref /opt/pylibs /opt/pylibs
+ENV TC_CXX=aarch64-linux-gnu-g++-10 \
+    CC_aarch64_unknown_linux_musl=aarch64-linux-musl-gcc \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc

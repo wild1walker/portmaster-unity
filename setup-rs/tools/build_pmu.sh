@@ -15,6 +15,18 @@ mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 B=$(mktemp -d "${TMPDIR:-/tmp}/build-pmu.XXXXXX")
 trap 'rm -rf "$B"' EXIT
+# The image: ua-rust on an arm64 host; on an x86-64 host ua-rust-cross (setup-rs/docker/Dockerfile.cross:
+# the same compilers as cross compilers, nothing emulated, all cores), with its own target volume (its
+# build scripts are x86-64 programs). PMU_IMAGE=ua-rust | ua-rust-cross picks one.
+img=${PMU_IMAGE:-}
+[ -n "$img" ] || case "$(uname -m)" in x86_64|amd64) img=ua-rust-cross ;; *) img=ua-rust ;; esac
+case "$img" in
+  ua-rust) ;;
+  ua-rust-cross)
+    docker image inspect ua-rust-cross >/dev/null 2>&1 || { echo "no image ua-rust-cross: docker build -t ua-rust-cross -f setup-rs/docker/Dockerfile.cross setup-rs/docker" >&2; exit 1; }
+    export RS_IMAGE=ua-rust-cross RS_PLATFORM=linux/amd64 RS_TARGET_VOLUME=${RS_TARGET_VOLUME:-pmu-target-cross} RS_JOBS=${RS_JOBS:-$(nproc)} ;;
+  *) echo "PMU_IMAGE: ua-rust or ua-rust-cross, not $img" >&2; exit 1 ;;
+esac
 # One target folder per clone (named by its path): the copy keeps the files' times, and Cargo decides
 # by them what to compile again, so clones sharing a folder took each other's builds of the C and Rust
 # sources whenever the other's files were newer (a pmu of one commit with another's code)
