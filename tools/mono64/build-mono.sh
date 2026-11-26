@@ -143,9 +143,10 @@ fi
 #   managed-alloc (MONO64_MANAGED_ALLOC=1|0; default 1 for 6000.0, 0 for the others): the JIT's
 #     allocations of small objects, arrays and strings off the thread's Boehm free list
 #     (docs/mono-arm64.md, "A managed allocator for Boehm")
-#   invoke-info (the lines that have one: 2017.4): mono_unity_runtime_invoke_info exported, the runtime-invoke
+#   invoke-info (the lines that have one: 2017.4, 6000.0): mono_unity_runtime_invoke_info exported, the runtime-invoke
 #     wrapper and compiled code mono_jit_runtime_invoke keeps for a method, for the bridge's cached invoke
-#     (UA_MONO64_FAST_INVOKE, docs/mono-arm64.md)
+#     (UA_MONO64_FAST_INVOKE, docs/mono-arm64.md); 6000.0's also mono_unity_runtime_invoke_profiled (Mono 6 has no
+#     mono_profiler_get_events) and declines while threads make blocking transitions (coop/hybrid suspend)
 #   gc-census (2017.4: bdwgc 7.6 lacks them): GC_enumerate_reachable_objects_inner and GC_get_kind_and_size, as
 #     in bdwgc 8, for ua_host's UA_GC_CENSUS (the live heap by class)
 #   reset-allocd (2017.4): GC_ua_reset_allocd, what a collection's end does to the allocation counters, without

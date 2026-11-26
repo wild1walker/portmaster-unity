@@ -1,0 +1,47 @@
+--- a/mono/mini/mini-runtime.c
++++ b/mono/mini/mini-runtime.c
+@@ -3450,7 +3450,44 @@
+ 	}
+ 	return result;
+ }
++
++/*
++ * mono_unity_runtime_invoke_info: (portmaster-unity, tools/mono64) what mono_jit_runtime_invoke calls
++ * METHOD with in the current domain once its first call has made it: the runtime-invoke wrapper
++ * (*INVOKE) and the method's compiled code (*COMPILED). FALSE before that first call, while the
++ * class's initialisation has not run (mono_jit_runtime_invoke runs it first), for a method it calls
++ * another way (the dynamic call path, the interpreter, LLVM-only), and while threads make blocking
++ * transitions (coop or hybrid suspend: mono_runtime_invoke enters a GC-unsafe region around the call).
++ * With exc given, a call of an initialised class's method then does nothing but *exc = NULL and
++ * INVOKE (obj, params, exc, COMPILED) (catchExcInMonoError is FALSE with exc given): the bridge's cached
++ * invoke calls the same wrapper itself and leaves out the lookup.
++ */
++MONO_API gboolean
++mono_unity_runtime_invoke_info (MonoMethod *method, gpointer *invoke, gpointer *compiled)
++{
++	MonoDomain *domain = mono_domain_get ();
++	RuntimeInvokeInfo *info;
+ 
++	if (mono_ee_features.force_use_interpreter || mono_llvm_only || !domain || mono_threads_is_blocking_transition_enabled ())
++		return FALSE;
++	info = (RuntimeInvokeInfo *)mono_conc_hashtable_lookup (domain_jit_info (domain)->runtime_invoke_hash, method);
++	if (!info || info->dyn_call_info || info->use_interp || !info->vtable || !info->vtable->initialized || !info->runtime_invoke)
++		return FALSE;
++	*invoke = info->runtime_invoke;
++	*compiled = info->compiled_method;
++	return TRUE;
++}
++
++/*
++ * mono_unity_runtime_invoke_profiled: (portmaster-unity) nonzero while a profiler takes the method
++ * begin/end invoke events mono_runtime_invoke raises (the bridge then takes the general path).
++ */
++MONO_API int
++mono_unity_runtime_invoke_profiled (void)
++{
++	return MONO_PROFILER_ENABLED (method_begin_invoke) || MONO_PROFILER_ENABLED (method_end_invoke);
++}
++
+ MONO_SIG_HANDLER_FUNC (, mono_sigfpe_signal_handler)
+ {
+ 	MonoException *exc = NULL;

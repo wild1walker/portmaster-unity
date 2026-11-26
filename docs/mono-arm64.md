@@ -1271,6 +1271,38 @@ the host's helpers that look the runtime up by name (`jitwarm`, the hitch namer)
 (`Assertion at object.c:673, condition 'callbacks.compile_method' not met`, then a crash). The scan now
 takes only `<name>.so` and `<name>.so.<digits>` (runtime/host/plugins.c).
 
+### The cached invoke on 6000.0 (Hollow Knight, 2026-11-26)
+
+Until now only the 2017.4 runtime had the export, so Hollow Knight's 6000.0 build always took the general path. A
+King's Pass profile on the RG34XX-SP (muOS, 64-bit, the lockstep record replayed with the clock fixed and no hashing,
+frame cap off) showed it: `mono_conc_hashtable_lookup` from `mono_runtime_invoke` 0.6 % of UnityMain's samples, the
+rest of the path (`mono_runtime_invoke`, `invoke_void`, the runtime-invoke wrapper) another 0.7 %. (The 0.5 % in
+`mono_method_signature` under `il2cpp_method_get_param_count` in that profile came from that test copy's bridge, older
+than aa8d3a9, which keeps the count per method; it is gone with the current bridge.)
+
+`tools/mono64/patches/invoke-info-6000.0.patch` exports the same `mono_unity_runtime_invoke_info` from Mono 6's
+`mono_jit_runtime_invoke`. Mono 6 differs in three places, each handled: `mono_runtime_invoke` enters a GC-unsafe region
+around the call, which does something only while threads make blocking transitions (coop or hybrid suspend), so the
+export says no then (Unity's Mono runs preemptive suspend); the interpreter and LLVM-only modes are declined as before,
+plus `info->use_interp`; and there is no `mono_profiler_get_events`, so the runtime also exports
+`mono_unity_runtime_invoke_profiled` (a profiler takes the method begin/end invoke events) and the bridge reads that
+instead. With `exc` given, Mono 6's `catchExcInMonoError` is false, so the wrapper call is all that is left.
+
+Checks: `tools/mono64/fitest` on the new 6000.0 runtime with Hollow Knight's class libraries: 35 cases the same,
+`RESULT 0 differ`. Lockstep (the 5000-frame muOS record, `UA_LOCKSTEP_IGNORE=ParticleSystemAutoDestroy,
+ParticleSystemAutoRecycle,PlayAudioAndRecycle,ObjectPool`, the new runtime and bridge): A against A
+(`UA_MONO64_FAST_INVOKE=0` twice) 5000 of 5000 frames the same, A against B (the cached invoke on) 5000 of 5000.
+Profiles (King's Pass from frame 2000, 25 s, 500 Hz, cap off, A B A B in one hold):
+
+| run | fps | UnityMain on a CPU, ms a frame |
+|---|---|---|
+| `UA_MONO64_FAST_INVOKE=0` | 55.7, 55.8 | 17.25, 17.23 |
+| cached (default) | 56.1, 56.4 | 16.99, 16.93 |
+
+0.28 ms a frame less (1.6 %); in the cached runs `mono_conc_hashtable_lookup` and `mono_runtime_invoke` no longer show.
+A port gets it when its 6000.0 runtime is built again with `tools/mono64/build-mono.sh` (the bridge already uses it
+when the export is there).
+
 ### 8-byte granules for 2017.4, and the tight divisor's load detection (2026-11-25)
 
 Enter the Gungeon's managed heap is most of the 64-bit build's extra memory on a 1 GB handheld (its DLLs are

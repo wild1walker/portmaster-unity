@@ -1341,6 +1341,10 @@ static pthread_mutex_t g_fi_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_fi_on = -1;
 static int (*m_invoke_info)(MonoMethod *, void **, void **);
 static int (*m_prof_events)(void);
+// Mono 6 has no mono_profiler_get_events: its runtime (invoke-info-6000.0.patch) exports whether a profiler takes
+// the method begin/end invoke events, given here as 2017.4's MONO_PROFILE_METHOD_EVENTS bit
+static int (*m_invoke_profiled)(void);
+static int prof_events_mono6(void) { return m_invoke_profiled() ? 1 << 16 : 0; }
 static inline size_t fi_slot(MonoMethod *m) { return ((uintptr_t)m >> 4) * 2654435761u % FI_SLOTS; }
 static int fast_lookup(MonoMethod *m, invoke_fn *f, void **code)
 {
@@ -1394,6 +1398,8 @@ API MonoObject *il2cpp_runtime_invoke(MonoMethod *m, void *obj, void **params, M
         const char *e = getenv("UA_MONO64_FAST_INVOKE");
         m_invoke_info = (int (*)(MonoMethod *, void **, void **))dlsym(g_mono, "mono_unity_runtime_invoke_info");
         m_prof_events = (int (*)(void))dlsym(g_mono, "mono_profiler_get_events");
+        if (!m_prof_events && (m_invoke_profiled = (int (*)(void))dlsym(g_mono, "mono_unity_runtime_invoke_profiled")))
+            m_prof_events = prof_events_mono6;   // Mono 6 (6000.0): no mono_profiler_get_events; the export says it
         g_fi_on = (!e || strcmp(e, "0")) && m_invoke_info && m_prof_events;
         logf_("cached invoke: %s", g_fi_on ? "on (each method's runtime-invoke wrapper and code kept after its first call)"
                                            : m_invoke_info ? "off" : "off (the runtime has no mono_unity_runtime_invoke_info)");
