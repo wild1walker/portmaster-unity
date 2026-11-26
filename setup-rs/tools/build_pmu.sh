@@ -15,9 +15,13 @@ mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 B=$(mktemp -d "${TMPDIR:-/tmp}/build-pmu.XXXXXX")
 trap 'rm -rf "$B"' EXIT
+# One target folder per clone (named by its path): the copy keeps the files' times, and Cargo decides
+# by them what to compile again, so clones sharing a folder took each other's builds of the C and Rust
+# sources whenever the other's files were newer (a pmu of one commit with another's code)
+export RS_TARGET_DIR=/target/pmu-release-$(printf %s "$PM" | sha256sum | cut -c1-12)
 RS_ROOT=${RS_ROOT:-$B} RS_MOUNTS= RS_MEM=${RS_MEM:-3g} "$HERE/rs.sh" "$PM" bash -c '
   set -euo pipefail
-  export CARGO_TARGET_DIR=/target/pmu-release PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk
+  export PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk
   T=aarch64-unknown-linux-musl; O=/tmp/out; mkdir -p $O /build; cp -a . /build/setup-rs; cd /build/setup-rs
   command -v "${TC_CXX:-none}" >/dev/null || { echo "ua-rust has no GCC 10 (TC_CXX; setup-rs/docker/Dockerfile.gcc10): the ASTC blocks would not all match" >&2; exit 1; }
   cargo build -q --locked --release --target $T -p pmu >&2

@@ -657,7 +657,10 @@ cache (`RS_CARGO_VOLUME`), shared by every worktree; `RS_MEM` (1g; `build_pmu.sh
 own disk, which grows with every worktree's build (a few GB each) and does not shrink by itself:
 where that disk is short, `RS_TARGET_VOLUME` can be an absolute folder on another disk (Docker
 mounts it instead of the volume; slower, and builds stay whole, as incremental ones are off). `build_pmu.sh` copies setup-rs to `$TMPDIR` (default `/tmp`)
-first, so the binary names no checkout's folders.
+first, so the binary names no checkout's folders, and builds in a target folder of each checkout's own
+(`/target/pmu-release-<hash of the checkout's path>`; `RS_TARGET_DIR` in `rs.sh`): the copy keeps the
+files' times, by which Cargo decides what to compile again, so checkouts sharing one folder took
+each other's builds whenever the other's files were newer (a pmu of one commit with another's code).
 
 ```bash
 RS_ROOT=<the shared setup's folder> setup-rs/tools/rs.sh <worktree> cargo test

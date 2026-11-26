@@ -55,9 +55,9 @@ nothing is pulled. To rebuild an image after its Dockerfile changed, remove it (
 **pmu** (the setup's tool): `setup-rs/tools/build_pmu.sh <out>` (`port package` runs it) builds in
 the `ua-rust` image ([rust-setup.md](rust-setup.md#building-and-testing)) from a copy of setup-rs in
 `$TMPDIR` (default `/tmp`; removed afterwards). Its build output and the crate cache stay in two
-Docker volumes, shared by every checkout: `pmu-target` (`RS_TARGET_VOLUME`, a few GB) and
-`pmu-cargo` (`RS_CARGO_VOLUME`); `docker volume rm pmu-target` gives the space back (the next build
-starts from scratch).
+Docker volumes: `pmu-target` (`RS_TARGET_VOLUME`, a few GB per checkout, each in a folder of its
+own) and `pmu-cargo` (`RS_CARGO_VOLUME`, shared); `docker volume rm pmu-target` gives the space back
+(the next build starts from scratch).
 
 ## Converting and running a game by hand
 
