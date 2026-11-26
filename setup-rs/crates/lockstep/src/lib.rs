@@ -112,7 +112,8 @@ pub fn compare(a: &Run, b: &Run, max_classes: usize) -> Comparison {
     for (f, fa) in &a.frames {
         let Some(fb) = b.frames.get(f) else { continue };
         c.frames += 1;
-        if fa == fb { c.same += 1 } else {
+        // the frame's hash decides; the parts only logged (unscaledTime, deltaTime: they count from the real start) do not
+        if fa.all == fb.all { c.same += 1 } else {
             differing += 1;
             if c.first.is_none() { c.first = Some(*f) }
         }
@@ -145,6 +146,11 @@ pub fn compare(a: &Run, b: &Run, max_classes: usize) -> Comparison {
             if x != y {
                 let what = match k.as_str() {
                     "t" => "Time.time",
+                    "fc" => "Time.frameCount",
+                    "ts" => "Time.timeScale",
+                    "ut" => "Time.unscaledTime (logged only: from the real start)",
+                    "dt" => "Time.deltaTime (logged only)",
+                    "cdt" => "Time.captureDeltaTime (logged only)",
                     "rs" => "UnityEngine.Random.state",
                     "nb" => "scripts (active)",
                     "nt" => "transforms (active)",
@@ -188,21 +194,29 @@ pub fn compare(a: &Run, b: &Run, max_classes: usize) -> Comparison {
     c
 }
 
-/// A dump: objects (key -> its lines), in file order; a key seen again gets "#2", "#3"
+/// A dump: objects (key -> its lines), in file order. Objects with the same key (two scripts of one class on one
+/// GameObject: FindObjectsByType gives them in no set order) are sorted by their lines and numbered "#2", "#3"
 pub fn parse_dump(text: &str) -> Vec<(String, Vec<(String, String)>)> {
-    let mut objs: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    let mut seen: BTreeMap<String, u32> = BTreeMap::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut groups: BTreeMap<String, Vec<Vec<(String, String)>>> = BTreeMap::new();
+    let mut cur: Option<String> = None;
     for line in text.lines() {
         if let Some(k) = line.strip_prefix("O ") {
-            let n = seen.entry(k.to_string()).or_insert(0);
-            *n += 1;
-            let key = if *n > 1 { format!("{}#{}", k, n) } else { k.to_string() };
-            objs.push((key, Vec::new()));
-        } else if let Some(rest) = line.strip_prefix("  ") {
-            if let Some(o) = objs.last_mut() {
-                let (p, v) = rest.split_once(' ').unwrap_or((rest, ""));
-                o.1.push((p.to_string(), v.to_string()));
-            }
+            let g = groups.entry(k.to_string()).or_default();
+            if g.is_empty() { order.push(k.to_string()) }
+            g.push(Vec::new());
+            cur = Some(k.to_string());
+        } else if let (Some(rest), Some(k)) = (line.strip_prefix("  "), cur.as_ref()) {
+            let (p, v) = rest.split_once(' ').unwrap_or((rest, ""));
+            if let Some(o) = groups.get_mut(k).and_then(|g| g.last_mut()) { o.push((p.to_string(), v.to_string())) }
+        }
+    }
+    let mut objs = Vec::new();
+    for k in order {
+        let mut g = groups.remove(&k).unwrap_or_default();
+        g.sort();
+        for (i, lines) in g.into_iter().enumerate() {
+            objs.push((if i > 0 { format!("{}#{}", k, i + 1) } else { k.clone() }, lines));
         }
     }
     objs
@@ -272,6 +286,13 @@ F 2 0002 t=3f010000 rs=1 nb=2 nt=5 tr=9\nI 2 1\nS 3 Tutorial_01 2\nC 3 Hero 1 ac
     }
 
     #[test]
+    fn logged_parts_do_not_count() {
+        let b_text = A.replace("F 2 0002 t=3f010000", "F 2 0002 ut=4199d5e5 t=3f010000");
+        let c = compare(&parse_run(A), &parse_run(&b_text), 10);
+        assert_eq!(c.first, None, "{}", c.report);
+    }
+
+    #[test]
     fn names_the_class_and_frame() {
         let b_text = A.replace("C 3 Hero 1 ac\nF 3 0003 t=3f020000 rs=1", "C 3 Hero 1 ad\nF 3 0004 t=3f020000 rs=2");
         let c = compare(&parse_run(A), &parse_run(&b_text), 10);
@@ -300,5 +321,8 @@ F 2 0002 t=3f010000 rs=1 nb=2 nt=5 tr=9\nI 2 1\nS 3 Tutorial_01 2\nC 3 Hero 1 ac
         assert!(out.contains("/Knight[0]|Hero  data.y: A (none) B 1"), "{}", out);
         assert!(out.contains("only in A: /Gone[0]|X") && out.contains("only in B: /New[0]|Y"), "{}", out);
         assert_eq!(diff(a, a, 50).0, 0);
+        let swapped = a.replace("O /Thing[0]|Hero\n  hp 1\nO /Thing[0]|Hero\n  hp 2\n", "O /Thing[0]|Hero\n  hp 2\nO /Thing[0]|Hero\n  hp 1\n");
+        assert_ne!(swapped, a);
+        assert_eq!(diff(a, &swapped, 50).0, 0, "{}", diff(a, &swapped, 50).1);
     }
 }
