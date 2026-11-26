@@ -7,4 +7,5 @@ void fastclock_init(void);                       /* decides (UA_FAST_CLOCK, UA_C
 int fastclock_on(void);
 int fastclock_gettime(clockid_t clk, void *ts);  /* bionic's clock_gettime */
 int fastclock_gettimeofday(void *tv, void *tz);  /* bionic's gettimeofday */
+long fastclock_time(long *t);                    /* bionic's time */
 #endif

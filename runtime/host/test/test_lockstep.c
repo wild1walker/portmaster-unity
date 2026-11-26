@@ -236,6 +236,9 @@ void up_set_event_clock(int64_t (*fn)(void)) { g_clock = fn; }
 int up_inject_rec(const struct up_input_rec *r) { if (nsent < 64) { sent_frame[nsent] = frame_now; sent_ms[nsent] = g_clock ? g_clock() : -1; sent[nsent++] = *r; } return 1; }
 static int (*g_unity_hook)(int, long *, long *);
 void so_set_clock_hook(int (*hook)(int, long *, long *)) { g_unity_hook = hook; }
+static long long paced_frames; static int paced_on;
+void android_sles_set_paced(int on) { paced_on = on; }
+void android_sles_pace(long long frames, int fps) { (void)fps; paced_frames = frames; }
 void up_finish(const char *why) { (void)why; finished = (int)frame_now; }
 
 static void frame(void) { frame_now++; lockstep_frame(); }
@@ -265,7 +268,7 @@ static char *slurp(const char *path)
 }
 static uint64_t all_of(int fr) { return strtoull(hashes[fr] + 2 + strcspn(hashes[fr] + 2, " ") + 1, NULL, 16); }
 
-// Unity's clock on UnityMain: two reads in one frame 1 us apart, CLOCK_REALTIME and other threads left alone
+// Unity's clock on UnityMain: two reads in one frame the same, the wall clock answered too, other threads left alone
 static long uc_ns[3]; static int uc_other, uc_real;
 static void *unity_main(void *arg)
 {
@@ -300,7 +303,7 @@ int main(int argc, char **argv)
         CHECK(lockstep_dlsym_hook("mono_add_internal_call", x) == x && lockstep_dlsym_hook("mono_jit_init_version", (void *)jit_init) == (void *)jit_init, "off: a hook");
         lockstep_init();
         for (int i = 0; i < 10; i++) frame();
-        CHECK(!g_unity_hook, "off: a clock hook");
+        CHECK(!g_unity_hook && !paced_on, "off: a clock hook or the sound paced");
         CHECK(!g_tap && !g_clock && !asked && !lockstep_on(), "off: tap %p clock %p, Mono asked %d times", (void *)g_tap, (void *)g_clock, asked);
         CHECK(access(hp, F_OK) != 0, "off: a hash file");
     } else if (!strcmp(mode, "hash") || !strcmp(mode, "dump") || !strcmp(mode, "nudge")) {
@@ -328,13 +331,13 @@ int main(int argc, char **argv)
         float r1 = rt ? rt() : 0, r1b = rt ? rt() : 0; int32_t t1 = tick ? tick() : 0;
         frame();
         float r2 = rt ? rt() : 0; int32_t t2 = tick ? tick() : 0;
-        CHECK(r1b > r1 && r1b - r1 < 1e-5f && r2 - r1 > 0.0165f && r2 - r1 < 0.0168f && t2 - t1 >= 16 && t2 - t1 <= 17,
+        CHECK(r1b == r1 && r2 - r1 > 0.0165f && r2 - r1 < 0.0168f && t2 - t1 >= 16 && t2 - t1 <= 17,
               "virtual clock: realtime %.6f %.6f -> %.6f, tick %d -> %d", r1, r1b, r2, t1, t2);
         CHECK(g_unity_hook, "no clock hook");
         if (g_unity_hook) {
             pthread_t t; pthread_create(&t, NULL, unity_main, NULL); pthread_join(t, NULL);
             pthread_create(&t, NULL, other_thread, NULL); pthread_join(t, NULL);
-            CHECK(uc_ns[1] - uc_ns[0] == 1000 && uc_other != 0 && uc_real != 0, "Unity's clock: %ld then %ld ns, other thread %d, realtime %d",
+            CHECK(uc_ns[1] == uc_ns[0] && uc_other != 0 && uc_real == 0, "Unity's clock: %ld then %ld ns, other thread %d, wall clock %d",
                   uc_ns[0], uc_ns[1], uc_other, uc_real);
         }
         if (!strcmp(mode, "nudge")) {
@@ -345,8 +348,8 @@ int main(int argc, char **argv)
             lockstep_flush();
             char dp[600]; snprintf(dp, sizeof dp, "%s.3.dump", hp);
             char *d = slurp(dp);
-            const char *want[] = { "O /Knight[0]|Hero", "  hp 5", "  speed 8.30000019", "  name \"Knight\"", "  data.x 4", "  data.label \"crawlid\"",
-                                   "  arr[1] 2", "  target <UnityEngine.GameObject alive>", "  localPosition 1 2 3", "  enabled 1", "O /Thing[0]|CameraRig", NULL };
+            const char *want[] = { "O /Knight|Hero", "  hp 5", "  speed 8.30000019", "  name \"Knight\"", "  data.x 4", "  data.label \"crawlid\"",
+                                   "  arr[1] 2", "  target <UnityEngine.GameObject alive>", "  localPosition 1 2 3", "  enabled 1", "O /Thing|CameraRig", NULL };
             for (int i = 0; want[i]; i++) CHECK(strstr(d, want[i]), "dump: no \"%s\" in\n%s", want[i], d);
             CHECK(!strstr(d, "native") && !strstr(d, "buckets") && !strstr(d, "counter"), "dump: a field left out is there");
         } else {
@@ -401,7 +404,8 @@ int main(int argc, char **argv)
                 if (changes[st] && st != 10 && st != 12)
                     CHECK(strstr(clines[fr], " Hero 2 ") && !strstr(clines[fr], "CameraRig"), "%s: frame %d's class lines: %s", what[st], fr, clines[fr]);
             }
-            CHECK(strstr(clines[1], " Hero 2 ") && strstr(clines[1], " CameraRig 1 "), "frame 1's class lines: %s", clines[1]);
+            // CameraRig is a whole class in UA_LOCKSTEP_IGNORE: neither it nor its transform counted
+            CHECK(strstr(clines[1], " Hero 2 ") && !strstr(clines[1], "CameraRig") && strstr(hashes[1], " nb=2 nt=2 "), "frame 1's lines: %s%s", clines[1], hashes[1]);
             CHECK(strstr(hashes[16], "t=3f400000"), "Time.time in frame 16's line: %s", hashes[16]);
             CHECK(strstr(slurp(hp), "S 1 Tutorial_01 1\n") != NULL, "no scene line");
         }
@@ -420,6 +424,7 @@ int main(int argc, char **argv)
         frame(); frame(); frame(); frame();
         CHECK(finished == 6, "quit asked after frame %d", finished);
         CHECK(nsent == 3, "%d events sent", nsent);
+        CHECK(paced_on && paced_frames == 7, "the sound paced: %d, last after frame %lld", paced_on, paced_frames);
         CHECK(nsent >= 3 && sent_frame[0] == 2 && sent_frame[1] == 2 && sent_frame[2] == 4, "sent after frames %ld %ld %ld", sent_frame[0], sent_frame[1], sent_frame[2]);
         CHECK(nsent >= 3 && sent[0].kind == UP_REC_KEY && sent[0].keycode == 96 && sent[0].action == 0 && sent[1].action == 1 && sent[2].kind == UP_REC_AXES &&
               sent[2].n == 2 && sent[2].axis[1] == 16 && sent[2].value[1] == -0.5f, "the events sent");

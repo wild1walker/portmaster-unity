@@ -66,6 +66,11 @@ int android_shims_api_level(void);
 // (default 60 Hz), shared with runtime/jni's Java Choreographer. AChoreographer frame callbacks run
 // at the first vsync after they are due, with it as their frame time.
 void android_vsync_set_refresh_rate(float hz);
+/* the silent OpenSL output (ANDROID_SLES_OUTPUT=none) paced by the game's frames instead of the clock (the host's
+ * lockstep checker): set before the players open; then android_sles_pace(frames done, fps) after each frame takes
+ * that much sound from each player (opensles.c) */
+void android_sles_set_paced(int on);
+void android_sles_pace(long long frames, int fps);
 int64_t android_vsync_period_ns(void);
 int64_t android_vsync_after(int64_t t_ns);       // the first vsync strictly after t
 // A host's own looper threads (runtime/jni's Java loopers): current() names the calling thread's

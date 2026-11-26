@@ -429,6 +429,45 @@ static void *pipe_writer(void *ud)
 // card takes them, then dropped: the buffer-queue callbacks come at the pace they would with sound,
 // so the game's mixer (FMOD) and ua_host's Wwise player (its mix added here) do the same work, with
 // no device and no process. At the pipe writer's priority, as SDL's dummy driver's thread runs.
+// Frame-paced (android_sles_pace, the host's lockstep checker): no clock; after each of the game's frames the host
+// asks for the buffers of that frame's time (rate / fps a frame), taken on its own thread (UnityMain) one write at a
+// time, each after the game's mixer has queued the next (up to 50 ms), and returns once the mixer has refilled the
+// queue: what the game's sound clock says (AudioSource.time, isPlaying) is then the same after the same frames.
+#define PACED_MAX 8
+static obj *g_paced[PACED_MAX];
+static long long g_paced_done[PACED_MAX];        // sample frames taken so far
+static int g_paced_hi[PACED_MAX];                // the most buffers the mixer kept queued
+static int g_pacing;
+static pthread_mutex_t g_paced_mu = PTHREAD_MUTEX_INITIALIZER;
+void android_sles_set_paced(int on) { g_pacing = on; }
+static int queued(obj *o) { pthread_mutex_lock(&o->p.lock); int n = o->p.count; pthread_mutex_unlock(&o->p.lock); return n; }
+static int playing(obj *o) { pthread_mutex_lock(&o->p.lock); int n = o->p.play_state == SL_PLAYSTATE_PLAYING; pthread_mutex_unlock(&o->p.lock); return n; }
+static void wait_queued(obj *o, int want, double ms)
+{
+    double end = mono_now() + ms / 1000;
+    while (queued(o) < want && playing(o) && mono_now() < end) { struct timespec ts = { 0, 100000 }; nanosleep(&ts, NULL); }
+}
+void android_sles_pace(long long frames, int fps)
+{
+    pthread_mutex_lock(&g_paced_mu);
+    for (int i = 0; i < PACED_MAX; i++) {
+        obj *o = g_paced[i];
+        if (!o || !o->p.pipe_run) continue;
+        int len = 256 * o->p.frame_bytes;
+        Uint8 buf[256 * 16];
+        if (len > (int)sizeof buf) continue;
+        long long target = frames * o->p.spec.freq / fps;
+        while (g_paced_done[i] + 256 <= target) {
+            if (playing(o)) wait_queued(o, 1, 50);
+            int q = queued(o); if (q > g_paced_hi[i]) g_paced_hi[i] = q;
+            player_fill(o, buf, len);
+            g_paced_done[i] += 256;
+        }
+        if (playing(o)) wait_queued(o, g_paced_hi[i], 20);   // the mixer's refill done
+    }
+    pthread_mutex_unlock(&g_paced_mu);
+}
+
 static void *null_writer(void *ud)
 {
     obj *o = ud;
@@ -436,6 +475,11 @@ static void *null_writer(void *ud)
     int len = 256 * o->p.frame_bytes;
     Uint8 *buf = malloc(len);
     double dt = 256.0 / o->p.spec.freq, due = mono_now() + dt;
+    if (g_pacing) {          // the host takes the buffers (android_sles_pace)
+        while (o->p.pipe_run) { struct timespec ts = { 0, 20000000 }; nanosleep(&ts, NULL); }
+        free(buf);
+        return NULL;
+    }
     while (buf && o->p.pipe_run) {
         struct timespec ts = { (time_t)due, (long)((due - (time_t)due) * 1e9) };
         while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR) {}
@@ -452,6 +496,11 @@ static void *null_writer(void *ud)
 static int null_open(obj *o)
 {
     o->p.pipe_run = 1;
+    if (g_pacing) {
+        pthread_mutex_lock(&g_paced_mu);
+        for (int i = 0; i < PACED_MAX; i++) if (!g_paced[i]) { g_paced[i] = o; g_paced_done[i] = 0; g_paced_hi[i] = 0; break; }
+        pthread_mutex_unlock(&g_paced_mu);
+    }
     if (pthread_create(&o->p.pipe_thread, NULL, null_writer, o) != 0) { o->p.pipe_run = 0; return 0; }
     o->p.writer = 1;
     pthread_setname_np(o->p.pipe_thread, "SLESNone");
@@ -612,6 +661,9 @@ static void writer_close(obj *o)
 {
     if (!o->p.writer) return;
     o->p.pipe_run = 0;
+    pthread_mutex_lock(&g_paced_mu);
+    for (int i = 0; i < PACED_MAX; i++) if (g_paced[i] == o) g_paced[i] = NULL;
+    pthread_mutex_unlock(&g_paced_mu);
     if (o->p.pipe_fd >= 0) close(o->p.pipe_fd);   // EOF for the client; a blocked write returns EPIPE
     pthread_join(o->p.pipe_thread, NULL);
     o->p.writer = 0;

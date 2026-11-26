@@ -18,9 +18,10 @@
 //   UA_LOCKSTEP_ELEMS=<n>       elements of an array of objects or structs hashed (default 32; arrays of
 //                               numbers: their first 64 KB)
 //   UA_LOCKSTEP_SETTLE=<ms>     after each frame, wait (up to <ms>, default 5000; 0: never) until Unity's
-//                               loading threads ("Loading.*") are asleep: a scene's files are read in the
-//                               same frames however fast the card is
+//                               loading threads ("Loading.*") are asleep: a scene's files are read in the same
+//                               frames however fast the card is
 //   UA_LOCKSTEP_CLOCK=0         leave the managed clocks alone (below)
+//   UA_LOCKSTEP_AUDIO=0         the silent sound output (ANDROID_SLES_OUTPUT=none) on the clock, not paced by frames
 //   UA_LOCKSTEP_UNITY_CLOCK=0   leave Unity's own clock on UnityMain alone (unity_clock below)
 //   UA_LOCKSTEP_EVENT_CLOCK=0   the input events keep the real uptime as their times
 //   UA_LOCKSTEP_ICALLS=0        transforms and enabled read through mono_runtime_invoke only
@@ -34,7 +35,7 @@
 // before 2019.2): Time.time, deltaTime and the FixedUpdate count advance a fixed step a frame whatever the
 // real time. Time.realtimeSinceStartup(AsDouble) (wrapped where Unity registers it), Environment.TickCount,
 // Stopwatch.GetTimestamp and DateTime.UtcNow/Now (registered over Mono's own internal calls once Mono is up)
-// read a virtual clock: frames done * step, plus 1 us for each read in a frame on that thread (a loop
+// read a virtual clock: frames done * step, plus 1 us for each read past a frame's first 2000 on that thread (a loop
 // that waits for the clock still ends). System.Random() is seeded from TickCount, so from the frame.
 // UnityEngine.Random.InitState(seed) in the same frame.
 // Input. Every event the host sends (pads, keyboard, pointer, touch: unityplayer.c's input tap) is held
@@ -69,6 +70,8 @@
 #include <unistd.h>
 
 void *mono_runtime_lib(void);   // hitches.c
+void android_sles_set_paced(int on);                  // ../android/opensles.c: the silent output paced by frames
+void android_sles_pace(long long frames, int fps);
 
 enum { OFF, M_RECORD, M_REPLAY, M_HASH };
 static int g_mode, g_cfg;
@@ -124,8 +127,12 @@ static int64_t virt_us(void)
 {
     long f = __atomic_load_n(&g_frame, __ATOMIC_ACQUIRE);
     if (t_frame1 != f + 1) { t_frame1 = f + 1; t_calls = 0; }
-    long c = t_calls < g_step_us - 1 ? t_calls++ : g_step_us - 1;
-    return 1000000 + (int64_t)f * g_step_us + c;
+    // the frame's time for its first 2000 reads on a thread (so it does not depend on how many reads a frame's work
+    // made: a loop timing a slice of work sees none pass), then 1 us more for each read (a loop waiting for the
+    // clock still ends), never past the next frame's
+    long c = t_calls++, adv = c < 2000 ? 0 : c - 2000;
+    if (adv > g_step_us - 1) adv = g_step_us - 1;
+    return 1000000 + (int64_t)f * g_step_us + adv;
 }
 static long g_clock_reads[6];
 static SO_ABI float w_realtime(void) { g_clock_reads[0]++; return (float)(virt_us() / 1e6); }
@@ -151,17 +158,19 @@ static int64_t event_clock(void) { return g_base_ns / 1000000 + (virt_us() - 100
 // (Application.backgroundLoadingPriority, the async upload's time slice), are then the same in every run. So does
 // Android's UI thread (the process's first) until the first frame: Unity takes its time base there at start, which
 // Time.unscaledTime and Time.time count from (later its reads come at any moment of a frame: the real clock). Other
-// threads keep the real clock (their timed waits).
+// threads keep the real clock (their timed waits). The wall clock (CLOCK_REALTIME, gettimeofday, time()) on those
+// threads reads the same virtual time from the record's start date: an engine seed taken from it is the same.
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 static int g_unity_clock = 1;
 static __thread int t_main;       // 0 unknown, 1 UnityMain, 2 another thread
 static int unity_clock(int clk, long *sec, long *nsec)
 {
-    if (clk != 1 && clk != 4 && clk != 6 && clk != 7) return -1;     // MONOTONIC, _RAW, _COARSE, BOOTTIME
+    int wall = clk == 0 || clk == 5;                                  // REALTIME(_COARSE), gettimeofday, time()
+    if (!wall && clk != 1 && clk != 4 && clk != 6 && clk != 7) return -1;     // MONOTONIC, _RAW, _COARSE, BOOTTIME
     if (!t_main) { char n[17] = ""; prctl(PR_GET_NAME, n, 0, 0, 0); t_main = !strcmp(n, "UnityMain") ? 1 : syscall(SYS_gettid) == getpid() ? 3 : 2; }
     if (t_main == 2 || (t_main == 3 && __atomic_load_n(&g_frame, __ATOMIC_ACQUIRE) > 0)) return -1;
-    int64_t ns = g_base_ns + (virt_us() - 1000000) * 1000;
+    int64_t ns = (wall ? g_epoch_unix * 1000000000LL : g_base_ns) + (virt_us() - 1000000) * 1000;
     *sec = (long)(ns / 1000000000); *nsec = (long)(ns % 1000000000);
     return 0;
 }
@@ -361,7 +370,7 @@ static vec_icall ic_trs[3];
 // 2023.1+: the bindings pass the native object (UnityEngine.Object's m_CachedPtr), not the managed one:
 // static extern get_localPosition_Injected(IntPtr _unity_self, out Vector3 ret), get_enabled_Injected(IntPtr)
 static int ic_native, ic_enabled_native;
-static MonoMethod *m_transform, *m_enabled, *m_trs[3], *m_parent, *m_sibling, *m_name;
+static MonoMethod *m_transform, *m_enabled, *m_trs[3], *m_parent, *m_name;
 
 static MonoMethod *method(MonoClass *k, const char *name, int n)
 {
@@ -462,7 +471,6 @@ static int engine_ready(void)
     }
     if (ie && !strcmp(ie, "0")) { ic_transform = NULL; ic_enabled = NULL; memset(ic_trs, 0, sizeof ic_trs); }
     m_parent = method(k_tr, "get_parent", 0);
-    m_sibling = method(k_tr, "GetSiblingIndex", 0);
     m_name = M.method_from_name(k_obj, "get_name", 0);
     if (!m_find && !m_find_by) { done = -1; fprintf(stderr, "[lockstep] no Object.FindObjectsOfType(Type): no state hash\n"); return 0; }
     fprintf(stderr, "[lockstep] state walk ready: transform %s, enabled %s, local TRS %s%s (UnityEngine.Object's native pointer at +%u)\n",
@@ -514,7 +522,7 @@ struct plan {
     MonoClass *klass;
     char *name;
     uint64_t nh;
-    int unity, skip, str, valuetype, blittable, rank, ekind;
+    int unity, skip, str, valuetype, blittable, rank, ekind, ign;
     uint32_t vsize, esize;
     struct plan *elem;
     int n;
@@ -542,11 +550,12 @@ static int ignored(const char *cls_full, const char *cls, const char *fname)
 {
     static const char *const builtin[] = { "UnityEngine.InputSystem.InputDevice.m_LastUpdateTimeInternal", NULL };
     char want[384];
-    for (int i = 0; builtin[i]; i++) { snprintf(want, sizeof want, "%s.%s", cls_full, fname); if (!strcmp(want, builtin[i])) return 1; }
+    for (int i = 0; fname && builtin[i]; i++) { snprintf(want, sizeof want, "%s.%s", cls_full, fname); if (!strcmp(want, builtin[i])) return 1; }
     if (!g_ignore[0]) return 0;
     for (const char *p = g_ignore; *p; ) {
         const char *e = strchr(p, ','); size_t n = e ? (size_t)(e - p) : strlen(p);
         if ((strlen(cls_full) == n && !strncmp(p, cls_full, n)) || (strlen(cls) == n && !strncmp(p, cls, n))) return 1;   // a whole class
+        if (!fname) { if (!e) break; p = e + 1; continue; }
         int a = snprintf(want, sizeof want, "%s.%s", cls_full, fname);
         if ((size_t)a == n && !strncmp(p, want, n)) return 1;
         a = snprintf(want, sizeof want, "%s.%s", cls, fname);
@@ -584,6 +593,7 @@ static struct plan *plan_of(MonoClass *k)
     p->name = malloc(ln);
     snprintf(p->name, ln, "%s%s%s", ns, *ns ? "." : "", nm);
     p->nh = str_hash(p->name);
+    p->ign = ignored(p->name, nm, NULL);   // a whole class in UA_LOCKSTEP_IGNORE: its scripts and their transforms left out
     p->rank = M.class_get_rank(k);
     if (p->rank > 0) {
         MonoClass *e = M.class_get_element_class(k);
@@ -795,8 +805,9 @@ static void path_of(MonoObject *t, char *out, size_t n)
         char nm[64] = "?";
         MonoObject *s = call0(m_name, x);
         if (s) { char *u = M.string_to_utf8(s); if (u) { snprintf(nm, sizeof nm, "%s", u); M.free(u); } }
-        MonoObject *si = call0(m_sibling, x);
-        snprintf(parts[np++], sizeof parts[0], "%s[%d]", nm, si ? *(int *)M.unbox(si) : -1);
+        // (no sibling index: one object destroyed a frame earlier would shift its siblings' keys; objects of one
+        // name are told apart by their contents, lockstep diff)
+        snprintf(parts[np++], sizeof parts[0], "%s", nm);
     }
     out[0] = 0;
     size_t l = 0;
@@ -869,12 +880,25 @@ static void hash_frame(long frame)
             fprintf(g_hash, "S %ld %s %d\n", frame, nm, n);
         }
     }
+    // the scripts of a class in UA_LOCKSTEP_IGNORE, and their transforms, are left out (an object whose lifetime the
+    // checker cannot fix: a particle effect's that destroys itself when its particles are gone)
+    MonoArray *beh = find_all(t_mb);
+    uintptr_t nb = beh ? arr_len(beh) : 0, nb_seen = 0, nt_seen = 0;
+    MonoObject *excl[256]; int nexcl = 0;
+    for (uintptr_t i = 0; i < nb; i++) {
+        MonoObject *o = *(MonoObject **)M.array_addr(beh, sizeof(void *), i);
+        if (alive(o) && plan_of(M.object_get_class(o))->ign && nexcl < 256) excl[nexcl++] = transform_of(o);
+    }
     // transforms
     MonoArray *trs = find_all(t_tr);
     uintptr_t nt = trs ? arr_len(trs) : 0;
     for (uintptr_t i = 0; i < nt; i++) {
         MonoObject *t = *(MonoObject **)M.array_addr(trs, sizeof(void *), i);
         if (!alive(t)) continue;
+        int skip = 0;
+        for (int k = 0; k < nexcl && !skip; k++) skip = excl[k] == t;
+        if (skip) continue;
+        nt_seen++;
         float v[10]; trs_of(t, v);
         tr_sum += fmix(mix_bytes(0x7472, v, sizeof v));
         if (dump) {
@@ -888,12 +912,12 @@ static void hash_frame(long frame)
     static struct walk w;
     for (int k = 0; k < w.nseen; k++) w.seen[w.slot[k]] = NULL;
     w.nseen = 0;
-    MonoArray *beh = find_all(t_mb);
-    uintptr_t nb = beh ? arr_len(beh) : 0;
     for (uintptr_t i = 0; i < nb; i++) {
         MonoObject *o = *(MonoObject **)M.array_addr(beh, sizeof(void *), i);
         if (!alive(o)) continue;
         struct plan *p = plan_of(M.object_get_class(o));
+        if (p->ign) continue;
+        nb_seen++;
         for (int k = 0; k < w.nseen; k++) w.seen[w.slot[k]] = NULL;   // (the last script's, cleared)
         w.nodes = 0; w.nseen = 0; w.out = dump; w.path[0] = 0;
         seen_find(&w, o, 1);
@@ -922,17 +946,18 @@ static void hash_frame(long frame)
             fprintf(g_hash, "C %ld %s %d %016llx\n", frame, c->p->name, c->count, (unsigned long long)c->sum);
         c->last_sum = c->sum; c->last_count = c->count;
     }
+    nb = nb_seen; nt = nt_seen;
     all = mix(mix(mix(mix(mix(mix(0, tbits), rs), tr_sum), beh_sum), ((uint64_t)nb << 32) | nt), ((uint64_t)fc << 32) | tsb);
     fprintf(g_hash, "F %ld %016llx t=%08x fc=%u ts=%08x ut=%08x dt=%08x cdt=%08x rs=%016llx nb=%lu nt=%lu tr=%016llx\n", frame, (unsigned long long)all, tbits, fc, tsb,
             utb, dtb, cdtb, (unsigned long long)rs, (unsigned long)nb, (unsigned long)nt, (unsigned long long)tr_sum);
     if (dump) { fclose(dump); fprintf(stderr, "[lockstep] frame %ld dumped (%s.%ld.dump)\n", frame, g_hash_path, frame); }
-    if (frame == g_nudge_frame && beh) nudge(beh, nb);
+    if (frame == g_nudge_frame && beh) nudge(beh, arr_len(beh));
     g_hash_ms += now_ms() - t0;
     g_hashed++;
 }
 
 /* ---- the loading threads ------------------------------------------------------------------ */
-static int g_loaders[8], g_nloaders;
+static int g_loaders[16], g_nloaders;
 static long g_loaders_scan = -1000;
 static void scan_loaders(void)
 {
@@ -940,12 +965,14 @@ static void scan_loaders(void)
     DIR *d = opendir("/proc/self/task");
     if (!d) return;
     struct dirent *e;
-    while ((e = readdir(d)) && g_nloaders < 8) {
+    while ((e = readdir(d)) && g_nloaders < 16) {
         if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
         char p[300], comm[32] = "";
         snprintf(p, sizeof p, "/proc/self/task/%s/comm", e->d_name);
         FILE *f = fopen(p, "r");
         if (!f) continue;
+        // Unity's loading threads (waiting for FMOD's mixer threads too was tried: Hollow Knight's sound-recycled
+        // objects parted runs more often, not less)
         if (fgets(comm, sizeof comm, f) && !strncmp(comm, "Loading.", 8)) g_loaders[g_nloaders++] = atoi(e->d_name);
         fclose(f);
     }
@@ -969,8 +996,8 @@ static int loaders_busy(void)
 static void settle(long frame)
 {
     if (!g_settle_ms) return;
-    // Unity starts its loading threads when it first needs them: looked for every frame until two are known
-    if (g_nloaders < 2 || frame - g_loaders_scan >= 60) { scan_loaders(); g_loaders_scan = frame; }
+    // Unity starts its loading threads when it first needs them: looked for every 5 frames (every frame until two are known)
+    if (g_nloaders < 2 || frame - g_loaders_scan >= 5) { scan_loaders(); g_loaders_scan = frame; }
     if (!g_nloaders) return;
     double t0 = now_ms();
     int idle = 0;
@@ -984,7 +1011,7 @@ static void settle(long frame)
 }
 
 /* ---- each frame --------------------------------------------------------------------------- */
-static int g_started;
+static int g_started, g_audio;
 static long g_start_frame = -1;
 static void start_clock(long frame)
 {
@@ -1057,6 +1084,11 @@ void lockstep_init(void)
         }
     }
     if (g_mode != M_HASH) up_set_input_tap(tap);
+    // the silent sound output (ANDROID_SLES_OUTPUT=none, a test run's) takes a frame's time of sound after each frame
+    // instead of on the clock: the game's sound clock (AudioSource.time, isPlaying, a clip's end) follows the frames
+    const char *au = getenv("UA_LOCKSTEP_AUDIO");
+    g_audio = !(au && !strcmp(au, "0"));
+    if (g_audio) android_sles_set_paced(1);
     // UA_LOCKSTEP_EVENT_CLOCK=0: the events keep the real uptime
     const char *ec = getenv("UA_LOCKSTEP_EVENT_CLOCK");
     if (!(ec && !strcmp(ec, "0"))) up_set_event_clock(event_clock);
@@ -1074,6 +1106,7 @@ void lockstep_frame(void)
     if (g_hash && g_started) hash_frame(frame);
     int n = give_inputs(frame);
     if (n && g_hash) fprintf(g_hash, "I %ld %d\n", frame, n);
+    if (g_audio) android_sles_pace(frame, g_fps);
     settle(frame);
     if (g_hash && frame % 60 == 0) fflush(g_hash);
     if (g_frames_max && frame == g_frames_max) {

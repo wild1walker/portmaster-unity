@@ -1392,7 +1392,7 @@ static const so_shim ours[] = {
     { "sem_unlink", (void *)bionic_sem_unlink }, { "newlocale", (void *)bionic_newlocale },
 #if defined(__arm__)
     /* without a vDSO for 32-bit processes (64-bit kernels before 5.3): the timer's counter (fastclock.c) */
-    { "clock_gettime", (void *)fastclock_gettime }, { "gettimeofday", (void *)fastclock_gettimeofday },
+    { "clock_gettime", (void *)fastclock_gettime }, { "gettimeofday", (void *)fastclock_gettimeofday }, { "time", (void *)fastclock_time },
     { "__mmap2", (void *)bionic_mmap2 },
     { "getpwuid", (void *)bionic_getpwuid }, { "getpwnam", (void *)bionic_getpwnam },
     { "getpwuid_r", (void *)bionic_getpwuid_r }, { "getpwnam_r", (void *)bionic_getpwnam_r },

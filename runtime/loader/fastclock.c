@@ -363,6 +363,10 @@ int fastclock_gettime(clockid_t clk, void *tsp)
 int fastclock_gettimeofday(void *tvp, void *tz)
 {
     struct b_timeval *tv = tvp;
+    if (__builtin_expect(g_clock_hook != NULL, 0) && tv) {
+        long sec, nsec;
+        if (!g_clock_hook(CLOCK_REALTIME, &sec, &nsec)) { tv->tv_sec = sec; tv->tv_usec = nsec / 1000; return 0; }
+    }
     if (g_stats) {
         atomic_fetch_add_explicit(&g_calls[CLOCK_REALTIME], 1, memory_order_relaxed);
         if (g_freq) stats_tick();
@@ -376,4 +380,14 @@ int fastclock_gettimeofday(void *tvp, void *tz)
         }
     }
     return gettimeofday((struct timeval *)tvp, tz);
+}
+
+/* bionic's time(): the system's, unless the clock hook answers CLOCK_REALTIME */
+long fastclock_time(long *t)
+{
+    long sec, nsec, r;
+    if (__builtin_expect(g_clock_hook != NULL, 0) && !g_clock_hook(CLOCK_REALTIME, &sec, &nsec)) r = sec;
+    else r = (long)time(NULL);
+    if (t) *t = r;
+    return r;
 }
