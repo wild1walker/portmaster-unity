@@ -100,6 +100,7 @@ static void write(GLenum target, gbuf *b, int off, const unsigned char *src, int
 int main(int argc, char **argv)
 {
     const char *sc = argc > 1 ? argv[1] : "arena";
+    if (!strcmp(sc, "widerange")) { setenv("UA_GL_ARENA_WIDESCAN", "verify", 1); sc = "range"; }   // range, the indices read wide
     if (strcmp(sc, "off")) setenv("UA_GL_ARENA", "1", 1);
     g_cache = !strncmp(sc, "cached", 6) || !strcmp(sc, "range") || !strcmp(sc, "norange");
     if (!strcmp(sc, "norange")) setenv("UA_GL_ARENA_RANGE", "0", 1);   // (expected to fail: the driver's stale ranges)

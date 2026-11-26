@@ -4,7 +4,7 @@
 # fake_trace_gl.c), glopt.c's (test_glopt.c with fake_opt_gl.c), glpass.c's (test_glpass.c with fake_pass_gl.c),
 # glrename.c's (test_glrename.c with fake_rename_gl.c), glrec.c's (test_glrec.c with fake_rec_gl.c),
 # glmemo.c's (test_glmemo.c with fake_memo_gl.c), glstate.c's (test_glstate.c with fake_state_gl.c) and
-# glarena.c's (test_glarena.c with fake_arena_gl.c), glspec.c's (test_glspec.c with fake_spec_gl.c) and glhooks.c's
+# glarena.c's (test_glarena.c with fake_arena_gl.c; test_arenascan.c: its wide index scan against the plain one), glspec.c's (test_glspec.c with fake_spec_gl.c) and glhooks.c's
 # UA_GL_PROGCACHE (test_progcache.c with fake_progcache_gl.c), gldriver.c's frame copy (test_gldriver.c) and glreplay --info.
 # ARCH=armhf (default): built in
 # ua-host-armhf, run in an arm/v7 container; ARCH=arm64: built and run in ua-build-arm64.
@@ -51,6 +51,7 @@ run='set -e
   mkdir -p $O/arena
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/arena/libGLESv2.so.2 test/fake_arena_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glarena test/test_glarena.c glarena.c $O/arena/libGLESv2.so.2 -ldl -lpthread
+  $CC -O2 -g -Wall -Wextra -o $O/test_arenascan test/test_arenascan.c
   mkdir -p $O/spec
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -shared -fPIC -Wl,-soname,libGLESv2.so.2 -o $O/spec/libGLESv2.so.2 test/fake_spec_gl.c
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glspec test/test_glspec.c glspec.c $O/spec/libGLESv2.so.2 -ldl -lpthread
@@ -99,7 +100,7 @@ if [ "$ARCH" = arm64 ]; then
     $REPLAY
     for s in $MEMO; do LD_LIBRARY_PATH=\$O/memo \$O/test_glmemo \$s; done
     for s in random count off; do LD_LIBRARY_PATH=\$O/state \$O/test_glstate \$s; done
-    for s in arena small nosubdata shadow orphan cached cachedsmall range norange off; do LD_LIBRARY_PATH=\$O/arena \$O/test_glarena \$s; done
+    for s in arena small nosubdata shadow orphan cached cachedsmall range widerange norange off; do LD_LIBRARY_PATH=\$O/arena \$O/test_glarena \$s; done; \$O/test_arenascan
     for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=\$O/spec \$O/test_glspec \$s; done
     for s in $PCS; do d=\$(mktemp -d); LD_LIBRARY_PATH=\$O/pc \$O/test_progcache \$s \$d; rm -rf \$d; done
     \$O/test_gldriver"
@@ -118,7 +119,7 @@ docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookwo
    O=out/test; '"$REPLAY"'
    for s in '"$MEMO"'; do LD_LIBRARY_PATH=out/test/memo out/test/test_glmemo $s; done
    for s in random count off; do LD_LIBRARY_PATH=out/test/state out/test/test_glstate $s; done
-   for s in arena small nosubdata shadow orphan cached cachedsmall range norange off; do LD_LIBRARY_PATH=out/test/arena out/test/test_glarena $s; done
+   for s in arena small nosubdata shadow orphan cached cachedsmall range widerange norange off; do LD_LIBRARY_PATH=out/test/arena out/test/test_glarena $s; done; out/test/test_arenascan
    for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=out/test/spec out/test/test_glspec $s; done
    for s in '"$PCS"'; do d=$(mktemp -d); LD_LIBRARY_PATH=out/test/pc out/test/test_progcache $s $d; rm -rf $d; done
    out/test/test_gldriver'

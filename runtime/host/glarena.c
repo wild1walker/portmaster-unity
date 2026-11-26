@@ -683,6 +683,15 @@ static int last_vertex(GLuint *last)
 }
 // the range of a draw from an index buffer in the arena: 0 to the last vertex the attributes hold, else (an
 // attribute not followed) the indices' own, read from the arena (j: the offset into it); 0: not one of these
+// The indices' lowest and highest, read from the arena's mapping. The driver's mapping of the buffer is
+// write-combined (not cached for the CPU): each load is a trip to memory, so the plain loop, one load an
+// index, cost Enter the Gungeon's render thread 2 - 10 ms a frame in the Breach (2026-11-26, the dynamic
+// batches' DrawChunk). UA_GL_ARENA_WIDESCAN=1 reads 64 bytes a load group (NEON on AArch64, 16-byte loads
+// on ARMv7 with NEON) and the rest one by one: the same lowest and highest by construction (min and max
+// over the same values); =verify computes both and reports a difference (none expected).
+static int g_widescan;                      // UA_GL_ARENA_WIDESCAN: 0 off, 1 on, 2 verify
+static long g_scan_checked, g_scan_bad;
+#include "glarena_scan.h"
 static int ranged(GLint base, GLsizei n, GLenum t, const void *j, GLuint *first, GLuint *last)
 {
     GLuint *s = elem_slot(g_vao, 0);
@@ -692,13 +701,21 @@ static int ranged(GLint base, GLsizei n, GLenum t, const void *j, GLuint *first,
     uintptr_t o = (uintptr_t)j;
     unsigned sz = t == 0x1401 ? 1 : t == 0x1403 ? 2 : 4;
     if (n <= 0 || o + (uintptr_t)n * sz > g_size) return 0;
-    GLuint lo = 0xffffffffu, hi = 0;
-    for (GLsizei k = 0; k < n; k++) {
-        const unsigned char *q = (const unsigned char *)g_ptr + o + (uintptr_t)k * sz;
-        GLuint v = sz == 1 ? q[0] : sz == 2 ? *(const unsigned short *)q : *(const GLuint *)q;
-        if (v < lo) lo = v;
-        if (v > hi) hi = v;
-    }
+    GLuint lo, hi;
+    const unsigned char *q = (const unsigned char *)g_ptr + o;
+    if (g_widescan) {
+        scan_wide(q, n, sz, &lo, &hi);
+        if (g_widescan == 2) {                     // (verify: the plain loop's answer as well)
+            GLuint l2, h2;
+            scan_plain(q, n, sz, &l2, &h2);
+            g_scan_checked++;
+            if (l2 != lo || h2 != hi) {
+                if (!g_scan_bad++) fprintf(stderr, "[glarena] UA_GL_ARENA_WIDESCAN=verify: %u - %u against %u - %u (%d indices of %u bytes)\n",
+                                           lo, hi, l2, h2, (int)n, sz);
+                lo = l2; hi = h2;
+            }
+        }
+    } else scan_plain(q, n, sz, &lo, &hi);
     *first = lo; *last = hi;
     g_unranged++;
     return 1;
@@ -798,6 +815,7 @@ void glarena_frame(void)
             g_mapk[0][0][1], g_mapk[0][0][0]);
     for (int k = 0; k < 8 && g_acc[k].n; k++) fprintf(stderr, " 0x%x:%ld", g_acc[k].a, g_acc[k].n);
     if (g_range) fprintf(stderr, "; draws ranged %ld, by their indices %ld", g_ranged, g_unranged);
+    if (g_widescan == 2) fprintf(stderr, " (wide scans checked %ld, differing %ld)", g_scan_checked, g_scan_bad);
     fprintf(stderr, "\n");
 }
 
@@ -828,6 +846,8 @@ const so_shim *glarena_table(void *(*next)(const char *name))
     g_copy = sd && !strcmp(sd, "1");
     const char *rg = getenv("UA_GL_ARENA_RANGE");
     g_range = !(rg && !strcmp(rg, "0"));
+    const char *ws = getenv("UA_GL_ARENA_WIDESCAN");
+    g_widescan = !ws || !*ws || !strcmp(ws, "0") ? 0 : !strcmp(ws, "verify") ? 2 : 1;
     const char *ib = getenv("UA_GL_ARENA_IB");
     g_ib = !(ib && !strcmp(ib, "0"));
     const char *sy = getenv("UA_GL_ARENA_SYNC");
