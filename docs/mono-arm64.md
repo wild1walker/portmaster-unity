@@ -328,6 +328,10 @@ on a CPU, `profsum.py --syms` with each player's symbols and the runtime's own):
   `UA_MONO64_OPTIONS=-O=abcrem` 51.0 fps, 18.3 ms (the same hold's plain run: 51.0, 18.5). In the arm64
   rig abcrem shrinks a method like `HeroController.CheckTouchingGround` by 12 %, but these methods are
   not where the frame goes.
+  Enter the Gungeon (2026-11-26, muOS, Bullet Hell's busiest fight, two runs each):
+  `-O=abcrem,ssapre,alias-analysis,sched` 45.9 and 46.9 fps against 46.1 (and a cold 43.9) plain: within
+  the runs' spread, so not set. A first run right after files are copied to the SD card stalls up to 1.1 s
+  in exFAT lookups and page reads (cold cache); the runs after it do not, so A/Bs drop a cold first run.
 - **Mono's ahead-of-time images: measured, slower** (2026-11-19). This runtime has Mono's AOT loader and
   compiler (`mono_main --aot`; configure's "Unity AOT: default"; LLVM back end: no). Compiled with the same
   `libmonobdwgc-2.0.so` in the arm64 build container (GNU as/ld; 5 s for Assembly-CSharp, 17,431 methods,

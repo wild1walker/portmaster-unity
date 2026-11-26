@@ -173,6 +173,25 @@ static void on_swap(void *ctx)
     g_presented++;
     static double t0, last, worst, sum, checked;
     static int n, total, late, hitch, gc_prev = -1;
+    // UA_FRAME_LOCK=<fps> (opt-in, off by default): every frame is held to its slot, 1/<fps> s after the last one's,
+    // so frames are shown at an even rate (a frame that misses its slot goes out at once and the next slots count
+    // from it): steadier at a lower rate. The game's time still follows the clock (Time.deltaTime), so play is the same
+    static double lock_period = -1, slot;
+    if (lock_period < 0) {
+        const char *e = getenv("UA_FRAME_LOCK");
+        lock_period = e && atof(e) > 0 ? 1.0 / atof(e) : 0;
+        if (lock_period > 0) fprintf(stderr, "[frames] frame lock: one frame every %.1f ms (UA_FRAME_LOCK=%s)\n", lock_period * 1000, e);
+    }
+    if (lock_period > 0) {
+        double tn = now();
+        slot = slot > 0 ? slot + lock_period : tn;
+        if (slot < tn - 0.002) slot = tn;                     // late: no catching up, the rhythm starts again here
+        else if (slot > tn) {
+            struct timespec ts; double w = slot - tn;
+            ts.tv_sec = (time_t)w; ts.tv_nsec = (long)((w - (double)ts.tv_sec) * 1e9);
+            while (nanosleep(&ts, &ts) == -1) {}
+        }
+    }
     double t = now();
     if (!g_t_start) g_t_start = t;
     int shot = __atomic_exchange_n(&g_shot_next, 0, __ATOMIC_ACQ_REL);
