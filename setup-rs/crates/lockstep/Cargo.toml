@@ -1,0 +1,13 @@
+[package]
+name = "lockstep"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "`lockstep compare` / `lockstep diff`: two runs of ua_host's lockstep checker (UA_LOCKSTEP, runtime/host/lockstep.c) compared frame by frame, and two dumps of one frame object by object (docs/lockstep.md)"
+
+[[bin]]
+name = "lockstep"
+path = "src/main.rs"
+
+[dependencies]   # (std only)
