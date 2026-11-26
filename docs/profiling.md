@@ -1573,6 +1573,51 @@ instead of 128, 45.3 against 47.5 fps. Not a default for Hollow Knight while the
 | The physics step's walk over every body for trigger contacts left out while no body has one (Enter the Gungeon's `PhysicsEngine.LateUpdate`: its last walk loads each body's native pointer and `HasTriggerCollisions`, ~300 bodies, about 0.7 ms a frame on the RG34XX-SP in cache misses (the compiled body's hot instructions, `UA_PROF_CODE_METHOD`); the property's setter counts the set flags; `trig-count`, 2026-11-16) | exact: a check build checked every body whenever the count was 0, none had the flag. But the count is 0 in only 10 % (Bullet Hell) to 15 % (Keep boss) of frames: bodies keep trigger contacts from frame to frame. Not shipped |
 | hooking `GfxDeviceGLES` to drop redundant GL state or uniform re-uploads on the render thread | the render thread's time is spent blocked inside Mali's driver (the grab copies and the first draw after a framebuffer change), not in redundant state Unity sends; the driver's buffer handling, not Unity's call count, is the cost ([GPU, pass by pass](#gpu-pass-by-pass)) |
 
+## A census across four games: what they share (muOS, 2026-11-26)
+
+One `UA_PROF=500` recording of 20 s per game on the RG34XX-SP (muOS), each port's shipped settings, silent,
+threads `UnityMain,UnityGfxDeviceW,Job.Worker*,FMOD*,mali*,AK*,@swap` (2017.4's workers are `Worker Thread`:
+add `Worker*`; they show here only in schedstat). Named with Unity's symbol files (6000.0.61f1 and 2017.4.40f1
+arm64-v8a, 2017.4.27f1 arm64-v8a from its Android support package); Cuphead's 2017.4.9f1 armeabi-v7a player had no
+symbol file at hand, so its engine frames are offsets. Scenes: Hollow Knight 64-bit, the lockstep record replayed
+to frame 2000 (King's Pass); Cuphead 32-bit (port 2026.11.01), `CUPHEAD_TEST_LEVEL=FlyingGenie` with godmode;
+Enter the Gungeon 64-bit, the Breach standing (the bench APK's warp was not in that install); Blasphemous 64-bit,
+`loadnoui D06Z01S01` through its console. Milliseconds a frame on a CPU (samples, so they include a woken
+thread's wait for a core at the pc it woke at: `syscall` rows are upper bounds):
+
+| | Hollow Knight | Cuphead | Gungeon (Breach) | Blasphemous |
+|---|---|---|---|---|
+| fps in the recording | 52.8 | 67.5 | 36.5 | 58.2 (display-held) |
+| UnityMain | 16.2 | 10.9 | 13.0 (blocked 46 %: waits for the render thread) | 14.5 |
+| render thread | 10.4 | 6.0 | 18.9 (the scene's limit) | 5.5 |
+| job workers | 7.1 (one) | 3 x 0.65 | 3 x 6.1 | 3 x 1.9 |
+| sound mixer | FMOD 4.0 | FMOD 3.1 | Wwise player 1.1 | FMOD Studio player 2.9 |
+| Mali's `mali-cmar-backe` | 3.0 | 1.2 | 3.6 | 2.7 |
+| UnityMain by module | libunity 68, managed 18, Mono 5, libc 5 % | 62, 15, 6, 14 % | 46, 24, 4, 13 %, ua_host 10 % | 63, 17, 5, 11 % |
+
+**Shared, ranked by ms a frame and by games** (the verdict is whether an exact cut is plausible):
+
+| # | what | where, ms a frame | games | verdict |
+|---|---|---|---|---|
+| 1 | job-system futex traffic on UnityMain: wakes when a batch is scheduled, waits in `WaitForJobGroup` (2017.4: `Semaphore::Signal` from `JobQueue::ScheduleGroup` / `KickJobs`, `PlatformSemaphore::WaitForSignal`) | HK 0.45, Cuphead 0.84, Gungeon 1.46 (+0.75 in futex.c's watch, `UA_FUTEX_SPIN=400`), Blasphemous 1.07; profsum's job-system area: HK 0.9, Gungeon 2.0, Blasphemous 3.2 | 4 | the wakes themselves were measured on 6000.0 (no-sleeper wakes skipped, spinning: no gain, above). New: 2017.4 has no worker-count switch, so its three workers were never tried fewer. Built, `UA_JOB_WORKERS` (runtime.md): Gungeon's Breach +13 % (two pairs), Blasphemous unchanged at 60 with UnityMain +1.4 ms. Per game, not a default |
+| 2 | 2017.4's render thread spinning in `JobQueue::WaitForJobGroup` (`AtomicStack::Pop`, `AtomicList::Load`) for the dynamic batches' geometry jobs (`DynamicVBO::DrawChunk` -> `PutDynamicVBOGeometryJobFence`) | Gungeon 6 - 7, Blasphemous < 0.3 | 1 (+ any 2017.4 game with big dynamic batches) | the geometry job runs on a worker that waits for a core; fewer workers (#1) is the exact lever; the spin itself is Unity's |
+| 3 | the GL arena's index scan for ranged draws (`glarena.c ranged()`, one load an index from the write-combined mapping) | Gungeon render thread 2 - 11, Blasphemous 0.01, HK and Cuphead 0 (no such draws / no arena) | 1 | exact, built: `UA_GL_ARENA_WIDESCAN` 10.7 -> 0.7 ms, 33.5 -> 37.4 fps (runtime.md). Worth a default for every arena port once a pixel run confirms (the ranges are identical, so the calls are) |
+| 4 | the render thread's own futex waits for commands (`GfxDeviceWorker::RunExt` -> `Baselib_SystemFutex_Wait`) and `sched_yield` | HK 0.74 + 0.1, Blasphemous 0.44, Gungeon 0.34 | 3 | entry and exit of a sleep, plus the wait for a core after the wake; spinning instead was measured (no gain). Not exact-cuttable |
+| 5 | Mono's call path into managed code (`mono_runtime_invoke` / il2cpp bridge, wrappers, `mono_conc_hashtable_lookup`) | HK 0.82 (Mono runtime area), Cuphead 0.60, Gungeon 0.48, Blasphemous 0.76 | 4 | the cached invoke is on (2017.4) and done for 6000.0 (f84757a); what is left is per call, inside Unity's `ScriptingInvocation` |
+| 6 | FMOD Ex's per-frame update on UnityMain (`SystemI::UpdateAudibilities`, `DSPI::getCriticalSection`) | HK 0.40 + 0.08; 2017.4 games: in the engine's offsets / not seen above 0.1 | 1 - 2 | `UA_FMOD_ASYNC` measured (no frame gain); the channel walk is FMOD's own |
+| 7 | the mixer threads' Vorbis decode and effects | HK FMOD 4.0 (Tremor 1.6, DSPFilter 0.6, fader 0.45, SFX reverb 0.42), Cuphead 3.1 | 2 | on a thread that limits nothing on the H700 (arm64-routes.md: looked at and left) |
+| 8 | the behaviour loop (`MonoBehaviour::CallUpdateMethod`, `QueryComponentByType`) | HK 0.19 + 0.08, Gungeon 0.31, Blasphemous 0.41 + 0.16 | 3 | `UA_NATIVE_BEH` (6000.0 only) measured: no gain over the prefetch stubs; for 2017.4 a native loop would need rows and a model of its lists, for ~0.3 ms |
+| 9 | Mali's backend thread (`poll`, `ioctl`) | 1.2 - 3.6 | 4 | the driver's; nothing of ours to cut (libmali relayout tried) |
+| 10 | managed hot methods per game (PlayMaker's `UpdateStateChanges` / `UpdateDelayedEvents` 0.24 each in HK, Gungeon's `PhysicsEngine.LateUpdate` 0.48, dfGUI 0.44) | per game | 1 each | per game, through asmpatch (PlayMaker done; Gungeon's looked at in its own sections) |
+
+What it says: the work the games share is the engine's own, already measured or cut where an exact hook could
+reach it (1, 4 - 9); the two items worth whole milliseconds were Unity 2017.4's job queue and one of our own
+layers, and both showed in one game only. The next census steps: a Gungeon fight with the bench APK's warp and a
+Cuphead run-and-gun level with 2017.4.9f1's symbols (the job queue's wakes are 0.84 ms of its UnityMain), the
+G350 (four slower cores: `UA_JOB_WORKERS` matters most where cores are short), and `Worker*` and `ua_glthread` in
+the thread list. Tools: the runner `crun.sh` in /mnt/mmc/uatest/census (each game in its own folder of links to the
+set-up copies), profsum.py `--exact --areas`.
+
 ## Shader programs: compiles, links and Unity's binary cache
 
 ```sh
