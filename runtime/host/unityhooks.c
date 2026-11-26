@@ -29,6 +29,8 @@
 //                        the frame's scripts, animation and culling while the render thread still plays
 //                        the last frame back. Unity's own setting (a script can set it); nothing is hooked.
 //   UA_FMOD_ASYNC=1      FMOD's once-a-frame update on a worker thread (fmodasync.c)
+//   UA_JOB_WORKERS=<n>   Unity 2017.x's job queue made with <n> worker threads instead of its default (the big
+//                        cores less one: 3 on the four-core handhelds); 2017.x has no -job-worker-count switch
 //   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS, UA_GLES_POOL or UA_FAST_VERTS)
 //
 // How a function is found. Unity publishes symbol files for its Android players (`pmunity player
@@ -325,6 +327,41 @@ static void present_sync_on_load(uintptr_t base, size_t size)
                     "(tools/re/unityhooks.py); left as the game has it\n");
 }
 
+// --- UA_JOB_WORKERS
+// CreateJobQueue(const char *name, const char *workerName, int workers): -1 asks for the default (read in both:
+// the big cores less one when the device says which are big, else the cores less one), then clamped to 1 - 128
+// and passed to JobQueue::JobQueue; the queue's workers are made there. Called once, at the player's start.
+static const struct row g_jobq[] = {
+    { "2017.4.27f1 arm64-v8a", "CreateJobQueue", 0x6f1848, 0xb4, ISA_A64, 0x12deee24f7eda35full },
+    { "2017.4.40f1 arm64-v8a", "CreateJobQueue", 0x6f14e4, 0xb4, ISA_A64, 0x0ed17becf9704b7aull },
+};
+static void (*g_jobq_orig)(const char *, const char *, int);
+static int g_jobq_workers;
+
+static void jobq_hook(const char *name, const char *worker, int n)
+{
+    fprintf(stderr, "[unityhooks] UA_JOB_WORKERS: Unity's job queue asked with %d workers (-1: its default), made with %d\n",
+            n, n == -1 ? g_jobq_workers : n);
+    g_jobq_orig(name, worker, n == -1 ? g_jobq_workers : n);
+}
+
+static void job_workers_on_load(uintptr_t base, size_t size)
+{
+    const char *v = getenv("UA_JOB_WORKERS");
+    if (!v || !*v) return;
+    int n = atoi(v);
+    if (n < 1 || n > 128) { fprintf(stderr, "[unityhooks] UA_JOB_WORKERS=%s: 1 - 128; left as Unity sets it\n", v); return; }
+    const struct row *r = find_row(g_jobq, sizeof g_jobq / sizeof *g_jobq, base, size);
+    if (!r) {
+        fprintf(stderr, "[unityhooks] UA_JOB_WORKERS: this libunity.so is not one whose CreateJobQueue was read "
+                        "(tools/re/unityhooks.py; Unity 2018 and later: -job-worker-count); left as Unity sets it\n");
+        return;
+    }
+    g_jobq_workers = n;
+    if (unityhooks_hook(base + r->off, r->isa, (void *)jobq_hook, (void **)&g_jobq_orig) != 0)
+        fprintf(stderr, "[unityhooks] %s: hook failed; the job queue as Unity sets it\n", r->func);
+}
+
 void unityhooks_frame(void)
 {
     static unsigned long frames;
@@ -349,6 +386,7 @@ void unityhooks_on_load(so_module *m)
     unitybeh_on_load(base, size);               // UA_BEH_PREFETCH, UA_BEH_EMPTY, UA_BEH_STATS
     unityscripts_on_load(base, size);           // UA_SCRIPT_FIND
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
+    job_workers_on_load(base, size);            // UA_JOB_WORKERS
     unitylayers_on_load(base, size);            // UaHost::LayersInScene (unitylayers.c)
     fmodasync_on_load(base, size);              // UA_FMOD_ASYNC, UA_FMOD_COUNT (fmodasync.c)
     nativebeh_on_load(base, size);              // UA_NATIVE_BEH (nativebeh.c): before UA_PREFETCH, whose `beh` sites it replaces

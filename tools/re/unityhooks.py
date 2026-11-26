@@ -108,6 +108,8 @@ HOOKS = [
     ('_ZL15IsInstanceValid18ScriptingObjectPtr', 'IsInstanceValid', 'call'),
     ('_ZNK9Behaviour10GetEnabledEv', 'Behaviour::GetEnabled', 'call'),
     ('_ZN13MonoBehaviour30InvokeMethodOrCoroutineCheckedE18ScriptingMethodPtr18ScriptingObjectPtr$', 'MonoBehaviour::InvokeMethodOrCoroutineChecked'),
+    # unityhooks.c (UA_JOB_WORKERS): Unity 2017.x's job queue made with its worker count
+    ('_Z14CreateJobQueuePKcS0_i', 'CreateJobQueue'),
     ('_ZN19ScriptingInvocationC2E18ScriptingObjectPtr18ScriptingMethodPtr', 'ScriptingInvocation::ScriptingInvocation', 'call'),
     ('_ZN19ScriptingInvocation6InvokeEP21ScriptingExceptionPtrb', 'ScriptingInvocation::Invoke'),
     ('_ZNSt6__ndk119__shared_weak_count4lockEv', 'std::__shared_weak_count::lock', 'call'),
