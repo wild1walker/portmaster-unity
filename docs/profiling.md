@@ -597,6 +597,32 @@ Game play with them (the bench's plan: title, the menus, Start Game, the save in
 then the Knight walks right into the next screen, jumps, walks back and attacks, six shots): as
 before, the tutorial's prompt showing, no exception in the log but the absent store plugins'.
 
+### Where PlayMaker's time goes on the 64-bit build, and `playmaker-delayedquiet` (2026-11-26)
+
+Hollow Knight 64-bit on the RG34XX-SP (muOS), the lockstep record ([lockstep.md](lockstep.md)) replayed with the clock
+fixed and no hashing (`UA_LOCKSTEP_HASH=`, `UA_LOCKSTEP_AUDIO=0`, `UA_LOCKSTEP_SETTLE=0`), frame cap off
+(`UA_FB_FLIP=mailbox UA_FRAME_RATE=200`), `UA_PROF=500` for 25 s from frame 2000 (King's Pass, about 255 active FSMs),
+with `playmaker-loopcount` and `playmaker-delayedevents`: UnityMain 17.0 ms a frame on a CPU (56.6 fps), of it 1.95 ms
+under PlayMaker: `PlayMakerFSM.Update` 1.35 ms, `PlayMakerFixedUpdate` 0.43 ms, coroutines and events the rest. About
+1.0 - 1.15 ms of it is PlayMaker's own bookkeeping, not actions (all of `FsmState.OnUpdate` with the actions is 0.44 ms),
+and it is memory, not instructions: each FSM's `Fsm`, lists and state are cold every frame, and every separate cache
+line an FSM's update touches costs about 0.1 ms a frame over all FSMs (`UpdateDelayedEvents`, which returns at once,
+spent about 1.1 us a call on its three list reads). So code specialised per FSM (no interpreter dispatch) would gain
+little, and `playmaker-idle` gained nothing (its own test reads the same lines and every state); what pays is touching
+fewer lines. City of Tears (GPU-bound there, 45.8 fps): 1.46 ms under PlayMaker.
+
+`playmaker-delayedquiet` (asmpatch, opt-in) keeps `UpdateDelayedEvents`' answer in a flag of the `Fsm` itself (rules in
+the asmpatch README). A B A B in one hold (the 6000.0 runtime with the cached invoke in all four):
+
+| run | fps | UnityMain on a CPU, ms a frame | under PlayMaker | `UpdateDelayedEvents` self |
+|---|---|---|---|---|
+| without | 56.6, 56.5 | 16.94, 16.84 | 1.92, 2.00 | 1.5, 1.7 % |
+| with | 56.4, 56.3 | 16.54, 16.69 | 1.81, 1.79 | 0.4, 0.4 % |
+
+0.28 ms a frame less on UnityMain (the frame rate in these runs moves within its spread). Lockstep on the record
+(`UA_LOCKSTEP_IGNORE=ParticleSystemAutoDestroy,ParticleSystemAutoRecycle,PlayAudioAndRecycle,ObjectPool`): with
+against without 5000 of 5000 frames the same, as without against itself.
+
 ## Reverse engineering libunity, and what an exact in-memory change can reach
 
 Unity publishes symbol files for its Android players (`pmunity player fetch <version> --symbols`:

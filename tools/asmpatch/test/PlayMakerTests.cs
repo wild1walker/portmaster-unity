@@ -40,11 +40,12 @@ static partial class TestMain
         var d = Dir("pm");
         File.Copy(FakePlayMaker, Path.Combine(d, "PlayMaker.dll"));
         var o = Path.Combine(tmp, "pm-out");
-        var (st, outp) = Patch(d, o, with: new[] { "playmaker-idle" });   // opt-in
+        var (st, outp) = Patch(d, o, with: new[] { "playmaker-idle", "playmaker-delayedquiet" });   // opt-in
         Check(st == 0 && outp.Contains("ok   playmaker-loopcount: PlayMaker.dll: HutongGames.PlayMaker.Fsm.UpdateStateChanges") &&
               outp.Contains("ok   playmaker-delayedevents: PlayMaker.dll: HutongGames.PlayMaker.Fsm.UpdateDelayedEvents") &&
               outp.Contains("ok   playmaker-idle: PlayMaker.dll: HutongGames.PlayMaker.Fsm.Update") &&
-              File.Exists(Path.Combine(o, "PlayMaker.dll")), "PlayMaker: the three optimizations apply");
+              outp.Contains("ok   playmaker-delayedquiet: PlayMaker.dll: HutongGames.PlayMaker.Fsm.UpdateDelayedEvents") &&
+              File.Exists(Path.Combine(o, "PlayMaker.dll")), "PlayMaker: the four optimizations apply");
         if (!File.Exists(Path.Combine(o, "PlayMaker.dll"))) return;
         Check(!Refs(Path.Combine(o, "PlayMaker.dll")).Except(Refs(Path.Combine(d, "PlayMaker.dll"))).Any(), "PlayMaker: no new assembly references");
 
@@ -135,8 +136,31 @@ static partial class TestMain
         int vo = Version(d), vp = Version(o);
         Check(vo > 0 && vp == 0, $"playmaker-delayedevents: with nothing to update the work lists are not touched (version +{vo} unpatched, +{vp} patched)");
 
+        // playmaker-delayedquiet: quiet after one look at empty lists, not quiet once an event is added or the list handed out
+        string Quiet(string dir) => WithPlayMaker(dir, a =>
+        {
+            var fsmT = a.GetType("HutongGames.PlayMaker.Fsm", true);
+            var q = fsmT.GetField(PlayMakerDelayedQuiet.QuietName, BindingFlags.Instance | BindingFlags.NonPublic);
+            var ou = fsmT.GetField(PlayMakerDelayedQuiet.OutName, BindingFlags.Instance | BindingFlags.NonPublic);
+            var upd = fsmT.GetField("updateEvents", BindingFlags.Instance | BindingFlags.NonPublic);
+            var f = Activator.CreateInstance(fsmT, "t", 2);
+            void U() => fsmT.GetMethod("UpdateDelayedEvents").Invoke(f, null);
+            var s = new System.Text.StringBuilder();
+            void S(string what) => s.Append(what).Append('=').Append(q.GetValue(f)).Append(ou.GetValue(f)).Append(((System.Collections.IList)upd.GetValue(f)).Count).Append(' ');
+            S("new"); U(); S("looked"); U(); S("again");
+            fsmT.GetMethod("DelayedEvent").Invoke(f, new object[] { "e", 2 }); S("added"); U(); S("one"); U(); S("fired"); U(); S("empty"); U(); S("quiet");
+            fsmT.GetMethod("DropDelayedEvents").Invoke(f, null); S("dropped");
+            try { U(); } catch (System.Reflection.TargetInvocationException e) { s.Append('<').Append(e.InnerException.GetType().Name).Append("> "); }
+            var g = Activator.CreateInstance(fsmT, "u", 2); f = g;
+            U(); S("g"); fsmT.GetProperty("DelayedEvents").GetValue(g); S("handed"); U(); U(); S("after");
+            return s.ToString();
+        });
+        var qs = Quiet(o);
+        Check(qs == "new=FalseFalse0 looked=TrueFalse0 again=TrueFalse0 added=FalseFalse0 one=FalseFalse1 fired=FalseFalse1 empty=FalseFalse0 quiet=TrueFalse0 dropped=FalseFalse0 <ArgumentNullException> g=TrueFalse0 handed=FalseTrue0 after=FalseTrue0 ",
+              $"playmaker-delayedquiet: quiet only while nothing is pending; an add, a store or a handed-out list ends it ({qs})");
+
         // patched again: done, nothing written; --no-optimize leaves them out
-        (st, outp) = Patch(o, Path.Combine(tmp, "pm-again"), with: new[] { "playmaker-idle" });
+        (st, outp) = Patch(o, Path.Combine(tmp, "pm-again"), with: new[] { "playmaker-idle", "playmaker-delayedquiet" });
         Check(st == 0 && outp.Contains("done playmaker-loopcount") && outp.Contains("done playmaker-delayedevents") && NoDlls(Path.Combine(tmp, "pm-again")),
               "PlayMaker: a second run finds both applied and writes nothing");
         (st, outp) = Patch(d, Path.Combine(tmp, "pm-noopt"), noOptimize: true);

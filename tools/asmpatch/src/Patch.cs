@@ -49,7 +49,7 @@ abstract class Patch
         new StreamingAssetsPatch(), new StreamingAssetsAllPatch(), new DataPathPatch(),
         new GenericUnion(),
         // optimizations
-        new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new PlayMakerIdle(), new PlayMakerTypeLookup(), new UnityObjectNull(), new HollowKnightFade(),
+        new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new PlayMakerIdle(), new PlayMakerDelayedQuiet(), new PlayMakerTypeLookup(), new UnityObjectNull(), new HollowKnightFade(),
         new InlineHot(check: true), new InlineHot(check: false),   // (inline-check first: inline then finds it done)
         new BlasphemousCatalogs(), new BlasphemousVideoDepth(), new BlasphemousI2Sources(), new BlasphemousMapScan(), new BlasphemousSkinIdle(), new BlasphemousCrisantaLazy(), new BlasphemousNearRooms(),
         // reductions

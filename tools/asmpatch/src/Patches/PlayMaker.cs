@@ -549,30 +549,15 @@ sealed class PlayMakerDelayedEvents : Patch
         if (m == null) return Result.NotApplicable($"{file}: no Fsm.UpdateDelayedEvents");
         var where = $"{file}: {fsm.FullName}.UpdateDelayedEvents";
         var ins = m.Body.Instructions;
-        // already patched: it starts with "if (removeEvents.Count != 0) ..."
-        if (ins.Count > 3 && PlayMakerLib.IsThis(m, ins[0]) && ins[1].OpCode.Code == Code.Ldfld &&
+        // already patched: it starts with "if (removeEvents.Count != 0) ..." (or with playmaker-delayedquiet's flag, whose test has it)
+        if (fsm.Fields.Any(f => f.Name == PlayMakerDelayedQuiet.QuietName) || ins.Count > 3 && PlayMakerLib.IsThis(m, ins[0]) && ins[1].OpCode.Code == Code.Ldfld &&
             ins[2].Operand is MethodReference c0 && c0.Name == "get_Count")
             return new Result { Outcome = Outcome.AlreadyApplied, Details = { $"{where}: returns at once with nothing to update" } };
         var shape = Match(m);
         if (shape == null) return Result.NotApplicable($"{where}: not the method this patch knows");
         var (remove, update, delayed, count) = shape.Value;
-        // the two work lists: private, set only by constructors (to new lists), read only here
-        foreach (var f in new[] { remove, update })
-        {
-            if (!f.IsPrivate || f.IsStatic) return Result.NotApplicable($"{file}: Fsm.{f.Name} is not a private field");
-            foreach (var a in game.GameAssemblies)
-                foreach (var t in Cecil.AllTypes(a.MainModule))
-                    foreach (var x in t.Methods.Where(y => y.HasBody))
-                    {
-                        var xi = x.Body.Instructions;
-                        for (int k = 0; k < xi.Count; k++)
-                        {
-                            if (!Cecil.SameField(xi[k].Operand, f) || x == m && xi[k].OpCode.Code == Code.Ldfld) continue;
-                            bool ctorNew = x.IsConstructor && !x.IsStatic && xi[k].OpCode.Code == Code.Stfld && k > 0 && xi[k - 1].OpCode.Code == Code.Newobj;
-                            if (!ctorNew) return Result.NotApplicable($"{file}: {t.FullName}.{x.Name} uses Fsm.{f.Name}");
-                        }
-                    }
-        }
+        var why = WorkListsPrivate(game, m, file, remove, update);
+        if (why != null) return Result.NotApplicable(why);
         var r = new Result { Outcome = Outcome.Applied };
         r.Details.Add($"{where}: returns at once when {delayed.Name}, {update.Name} and {remove.Name} are empty");
         if (!apply) return r;
@@ -596,15 +581,39 @@ sealed class PlayMakerDelayedEvents : Patch
         return r;
     }
 
+    /// <summary>Null when the two work lists are private, set only by constructors (to new lists) and read only by m (and playmaker-idle's test); else why not.</summary>
+    public static string WorkListsPrivate(Game game, MethodDefinition m, string file, FieldDefinition remove, FieldDefinition update)
+    {
+        foreach (var f in new[] { remove, update })
+        {
+            if (!f.IsPrivate || f.IsStatic) return $"{file}: Fsm.{f.Name} is not a private field";
+            foreach (var a in game.GameAssemblies)
+                foreach (var t in Cecil.AllTypes(a.MainModule))
+                    foreach (var x in t.Methods.Where(y => y.HasBody))
+                    {
+                        var xi = x.Body.Instructions;
+                        for (int k = 0; k < xi.Count; k++)
+                        {
+                            if (!Cecil.SameField(xi[k].Operand, f) || (x == m || x.Name == "<asmpatch>Idle") && xi[k].OpCode.Code == Code.Ldfld) continue;   // (playmaker-idle's test reads them)
+                            bool ctorNew = x.IsConstructor && !x.IsStatic && xi[k].OpCode.Code == Code.Stfld && k > 0 && xi[k - 1].OpCode.Code == Code.Newobj;
+                            if (!ctorNew) return $"{file}: {t.FullName}.{x.Name} uses Fsm.{f.Name}";
+                        }
+                    }
+        }
+        return null;
+    }
+
     /// <summary>The method as PlayMaker 1.9 has it:
     ///   removeEvents.Clear(); updateEvents.Clear(); updateEvents.AddRange(delayedEvents);
     ///   for (i < updateEvents.Count) { e = updateEvents[i]; e.Update(); if (e.Finished) removeEvents.Add(e); }
     ///   for (j < removeEvents.Count) delayedEvents.Remove(removeEvents[j]);
     /// with nothing branching to its start: the three List&lt;DelayedEvent&gt; fields and List.Count.</summary>
-    static (FieldDefinition remove, FieldDefinition update, FieldDefinition delayed, MethodReference count)? Match(MethodDefinition m)
+    public static (FieldDefinition remove, FieldDefinition update, FieldDefinition delayed, MethodReference count)? Match(MethodDefinition m, int s = 0)
     {
-        var ins = m.Body.Instructions;
-        if (ins.Count < 40 || PlayMakerLib.Targeted(m.Body, ins[0]) || m.Body.HasExceptionHandlers) return null;
+        var all = m.Body.Instructions;
+        if (all.Count - s < 40 || PlayMakerLib.Targeted(m.Body, all[0]) || m.Body.HasExceptionHandlers) return null;
+        if (s > 0 && all.Take(s).Any(x => x.Operand is Instruction t && t != all[s])) return null;
+        var ins = all.Skip(s).ToList();
         FieldDefinition F(Instruction i) => i.OpCode.Code == Code.Ldfld ? ((FieldReference)i.Operand).Resolve() : null;
         bool L(Instruction i, string name, int pars) => i.OpCode.Code is Code.Callvirt or Code.Call && i.Operand is MethodReference r &&
             r.Name == name && r.Parameters.Count == pars && r.DeclaringType is GenericInstanceType g &&

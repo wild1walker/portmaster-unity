@@ -262,6 +262,12 @@ namespace HutongGames.PlayMaker
         }
 
         public void ClearDelayedEvents() { delayedEvents.Clear(); }
+        // (the report reads the list without handing it out: playmaker-delayedquiet's "out" stays false)
+        public void DescribeDelayed(StringBuilder sb)
+        {
+            if (delayedEvents == null) return;
+            for (int i = 0; i < delayedEvents.Count; i++) sb.Append(delayedEvents[i].Name).Append(':').Append(delayedEvents[i].Frames).Append(' ');
+        }
         public void DropDelayedEvents() { delayedEvents = null; }
         public void ReplaceState(int i, FsmState state) { states[i] = state; }
 
@@ -430,6 +436,8 @@ namespace HutongGames.PlayMaker
                         case 18: f.EventTarget = rnd.Next(2) == 0 ? (object)("t" + step) : null; break;
                         case 19: if (rnd.Next(10) == 0) f.KillOwner(); else if (rnd.Next(4) == 0) f.NewOwner(); else f.Update(); break;
                         case 20: Fsm.HitBreakpoint = rnd.Next(8) == 0; break;
+                        // a delayed event added through the list the getter hands out (rare: that FSM is never quiet again)
+                        case 21: if (rnd.Next(6) == 0 && f.DelayedEvents != null) f.DelayedEvents.Add(new DelayedEvent(f, "out" + step, 2)); else f.Update(); break;
                         default: foreach (Fsm x in fsms) x.Update(); break;      // (a game's frames: most FSMs idle)
                     }
                 }
@@ -442,8 +450,7 @@ namespace HutongGames.PlayMaker
                 {
                     sb.Append(x.Disabled ? 'D' : '-').Append(x.Entered ? 'E' : 'e').Append(x.ActiveState != null ? x.ActiveState.Name : "~")
                       .Append(x.EventTarget != null ? "@" + x.EventTarget : "").Append(' ');
-                    if (x.DelayedEvents != null)
-                        foreach (DelayedEvent d in x.DelayedEvents) sb.Append(d.Name).Append(':').Append(d.Frames).Append(' ');
+                    x.DescribeDelayed(sb);
                     sb.Append('|');
                 }
                 sb.Append(Log).Append('\n');
