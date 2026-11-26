@@ -333,9 +333,17 @@ static inline int now(int idx, int64_t *sec, uint32_t *nsec)
     }
 }
 
+/* so_set_clock_hook (so_loader.h): asked first; 0 = it answered */
+static int (*g_clock_hook)(int clk, long *sec, long *nsec);
+void so_set_clock_hook(int (*hook)(int clk, long *sec, long *nsec)) { g_clock_hook = hook; }
+
 int fastclock_gettime(clockid_t clk, void *tsp)
 {
     struct b_timespec *ts = tsp;
+    if (__builtin_expect(g_clock_hook != NULL, 0) && ts) {
+        long sec, nsec;
+        if (!g_clock_hook((int)clk, &sec, &nsec)) { ts->tv_sec = sec; ts->tv_nsec = nsec; return 0; }
+    }
     if (g_stats) {
         atomic_fetch_add_explicit(&g_calls[(unsigned)clk < NCLK ? (unsigned)clk : NCLK], 1, memory_order_relaxed);
         if (g_freq) stats_tick();

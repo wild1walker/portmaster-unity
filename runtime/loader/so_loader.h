@@ -154,6 +154,9 @@ void *so_dlopen(const char *filename, int bionic_flags);
 void *so_dlsym(void *handle, const char *symbol);
 /* debugging: every symbol Android code gets through dlsym passes through hook(symbol, found),
  * which may return a wrapper instead */
+/* The Android libraries' clock_gettime asks this first (fastclock.c): it fills *sec, *nsec and returns 0 to
+ * answer, anything else to let the clock answer (the host's lockstep checker: UnityMain's monotonic clock) */
+void so_set_clock_hook(int (*hook)(int clk, long *sec, long *nsec));
 void so_set_dlsym_hook(void *(*hook)(const char *symbol, void *found));
 /* the host may serve a dlopen() path itself: rewrite(path, buf, size) returns the file to open instead,
    or NULL (e.g. Mono's AOT images, which it looks for beside assemblies inside an OBB); a served file is

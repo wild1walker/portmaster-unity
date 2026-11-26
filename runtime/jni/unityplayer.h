@@ -178,6 +178,29 @@ int  up_inject_touch(int action, int n, const int *ids, const float *x, const fl
  * UP_BUTTON_* held after the event (getButtonState). */
 int  up_inject_mouse(int device_id, int action, int buttons, float x, float y, float vscroll, float hscroll);
 
+/* ---- input tap (the host's lockstep checker, host/lockstep.c) ----------------------------
+ * With a tap set, up_inject_key / up_inject_axes / up_inject_mouse / up_inject_touch hand each event
+ * to it as a record (their answer is the tap's) instead of sending it; up_inject_rec sends a record
+ * as the call it describes would have, past the tap. up_set_event_clock: the events' getEventTime in
+ * milliseconds from that function instead of the monotonic clock (still each past the one before);
+ * NULL: the clock again. up_finish: ask Unity to quit (Activity.finish). */
+#define UP_REC_MAX 16
+struct up_input_rec {
+    int kind;                       /* UP_REC_KEY, UP_REC_AXES, UP_REC_MOUSE, UP_REC_TOUCH */
+    int device, source, action;
+    int keycode, repeat, meta;      /* key */
+    int buttons;                    /* mouse */
+    int n;                          /* axes: axis[i] = value[i]; touch: id[i] at (value[i], y[i]) */
+    int axis[UP_REC_MAX];
+    float value[UP_REC_MAX], y[UP_REC_MAX];
+    float vscroll, hscroll;         /* mouse: x, y in value[0], y[0] */
+};
+enum { UP_REC_KEY = 1, UP_REC_AXES, UP_REC_MOUSE, UP_REC_TOUCH };
+void up_set_input_tap(int (*tap)(const struct up_input_rec *rec));
+int  up_inject_rec(const struct up_input_rec *rec);
+void up_set_event_clock(int64_t (*now_ms)(void));
+void up_finish(const char *why);
+
 /* ---- soft keyboard (TouchScreenKeyboard) ------------------------------------------------
  * When the game opens Unity's soft keyboard (TouchScreenKeyboard.Open -> UnityPlayer.showSoftInput)
  * the runtime holds the text field of Unity's input dialog (an EditText: text, selection, character

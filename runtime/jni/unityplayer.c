@@ -859,9 +859,11 @@ static int inject(jobject ev)
  * never reached the game until another one carried its state (Hollow Knight, Input System: a d-pad press
  * made with a jump, its MotionEvent in the KeyEvent's millisecond, was lost until the jump was let go) */
 static int64_t g_event_ms;
+static int64_t (*g_event_clock)(void);
+void up_set_event_clock(int64_t (*now_ms)(void)) { g_event_clock = now_ms; }
 static int64_t event_ms(void)
 {
-    int64_t t = up_now_ms(), last = __atomic_load_n(&g_event_ms, __ATOMIC_RELAXED);
+    int64_t t = g_event_clock ? g_event_clock() : up_now_ms(), last = __atomic_load_n(&g_event_ms, __ATOMIC_RELAXED);
     for (;;) {
         int64_t n = t > last ? t : last + 1;
         if (__atomic_compare_exchange_n(&g_event_ms, &last, n, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return n;
@@ -871,7 +873,7 @@ static int64_t event_ms(void)
 static int64_t g_key_down_ms[512];
 
 static int inject_key_flags(int device_id, int source, int action, int keycode, int repeat, int meta, int flags);
-int up_inject_key(int device_id, int source, int action, int keycode, int repeat, int meta)
+static int send_key(int device_id, int source, int action, int keycode, int repeat, int meta)
 {
     return inject_key_flags(device_id, source, action, keycode, repeat, meta, 0);
 }
@@ -940,7 +942,7 @@ static void synthesize_dpad(const up_motion_ev *m)
     }
 }
 
-int up_inject_axes(int device_id, int source, int n, const int *axes, const float *values)
+static int send_axes(int device_id, int source, int n, const int *axes, const float *values)
 {
     up_motion_ev *m = motion_new(UP_ACTION_MOVE, source ? source : UP_SOURCE_JOYSTICK, device_id);
     m->n = 1;
@@ -966,7 +968,7 @@ int up_inject_axes(int device_id, int source, int n, const int *axes, const floa
     return r;
 }
 
-int up_inject_mouse(int device_id, int action, int buttons, float x, float y, float vscroll, float hscroll)
+static int send_mouse(int device_id, int action, int buttons, float x, float y, float vscroll, float hscroll)
 {
     up_motion_ev *m = motion_new(action, UP_SOURCE_MOUSE, device_id);
     m->n = 1;
@@ -986,7 +988,7 @@ int up_inject_mouse(int device_id, int action, int buttons, float x, float y, fl
     return r;
 }
 
-int up_inject_touch(int action, int n, const int *ids, const float *x, const float *y)
+static int send_touch(int action, int n, const int *ids, const float *x, const float *y)
 {
     if (n > UP_MAX_POINTERS) n = UP_MAX_POINTERS;
     up_motion_ev *m = motion_new(action, UP_SOURCE_TOUCHSCREEN, 1);
@@ -1005,3 +1007,49 @@ int up_inject_touch(int action, int n, const int *ids, const float *x, const flo
     fj_pop_frame();
     return r;
 }
+
+/* the input tap (lockstep.c): events as records */
+static int (*g_tap)(const struct up_input_rec *);
+void up_set_input_tap(int (*tap)(const struct up_input_rec *rec)) { g_tap = tap; }
+int up_inject_rec(const struct up_input_rec *r)
+{
+    int n = r->n < 0 ? 0 : r->n > UP_REC_MAX ? UP_REC_MAX : r->n;
+    switch (r->kind) {
+    case UP_REC_KEY: return send_key(r->device, r->source, r->action, r->keycode, r->repeat, r->meta);
+    case UP_REC_AXES: return send_axes(r->device, r->source, n, r->axis, r->value);
+    case UP_REC_MOUSE: return send_mouse(r->device, r->action, r->buttons, r->value[0], r->y[0], r->vscroll, r->hscroll);
+    case UP_REC_TOUCH: return send_touch(r->action, n, r->axis, r->value, r->y);
+    }
+    return 0;
+}
+int up_inject_key(int device_id, int source, int action, int keycode, int repeat, int meta)
+{
+    if (!g_tap) return send_key(device_id, source, action, keycode, repeat, meta);
+    struct up_input_rec r = { .kind = UP_REC_KEY, .device = device_id, .source = source, .action = action, .keycode = keycode, .repeat = repeat, .meta = meta };
+    return g_tap(&r);
+}
+int up_inject_axes(int device_id, int source, int n, const int *axes, const float *values)
+{
+    if (!g_tap) return send_axes(device_id, source, n, axes, values);
+    struct up_input_rec r = { .kind = UP_REC_AXES, .device = device_id, .source = source, .action = UP_ACTION_MOVE };
+    r.n = n > UP_REC_MAX ? UP_REC_MAX : n;
+    for (int i = 0; i < r.n; i++) { r.axis[i] = axes[i]; r.value[i] = values[i]; }
+    return g_tap(&r);
+}
+int up_inject_mouse(int device_id, int action, int buttons, float x, float y, float vscroll, float hscroll)
+{
+    if (!g_tap) return send_mouse(device_id, action, buttons, x, y, vscroll, hscroll);
+    struct up_input_rec r = { .kind = UP_REC_MOUSE, .device = device_id, .source = UP_SOURCE_MOUSE, .action = action, .buttons = buttons, .n = 1,
+                              .vscroll = vscroll, .hscroll = hscroll };
+    r.value[0] = x; r.y[0] = y;
+    return g_tap(&r);
+}
+int up_inject_touch(int action, int n, const int *ids, const float *x, const float *y)
+{
+    if (!g_tap) return send_touch(action, n, ids, x, y);
+    struct up_input_rec r = { .kind = UP_REC_TOUCH, .device = 1, .source = UP_SOURCE_TOUCHSCREEN, .action = action };
+    r.n = n > UP_REC_MAX ? UP_REC_MAX : n;
+    for (int i = 0; i < r.n; i++) { r.axis[i] = ids ? ids[i] : i; r.value[i] = x[i]; r.y[i] = y[i]; }
+    return g_tap(&r);
+}
+void up_finish(const char *why) { up_request_finish(why); }

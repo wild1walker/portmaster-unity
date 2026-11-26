@@ -27,6 +27,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "monoaot.h"
 #include "jitwarm.h"
 #include "guiwarm.h"
+#include "lockstep.h"
 #include "quality.h"
 #include "desktopenv.h"
 #include "gldriver.h"
@@ -412,6 +413,7 @@ static void *dlsym_hook(const char *sym, void *p)
     p = unityicalls_dlsym_hook(sym, p);        // UA_PROPERTY_ID: engine calls answered from earlier answers (unityicalls.c)
     p = monoimage_dlsym_hook(sym, p);          // UA_MONO_IMAGE_MAP: the assemblies read in place from the APK (monoimage.c)
     p = fmodasync_dlsym_hook(sym, p);          // UA_FMOD_ASYNC: managed code waits for FMOD's update (fmodasync.c)
+    p = lockstep_dlsym_hook(sym, p);           // UA_LOCKSTEP: the clocks a check run fixes (lockstep.c)
     if (!strncmp(sym, "mono_", 5)) mono_options(p);
     if (g_mono_trace) {
         if (!strcmp(sym, "mono_array_new")) { r_array_new = p; p = (void *)w_array_new; }
@@ -526,7 +528,7 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); guiwarm_frame(); unityhooks_frame(); fmodasync_frame(); unitylayers_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); }
+static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); guiwarm_frame(); unityhooks_frame(); fmodasync_frame(); unitylayers_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); lockstep_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
@@ -630,6 +632,7 @@ int main(int argc, char **argv)
     so_set_library_path(libdir);
     g_mono_trace = getenv("UA_MONO_TRACE") != NULL;
     so_set_dlsym_hook(dlsym_hook);
+    lockstep_early();               // UA_LOCKSTEP: Unity's clock fixed before its libraries load (lockstep.c)
     if (getenv("UA_MONO_AOT")) so_set_dlopen_rewrite(monoaot_rewrite);   // Mono's AOT images (monoaot.c)
     hitches_init();                            // UA_HITCH_TRACE
     prof_init(root);                           // UA_PROF
@@ -775,6 +778,7 @@ int main(int argc, char **argv)
     jitlog_init();
     jitwarm_init();
     guiwarm_init();
+    lockstep_init();
     quality_init(pj_quality);
     cfg.on_frame = on_frame;
     cfg.sdk_int = sdk_int;
@@ -824,6 +828,7 @@ int main(int argc, char **argv)
     up_wait();
     glhooks_progcache_report("at the end");
     jitwarm_flush();                // every queued line of the JIT warm-up list in its file (jitwarm.c)
+    lockstep_flush();               // UA_LOCKSTEP's record and hashes written out (lockstep.c)
     fprintf(stderr, "[host] Unity stopped\n");
     // Unity has saved and shut down; the libraries' exit handlers (Mono's thread cleanup, static
     // destructors) have nothing left to do but can block on threads that are gone
