@@ -2620,6 +2620,10 @@ those layers), so one trace replayed without and with them gives the same frames
 without and with the option, on the same driver, with no difference of timing between the two
 (`picdiff frames`: quality.md, "Picture changes no one sees"). Only the window's readbacks mean anything
 then: a renamed texture's storage can owe its picture at a pass's end.
+`--frames N` (the trace's frame count, from the recording's log) skips the counting pass, so a trace can be
+read from a pipe: `cat trace.gz | ssh <handheld> glreplay /dev/stdin --frames N ...` replays a trace kept on
+the Mac (a trace with pixels is 0.5 GB for a few minutes of Hollow Knight, more than a shared card has free),
+and `UA_GL_REC_FILE` can be a FIFO the Mac reads over ssh while the game records.
 
 Tested on a fake driver with pixels (test/fake_hash_gl.c; pointer_test.sh, arm64 and armhf): one driver twice
 gives no difference; a driver that draws one call otherwise is found at its pass, then named exactly.

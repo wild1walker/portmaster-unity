@@ -23,6 +23,8 @@
 //                glrename.c and glpass.c (in ua_host's order: rename -> pass -> the driver), glrename_frame and
 //                glpass_frame at each swap: the same trace replayed with and without them shows what they change
 //                on the screen (a trace is written above those layers, so it holds the game's own calls)
+//   --frames N   the trace has N frames: no counting pass first, so the trace can be read from a pipe
+//                (glreplay /dev/stdin --frames N ...: a trace kept on another machine, streamed over ssh)
 //   --check      glGetError after every call: the calls a driver refused, by entry point (the replay is
 //                only a fair comparison where no driver refuses anything the game's driver took)
 // Environment:
@@ -742,7 +744,7 @@ int main(int argc, char **argv)
     int w = 720, h = 480;
     const char *hash_out = NULL, *hash_frames = NULL, *hash_dump = NULL;
     int hash_draws = 0, info = 0;
-    long hash_step = 1;
+    long hash_step = 1, stream_frames = 0;
     size_t evict_kb = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--from") && i + 1 < argc) from = atol(argv[++i]);
@@ -755,6 +757,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--hash-frames") && i + 1 < argc) hash_frames = argv[++i];
         else if (!strcmp(argv[i], "--hash-draws")) hash_draws = 1;
         else if (!strcmp(argv[i], "--hash-swap-only")) g_hash_swap_only = 1;
+        else if (!strcmp(argv[i], "--frames") && i + 1 < argc) stream_frames = atol(argv[++i]);
         else if (!strcmp(argv[i], "--hash-step") && i + 1 < argc) hash_step = atol(argv[++i]);
         else if (!strcmp(argv[i], "--hash-dump") && i + 1 < argc) hash_dump = argv[++i];
         else if (!strcmp(argv[i], "--info")) info = 1;
@@ -787,7 +790,8 @@ int main(int argc, char **argv)
     z_off_t start = gztell(g_f);
     long nframes = 0; unsigned long ncalls = 0;
     rec r;
-    while (read_rec(&r)) { if (r.op == TR_FRAME) { nframes++; if (g_main_thread == 255) g_main_thread = r.thread; } else ncalls++; free_rec(&r); }
+    if (stream_frames > 0) nframes = stream_frames;     // --frames: no counting pass (a trace read from a pipe)
+    else while (read_rec(&r)) { if (r.op == TR_FRAME) { nframes++; if (g_main_thread == 255) g_main_thread = r.thread; } else ncalls++; free_rec(&r); }
     if (to < 0 || to > nframes) to = nframes;
     if (from < 0) from = to > 300 ? to - 300 : 0;
     if (from >= to) { fprintf(stderr, "glreplay: %ld frames in the trace: nothing to measure from %ld to %ld\n", nframes, from, to); return 1; }
@@ -817,10 +821,10 @@ int main(int argc, char **argv)
             g_GetString(GL_VERSION), nfn);
 
     // replay: up to the window from the file, then the window read into memory and replayed
-    gzseek(g_f, start, SEEK_SET);
+    if (stream_frames <= 0) gzseek(g_f, start, SEEK_SET);
     long frame = 0;
     while (frame < from && read_rec(&r)) {
-        if (r.op == TR_FRAME) { frame_end(); frame++; }
+        if (r.op == TR_FRAME) { if (g_main_thread == 255) g_main_thread = r.thread; frame_end(); frame++; }
         else replay_rec(&r);
         free_rec(&r);
     }
