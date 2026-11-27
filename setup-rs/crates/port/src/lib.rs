@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod config;
+pub mod host;
 pub mod new;
 pub mod package;
 pub mod pyjson;

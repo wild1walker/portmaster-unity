@@ -2000,7 +2000,7 @@ file fresh/fresh/setup/convert.json 644 119 9b747d9590464036
 file fresh/fresh/setup/patchscript 644 26569 e7e868aa67ca94e6
 file fresh/fresh/setup/setup.env 644 804 02ed42d15d9cf158
 file fresh/fresh/setup/update 644 4420 52b96b947a42f6f1
-file fresh/package.sh 755 1420 4a7d9c1755ba5747
+file fresh/package.sh 755 1443 678880907c8aafe8
 file fresh/port.build.json 644 8378 e717f824eccc90e1
 file fresh/port.toml 644 7594 1825efde515bf1d4
 file fresh/testing_thread.txt 644 1329 025ee93a9c890978
@@ -2019,7 +2019,7 @@ file port/mygame/setup/convert.json 644 119 9b747d9590464036
 file port/mygame/setup/patchscript 644 26569 e7e868aa67ca94e6
 file port/mygame/setup/setup.env 644 806 cb232372d0ca51ae
 file port/mygame/setup/update 644 4420 52b96b947a42f6f1
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 8375 673fa582c786da4b
 file port/port.toml 644 7031 30268703ff9b804b
 file port/testing_thread.txt 644 1331 62e45118e9c6b3c4
@@ -2074,7 +2074,7 @@ file old/old/setup.txt 644 270 a494a1a4fb84c111
 file old/old/setup/convert.json 644 119 9b747d9590464036
 file old/old/setup/patchscript 644 28067 bc2fb85bd18c5a9d
 file old/old/setup/setup.env 644 824 458a26b0e3ced5f4
-file old/package.sh 755 1418 cda68ca91496533e
+file old/package.sh 755 1441 83df4d459d1b488f
 file old/port.build.json 644 3653 a118ba01f68bbc41
 file old/port.toml 644 6835 eb605d43901a3936
 file old/testing_thread.txt 644 873 bcf42584cc219986
@@ -2093,7 +2093,7 @@ file old2/old2/setup/convert.json 644 119 9b747d9590464036
 file old2/old2/setup/gles.json 644 432 a67e917ccede92da
 file old2/old2/setup/patchscript 644 10941 8209180f3d23c7fa
 file old2/old2/setup/setup.env 644 708 2c316eb1d16a3799
-file old2/package.sh 755 1419 39ac842218d06edc
+file old2/package.sh 755 1442 d303d4e3360936ad
 file old2/port.build.json 644 3269 0b638d2383bb9982
 file old2/port.toml 644 6651 26078b06fb5851c5
 file old2/testing_thread.txt 644 862 388f6d9db55e8933
@@ -2703,7 +2703,7 @@ file datagame/datagame/setup/convert.json 644 178 f450d5570273898b
 file datagame/datagame/setup/patchscript 644 26569 e7e868aa67ca94e6
 file datagame/datagame/setup/setup.env 644 765 1433d9d80984a17f
 file datagame/datagame/setup/update 644 4420 52b96b947a42f6f1
-file datagame/package.sh 755 1423 8ed89c74f42eef0f
+file datagame/package.sh 755 1446 86d6394d22521db0
 file datagame/port.build.json 644 5542 9be1bbb9264308ed
 file datagame/port.toml 644 6800 27c41e90acf4c5b3
 file datagame/testing_thread.txt 644 953 e9f569f612875547

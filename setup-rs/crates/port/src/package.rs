@@ -178,7 +178,7 @@ impl PackCtx<'_> {
 
     fn run(&mut self, what: &str, cmd: &mut Command) -> Result<()> {
         self.log(what);
-        let st = cmd.status().map_err(|e| Error::Fail(format!("{:?}: {e}", cmd.get_program())))?;
+        let st = crate::host::status(cmd).map_err(|e| Error::Fail(format!("{:?}: {e}", cmd.get_program())))?;
         if !st.success() {
             return Err(Error::Fail(format!(
                 "subprocess.CalledProcessError: Command '{:?}' returned non-zero exit status {}.",
@@ -1128,15 +1128,16 @@ pub fn package(repo: &Repo, port_src: &str, opts: &PackOpts, log: &mut dyn FnMut
         for cmd in bld.list("commands") {
             let cmd = cmd.py_str();
             ctx.log(&format!("== build: {cmd}"));
-            let st = Command::new("/bin/sh")
-                .arg("-c")
-                .arg(&cmd)
-                .current_dir(&port_src)
-                .env("PMUNITY", &repo.root)
-                .env("PORT_SRC", &port_src)
-                .env("BUILD", &build_dir)
-                .status()
-                .map_err(|e| Error::Fail(format!("/bin/sh: {e}")))?;
+            let st = crate::host::status(
+                Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .current_dir(&port_src)
+                    .env("PMUNITY", &repo.root)
+                    .env("PORT_SRC", &port_src)
+                    .env("BUILD", &build_dir),
+            )
+            .map_err(|e| Error::Fail(format!("/bin/sh: {e}")))?;
             if !st.success() {
                 return Err(Error::Fail(format!(
                     "subprocess.CalledProcessError: Command '{cmd}' returned non-zero exit status {}.",

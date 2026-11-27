@@ -26,6 +26,10 @@ fn range() -> String {
 
 /// The .NET SDK's dotnet: $DOTNET, else dotnet on PATH, else ~/.dotnet/dotnet, or None.
 fn find_dotnet() -> Option<String> {
+    if port::host::active() {
+        // (pmu in setup-rs/tools/pmu.sh's container: the computer's .NET, which pmu.sh names)
+        return std::env::var("DOTNET").ok().filter(|d| !d.is_empty());
+    }
     let exec = |p: &str| isfile(p) && unsafe_access_x(p);
     let mut cands: Vec<String> = Vec::new();
     if let Ok(d) = std::env::var("DOTNET") {
@@ -59,7 +63,7 @@ fn find_asmpatch(repo: &Repo, explicit: Option<&str>) -> Option<String> {
     }
     let out = port::ps(&repo.root.join("tools").join("asmpatch").join("out"));
     let native = joins(&[&out, "linux-arm64", "asmpatch"]);
-    if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") && unsafe_access_x(&native) {
+    if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") && !port::host::active() && unsafe_access_x(&native) {
         return Some(shquote(&native));
     }
     let dll = joins(&[&out, "any", "asmpatch.dll"]);
@@ -91,7 +95,7 @@ fn ensure_asmpatch(repo: &Repo, explicit: Option<&str>, log: Log) -> (Option<Str
         )));
     };
     log(&format!("building asmpatch for its survey (tools/asmpatch/build.sh with {dotnet})"));
-    let tail: Vec<String> = match Command::new(&build).env("DOTNET", &dotnet).output() {
+    let tail: Vec<String> = match port::host::output(Command::new(&build).env("DOTNET", &dotnet)) {
         Ok(r) => {
             let text = format!("{}{}", String::from_utf8_lossy(&r.stdout), String::from_utf8_lossy(&r.stderr));
             let lines: Vec<&str> = text.trim().lines().collect();
@@ -113,7 +117,7 @@ fn ensure_asmpatch(repo: &Repo, explicit: Option<&str>, log: Log) -> (Option<Str
 fn asmpatch_survey(cmd: &str, managed: &str) -> Option<(String, Vec<String>)> {
     static WOULD: OnceLock<Regex> = OnceLock::new();
     let words = shsplit(cmd).filter(|w| !w.is_empty())?;
-    let run = |arg: &str| Command::new(&words[0]).args(&words[1..]).arg(arg).arg(managed).stdin(std::process::Stdio::null()).output().ok();
+    let run = |arg: &str| port::host::output(Command::new(&words[0]).args(&words[1..]).arg(arg).arg(managed)).ok();
     let sv = run("--survey")?;
     let ls = run("--list")?;
     if !sv.status.success() {

@@ -116,7 +116,7 @@ file port/mygame/setup/patchscript 644 26569 e7e868aa67ca94e6
 file port/mygame/setup/questions.lua 644 482 1d2f74d08e849ac0
 file port/mygame/setup/setup.env 644 1232 c71382157e543f79
 file port/mygame/setup/update 644 4420 52b96b947a42f6f1
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 4745 71e0829d5f5a82b1
 file port/testing_thread.txt 644 994 4fcdc2cf387cf38b
 == images
@@ -247,7 +247,7 @@ file port/mygame/setup/patchscript 644 26569 e7e868aa67ca94e6
 file port/mygame/setup/questions.lua 644 482 1d2f74d08e849ac0
 file port/mygame/setup/setup.env 644 1232 c71382157e543f79
 file port/mygame/setup/update 644 4420 52b96b947a42f6f1
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 4744 6c2164da03e80cea
 file port/screenshot.png 644 8097 0453e28fa9eea1e2
 file port/testing_thread.txt 644 947 667096ddbe0b807b
@@ -347,7 +347,7 @@ file port/mygame/setup.txt 644 265 d7323f2f73dd9d11
 file port/mygame/setup/convert.json 644 119 9b747d9590464036
 file port/mygame/setup/patchscript 644 28067 bc2fb85bd18c5a9d
 file port/mygame/setup/setup.env 644 792 2b1a913699a9946f
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 3334 19833d6a7b13fa46
 file port/testing_thread.txt 644 868 bc8295a92e9c156f
 file port/tools/helper32 644 3064 869b4522d89f2a0c
@@ -426,7 +426,7 @@ file port/mygame/setup.txt 644 269 d991fff745270451
 file port/mygame/setup/convert.json 644 164 33de0997b2b3b579
 file port/mygame/setup/patchscript 644 25830 7e78ecf8017bd883
 file port/mygame/setup/setup.env 644 726 03fc885d0dfe061d
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 2928 d40211dc6f23374a
 file port/testing_thread.txt 644 937 e2f5ba1e6625a1c3
 == windows-android
@@ -505,7 +505,7 @@ file port/mygame/setup/convert.json 644 164 33de0997b2b3b579
 file port/mygame/setup/patchscript 644 26569 e7e868aa67ca94e6
 file port/mygame/setup/setup.env 644 718 41c96051065c7da1
 file port/mygame/setup/update 644 4420 52b96b947a42f6f1
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 2878 c9de6f4537932878
 file port/testing_thread.txt 644 917 480cf568ecfcb867
 == vulkan-python
@@ -637,7 +637,7 @@ file port/mygame/setup/files/mystep.py 644 11 1cdf32cfeb510d41
 file port/mygame/setup/patchscript 644 26569 e7e868aa67ca94e6
 file port/mygame/setup/setup.env 644 755 054535a7cf08c293
 file port/mygame/setup/update 644 4420 52b96b947a42f6f1
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 2967 275eaa73e33f234d
 file port/testing_thread.txt 644 950 11138a6488584ab2
 == apk
@@ -792,7 +792,7 @@ file port/mygame/port.json 644 862 fe03e37076921092
 file port/mygame/setup.txt 644 265 d7323f2f73dd9d11
 file port/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port/mygame/setup/setup.env 644 535 14d65807ffd7d38f
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 4213 cef3435c6f2fed62
 file port/testing_thread.txt 644 955 78e506d16c6356d0
 file port2-rel/mygame.zip 644 24144 e4158c9545599675 zip 40 ae37369567f255aa
@@ -830,7 +830,7 @@ file port2/mygame/port.json 644 991 616ab073864fb681
 file port2/mygame/setup.txt 644 260 3c2992b71f821a0e
 file port2/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port2/mygame/setup/setup.env 644 485 c256b7cd09b94e92
-file port2/package.sh 755 1421 03ede34b985f8f09
+file port2/package.sh 755 1444 6bb462edca457f1a
 file port2/port.build.json 644 4118 9437726346a65838
 file port2/testing_thread.txt 644 1094 6b2aedd3e01bfb45
 file port3-rel/mygame.zip 644 23896 336e2b26a58294d5 zip 38 e03bd9013d577a27
@@ -867,7 +867,7 @@ file port3/mygame/port.json 644 858 c7947f6716f6d900
 file port3/mygame/setup.txt 644 264 5468d0c077e29d44
 file port3/mygame/setup/patchscript 644 15316 ea574b237a49961a
 file port3/mygame/setup/setup.env 644 479 1022fec269d6eb7d
-file port3/package.sh 755 1421 03ede34b985f8f09
+file port3/package.sh 755 1444 6bb462edca457f1a
 file port3/port.build.json 644 4134 62359057bd8c8af7
 file port3/testing_thread.txt 644 953 cb35801d64402d5e
 file v7.toml 644 154 264ac04ccb126813
@@ -943,7 +943,7 @@ file port/mygame/setup/convert.json 644 119 9b747d9590464036
 file port/mygame/setup/gles.json 644 432 a67e917ccede92da
 file port/mygame/setup/patchscript 644 10941 8209180f3d23c7fa
 file port/mygame/setup/setup.env 644 709 1acbe6bc3f85313c
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 2737 6427a484af2bf0d9
 file port/testing_thread.txt 644 865 a7452ed185425eb1
 == mono-arm64-own-toml
@@ -1027,7 +1027,7 @@ file port/mono/setup.txt 644 262 df7fac01c19bc9ba
 file port/mono/setup/convert.json 644 119 9b747d9590464036
 file port/mono/setup/patchscript 644 28067 bc2fb85bd18c5a9d
 file port/mono/setup/setup.env 644 875 afd2fdb525079320
-file port/package.sh 755 1419 6f0d64d2a47933ca
+file port/package.sh 755 1442 35f522c4f32280b3
 file port/port.build.json 644 3138 1acc1f8d12499304
 file port/port.toml 644 128 c46a24b0e8b3ada7
 file port/testing_thread.txt 644 871 a5247d942334d02a
@@ -1134,7 +1134,7 @@ file port/mygame/setup.txt 644 261 162f0642f4aac568
 file port/mygame/setup/convert.json 644 119 9b747d9590464036
 file port/mygame/setup/patchscript 644 28067 bc2fb85bd18c5a9d
 file port/mygame/setup/setup.env 644 802 f39cb297b57fb1b2
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 3159 332fcf44649444e8
 file port/testing_thread.txt 644 861 21f9d9f7d2b26bdd
 == net35-true
@@ -1227,7 +1227,7 @@ file port/mygame/setup.txt 644 261 162f0642f4aac568
 file port/mygame/setup/convert.json 644 119 9b747d9590464036
 file port/mygame/setup/patchscript 644 28067 bc2fb85bd18c5a9d
 file port/mygame/setup/setup.env 644 802 f39cb297b57fb1b2
-file port/package.sh 755 1421 03ede34b985f8f09
+file port/package.sh 755 1444 6bb462edca457f1a
 file port/port.build.json 644 3077 87c7e5730bde0c4f
 file port/testing_thread.txt 644 861 21f9d9f7d2b26bdd
 == errors
@@ -1283,7 +1283,7 @@ file clone/mygame/setup/convert.json 644 119 9b747d9590464036
 file clone/mygame/setup/patchscript 644 26569 e7e868aa67ca94e6
 file clone/mygame/setup/setup.env 644 734 f9133fa73796094f
 file clone/mygame/setup/update 644 4420 52b96b947a42f6f1
-file clone/package.sh 755 1421 03ede34b985f8f09
+file clone/package.sh 755 1444 6bb462edca457f1a
 file clone/port.build.json 644 2833 fee10982b35f89ad
 file clone/testing_thread.txt 644 935 97d8a6393d0d3af2
 file mc.toml 644 127 4876204ddd2cd224

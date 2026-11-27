@@ -16,6 +16,7 @@ mod patch_obb;
 mod player;
 mod port;
 mod route;
+mod slim_donor;
 mod unpack;
 mod version;
 mod video;
@@ -48,6 +49,7 @@ pub const NAMES: &[&str] = &[
     "jitwarm-seed",
     "arch-check",
     "port",
+    "slim-donor",
 ];
 
 /// Runs a command, or None when it is not ported yet.
@@ -75,6 +77,7 @@ pub fn run(name: &str, args: &[String]) -> Option<ExitCode> {
         "jitwarm-seed" => Some(jitwarm_seed::run(args)),
         "arch-check" => Some(arch_check::run(args)),
         "port" => Some(port::run(args)),
+        "slim-donor" => Some(slim_donor::run(args)),
         _ => None,
     }
 }

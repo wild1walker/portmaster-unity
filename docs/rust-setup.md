@@ -69,6 +69,23 @@ pmu port package mygame --donors donors --pmu tools/port/out/pmu --submission
 (Tested in setup-rs's image, `tools/rs.sh <worktree> cargo build -p pmu`; the crate is plain Rust
 on pkgzip, libz-sys (zlib, static) and libc.)
 
+On the porter's computer pmu runs through `setup-rs/tools/pmu.sh <pmu command> [args...]` (a port's
+`package.sh` calls `pmu.sh port package`): the setup's static pmu (tools/port/out/pmu, built by
+build_pmu.sh when missing or older than setup-rs's sources; `PMU_BIN` another linux-arm64 build) in an
+arm64 container that sees the checkout, the current folder, every path in the arguments and the
+folders `DONORS`, `PMU_DIR`, `PMUNITY_MONO64_WORK`, `BOX64_OUT`, `NUGET_PACKAGES`, `OUT` and
+`PMU_MOUNTS` name, each at its own path. What pmu runs for a build runs outside the container, on
+the computer, as the Python packager ran it there: the runtime's and tools' build scripts (Docker),
+the port's `build.commands` (e.g. a .NET build of its own code), asmpatch's build and survey (the
+computer's .NET 8 SDK: `DOTNET`, else `dotnet` on PATH or ~/.dotnet/dotnet). crates/port `host.rs`
+does it: with `$PMU_HOST_EXEC` (a folder both see) each such command is written there as a shell
+script (its folder, its environment changes, its arguments; stdin closed), pmu.sh's loop runs it in
+the folder pmu was started in and writes its exit status back (the output goes to the terminal, or
+is kept for the commands whose output pmu reads), and pmu waits for it; without `$PMU_HOST_EXEC`
+the commands run where pmu runs. `crates/port/tests/host.rs` runs requests through pmu.sh's loop
+(`pmu.sh --serve <dir>`). `pmu slim-donor <apk> [out]` is package's slim_donor by itself (a port's
+own packaging script: Cuphead's).
+
 The templates, the converter it ships for ports pmu does not cover, `LICENSE` and `THIRD_PARTY.md`
 come from the checkout: `$PMUNITY_REPO`, else the first folder above the program (or the working
 folder) with `setup-rs/templates`. `port new --data <game>` starts from the
