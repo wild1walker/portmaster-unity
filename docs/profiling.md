@@ -1813,6 +1813,12 @@ a pass reads neighbouring memory, less data per object), not earlier fetches of 
 
 All the switches stay opt-in (exact, no cost measurable, no gain on Hollow Knight).
 
+Blasphemous (2017.4.40f1, `D06Z01S01`, its release launcher, muOS, A then B in one hold, 20 s profiles at 500 Hz):
+`UA_ANCHOR_WALK=1` takes the anchor walk from 2.4 % of UnityMain's samples (Unity's, 0.34 ms a frame) to 1.5 % (ours,
+0.21 ms: the same 31,781 entries' masks and next indices are still read, and they miss), and UnityMain from 14.08 to
+13.96 ms a frame on a CPU (58.4 and 58.5 fps: the display's 60 holds the frame rate there). About 1 %, one pair; worth a
+G350 A/B (that handheld is CPU-bound in Blasphemous), not a default yet.
+
 ### Where Unity's objects live (`UA_ALLOC_STATS`, King's Pass, 2026-11-27)
 
 The allocations of a run to the middle of King's Pass (4.8 M) by label and caller: nearly all are temporary (label 1,
