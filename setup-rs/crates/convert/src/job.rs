@@ -93,6 +93,9 @@ enum Entry {
         tmp: PathBuf,
         dst: PathBuf,
         synced: std::sync::mpsc::Receiver<std::io::Result<()>>,
+        /// (the sync's result once looked at: commit_ready)
+        result: Option<std::io::Result<()>>,
+        size: u64,
     },
     Mark {
         step: String,
@@ -107,6 +110,8 @@ struct Deferred {
     entries: Vec<Entry>,
     files: usize,
     bytes: u64,
+    /// (the scratch names' numbers, never the same twice in a run)
+    seq: usize,
     since: Option<Instant>,
     /// the thread that syncs the batch's files as they come (fsync), while the step goes on
     syncer: Option<(
@@ -453,7 +458,8 @@ impl Job {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let tmp = dir.join(format!("{}-{name}", self.deferred.files));
+        let tmp = dir.join(format!("{}-{name}", self.deferred.seq));
+        self.deferred.seq += 1;
         texcodec::prof::time(Stage::Write, || f(&tmp)).map_err(|e| match e {
             Error::Io(e) => crate::error::at(&tmp)(e),
             Error::Unity(unityfs::Error::Io(e)) => crate::error::at(&tmp)(e),
@@ -490,14 +496,41 @@ impl Job {
             tmp,
             dst,
             synced,
+            result: None,
+            size,
         });
         d.files += 1;
         d.bytes += size;
         let since = *d.since.get_or_insert_with(Instant::now);
-        if d.files >= DEFER_FILES || d.bytes >= DEFER_BYTES || since.elapsed() >= DEFER_AGE {
+        if d.files >= 2 * DEFER_FILES || d.bytes >= 2 * DEFER_BYTES {
             self.commit_deferred()?;
+        } else if d.files >= DEFER_FILES || d.bytes >= DEFER_BYTES || since.elapsed() >= DEFER_AGE {
+            // (the files already on the card go in place; the step does not wait for the card
+            // for the others unless twice as many are waiting)
+            self.commit_ready()?;
         }
         Ok(())
+    }
+
+    /// The first entries of the deferred batch whose files are synced (and the marks among them)
+    /// put in place as commit_deferred puts a batch, without waiting for a sync.
+    fn commit_ready(&mut self) -> Result<()> {
+        let mut n = 0;
+        for e in self.deferred.entries.iter_mut() {
+            if let Entry::File { synced, result, .. } = e {
+                if result.is_none() {
+                    match synced.try_recv() {
+                        Ok(r) => *result = Some(r),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(_) => {
+                            *result = Some(Err(std::io::Error::other("the sync thread stopped")))
+                        }
+                    }
+                }
+            }
+            n += 1;
+        }
+        self.commit_first(n)
     }
 
     /// The bytes of the deferred files waiting beside the files they replace (room they take on
@@ -510,24 +543,45 @@ impl Job {
     /// journal, made, their folders synced, then the marks (the files' and those of the files left
     /// as they were between them) in order, and the journal written.
     pub fn commit_deferred(&mut self) -> Result<()> {
-        if self.deferred.entries.is_empty() {
+        self.commit_first(self.deferred.entries.len())
+    }
+
+    /// commit_deferred for the batch's first n entries (the others wait for the next commit).
+    fn commit_first(&mut self, n: usize) -> Result<()> {
+        if n == 0 {
             return Ok(());
         }
         let _t = Timer::new(Stage::Commit);
-        let entries = std::mem::take(&mut self.deferred.entries);
-        self.deferred.files = 0;
-        self.deferred.bytes = 0;
-        self.deferred.since = None;
+        let rest = self.deferred.entries.split_off(n);
+        let entries = std::mem::replace(&mut self.deferred.entries, rest);
+        let d = &mut self.deferred;
+        d.files = 0;
+        d.bytes = 0;
+        for e in &d.entries {
+            if let Entry::File { size, .. } = e {
+                d.files += 1;
+                d.bytes += size;
+            }
+        }
+        d.since = (!d.entries.is_empty()).then(Instant::now);
         let mut moves = Vec::new();
-        for e in &entries {
+        for e in entries.iter() {
             if let Entry::File {
-                tmp, dst, synced, ..
+                tmp,
+                dst,
+                synced,
+                result,
+                ..
             } = e
             {
-                synced
-                    .recv()
-                    .unwrap_or_else(|_| Err(std::io::Error::other("the sync thread stopped")))
-                    .map_err(crate::error::at(tmp))?;
+                let r = match result {
+                    Some(Ok(())) => Ok(()),
+                    Some(Err(e)) => Err(std::io::Error::new(e.kind(), e.to_string())),
+                    None => synced
+                        .recv()
+                        .unwrap_or_else(|_| Err(std::io::Error::other("the sync thread stopped"))),
+                };
+                r.map_err(crate::error::at(tmp))?;
                 moves.push((tmp.clone(), dst.clone()));
             }
         }
@@ -556,7 +610,7 @@ impl Job {
         self.save_state()?;
         // (the scratch folder as a step leaves it: removed when nothing else is there)
         let dir = self.out.join(DEFER_DIR);
-        if std::fs::remove_dir(&dir).is_ok() {
+        if self.deferred.entries.is_empty() && std::fs::remove_dir(&dir).is_ok() {
             if let Some(p) = dir.parent() {
                 let _ = std::fs::remove_dir(p);
             }
@@ -888,6 +942,43 @@ mod tests {
         job.commit_deferred().unwrap();
         assert_eq!(std::fs::read(d.join("b")).unwrap(), b"new b");
         assert!(job.is_done("t", "b"));
+        drop(job);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A batch past DEFER_FILES puts in place what is synced and keeps the rest (commit_ready);
+    /// past twice that it waits: every file in place and marked in the order the step made them.
+    #[test]
+    fn deferred_files_go_in_place_as_they_are_synced() {
+        use super::*;
+        let d = std::env::temp_dir().join(format!("pmu-defer-ready-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let names: Vec<String> = (0..3 * DEFER_FILES + 3).map(|i| format!("f{i}")).collect();
+        for n in &names {
+            std::fs::write(d.join(n), b"old").unwrap();
+        }
+        let mut job = Job::new(&d, &d, Json::dict()).unwrap();
+        for (i, n) in names.iter().enumerate() {
+            job.write_deferred("s", n, |t| Ok(std::fs::write(t, format!("new {n}"))?))
+                .unwrap();
+            if i % 5 == 0 {
+                job.mark_unchanged("s", &format!("u{i}")).unwrap();
+            }
+            assert!(job.deferred.files < 2 * DEFER_FILES);
+        }
+        job.commit_deferred().unwrap();
+        let mut want = Vec::new();
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(std::fs::read(d.join(n)).unwrap(), format!("new {n}").as_bytes());
+            want.push(format!("\"{n}\""));
+            if i % 5 == 0 {
+                want.push(format!("\"u{i}\""));
+            }
+        }
+        let j = std::fs::read_to_string(d.join(STATE)).unwrap();
+        assert!(j.contains(&format!("\"s\": [{}]", want.join(", "))), "{j}");
+        assert!(!d.join(".pmunity-work").exists());
         drop(job);
         let _ = std::fs::remove_dir_all(&d);
     }
