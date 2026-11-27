@@ -15,7 +15,7 @@ build() {   # build <out dir>
   local out; mkdir -p "$1"; out=$(cd "$1" && pwd)
   RS_ROOT=${RS_ROOT:-$out} RS_MOUNTS= RS_MEM=${RS_MEM:-3g} "$HERE/rs.sh" "$PM" bash -c '
     set -euo pipefail
-    export CARGO_TARGET_DIR=/target/pmu-release PMU_TPK=$(ls /opt/unitypy/lzma.tpk /opt/pylibs/UnityPy/resources/lzma.tpk 2>/dev/null | head -1)
+    export CARGO_TARGET_DIR=/target/pmu-release
     T=aarch64-unknown-linux-musl; mkdir -p /build; cp -a . /build/setup-rs; cd /build/setup-rs
     cargo build -q --locked --release --target $T -p devtools >&2
     cat $CARGO_TARGET_DIR/$T/release/pmu-dev' > "$out/pmu-dev.tmp"

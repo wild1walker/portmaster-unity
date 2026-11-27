@@ -17,13 +17,13 @@ B=$(mktemp -d "${TMPDIR:-/tmp}/build-pmu.XXXXXX")
 trap 'rm -rf "$B"' EXIT
 RS_ROOT=${RS_ROOT:-$B} RS_MOUNTS= RS_MEM=${RS_MEM:-3g} "$HERE/rs.sh" "$PM" bash -c '
   set -euo pipefail
-  # (the class database and its licence: /opt/unitypy, or an image built before 2026-11-27: /opt/pylibs)
-  export CARGO_TARGET_DIR=/target/pmu-release PMU_TPK=$(ls /opt/unitypy/lzma.tpk /opt/pylibs/UnityPy/resources/lzma.tpk 2>/dev/null | head -1)
+  # (the class database and its licence: /opt/unitypy, $PMU_TPK in the image)
+  export CARGO_TARGET_DIR=/target/pmu-release
   T=aarch64-unknown-linux-musl; O=/tmp/out; mkdir -p $O /build; cp -a . /build/setup-rs; cd /build/setup-rs
   command -v "${TC_CXX:-none}" >/dev/null || { echo "ua-rust has no GCC 10 (TC_CXX; setup-rs/docker/Dockerfile.gcc10): the ASTC blocks would not all match" >&2; exit 1; }
   cargo build -q --locked --release --target $T -p pmu >&2
   cp $CARGO_TARGET_DIR/$T/release/pmu $O/
-  cat $(ls /opt/unitypy/LICENSE /opt/pylibs/unitypy-*.dist-info/licenses/LICENSE 2>/dev/null | head -1) > $O/unitypy.txt
+  cat /opt/unitypy/LICENSE > $O/unitypy.txt
   cat /usr/share/doc/musl/copyright > $O/musl.txt
   cat $(ls -d /opt/cargo/registry/src/*/lz4-sys-1.9.4 | head -1)/liblz4/lib/LICENSE > $O/lz4.txt
   cat $(ls -d /opt/cargo/registry/src/*/libz-sys-1.1.31 | head -1)/src/zlib/LICENSE > $O/zlib.txt

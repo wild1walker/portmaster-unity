@@ -105,8 +105,8 @@ repository.
 ## Used at build or conversion time (not vendored)
 
 Debian's armhf cross toolchains and libraries (Dockerfiles), SDL2, Mesa (test rig), and UnityPy's
-class database (`resources/lzma.tpk`, MIT; setup-rs/docker fetches it at UnityPy's 1.25.4 tag,
-checked by its sha256).
+class database (`resources/lzma.tpk`, MIT; setup-rs/docker takes it from UnityPy 1.25.4's
+source release on PyPI, checked by its sha256).
 
 [Mono.Cecil](https://github.com/jbevain/cecil) 0.11.6 (MIT, Copyright (c) 2008 - 2015 Jb Evain,
 Copyright (c) 2008 - 2011 Novell, Inc.), a NuGet package `tools/asmpatch` is built with:

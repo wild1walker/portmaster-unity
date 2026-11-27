@@ -133,8 +133,7 @@ name order, on both sides: until 2026-11-25 the walk went down the sub-folders i
 file system lists them, and `check_golden` passed only where that was the golden file's order.
 
 ```bash
-PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk PMU_PARITY_PYTHON=<venv>/bin/python \
-  setup-rs/tools/rs.sh <worktree> cargo test -p pmu --test check_parity -- --nocapture
+setup-rs/tools/rs.sh <worktree> cargo test -p pmu --test check_parity -- --nocapture   # (pmu's side; the Python's retired)
 ```
 
 ## The setup templates' tests
@@ -665,15 +664,15 @@ a handheld yet (the builds are an hour or more on a Cortex-A53).
 ## Building and testing
 
 The image `ua-rust` (arm64 Debian bookworm) has Rust 1.88 with the `aarch64-unknown-linux-musl`
-target, and the reference Python: PortMaster's `python_3.11` at `/opt/py` with the setup's
-packages at `/opt/pylibs`. Its recipe is `setup-rs/docker/Dockerfile`, then `Dockerfile.gcc10` on
-top of it (the commands and the three files it takes, which are not in the repository, are in
-its first lines). A release's pmu embeds one file of that image, UnityPy's class database
-(`/opt/pylibs/UnityPy/resources/lzma.tpk`), so the same image gives the same binary. On Apple silicon it runs natively. Builds, the crate cache, the test data and the scratch folder
+target, armhf glibc (for `pmu-dev elf-imports`) and no Python (images built before 2026-11-27 had the
+reference Python at `/opt/py` and `/opt/pylibs`). Its recipe is `setup-rs/docker/Dockerfile`, then `Dockerfile.gcc10` on
+top of it (the commands and the file it takes, which is not in the repository, are in its first
+lines). A release's pmu embeds one file of that image, UnityPy's class database
+(`/opt/unitypy/lzma.tpk`, `$PMU_TPK` in the image), so the same image gives the same binary. On Apple silicon it runs natively. Builds, the crate cache, the test data and the scratch folder
 live in Docker volumes (bind mounts of the host's disks are slow; a build's output is copied out
 with `docker cp` or a `cat` from the container when needed): `pmu-target` for the builds
 (`RS_TARGET_VOLUME`; a few GB, `/target/<worktree's name>` in it) and `pmu-cargo` for the crate
-cache (`RS_CARGO_VOLUME`), shared by every worktree; `RS_MEM` (1g; `build_pmu.sh` 3g) and
+cache (`RS_CARGO_VOLUME`), shared by every worktree; `RS_IMAGE` another image (default `ua-rust`); `RS_MEM` (1g; `build_pmu.sh` 3g) and
 `RS_JOBS` (2) size the container. Docker keeps its volumes in its disk image on the computer's
 own disk, which grows with every worktree's build (a few GB each) and does not shrink by itself:
 where that disk is short, `RS_TARGET_VOLUME` can be an absolute folder on another disk (Docker
@@ -687,12 +686,6 @@ RS_ROOT=... setup-rs/tools/rs.sh <worktree> cargo build --release --target aarch
 
 The musl build links with the image's gcc and musl-tools (`aarch64-linux-musl-gcc` for the C
 parts the crates build): no cross linker is needed on an arm64 host.
-
-The reference Python, in the same image:
-
-```bash
-PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH=<worktree>/convert:/opt/pylibs /opt/py/bin/pmu ...
-```
 
 Golden tests read real game data from `$PMU_TEST_DATA` (never committed, never named in the
 repository by its path): `Cuphead.app` (GOG, with the DLC), `pkg/` (GOG's installers),
@@ -726,13 +719,8 @@ with the system's zlib, and zlib-rs, which pkgzip reads with, gives other bytes)
 BuildSettings and MonoManager are read with unityfs and UnityPy's class database (a stored entry in
 place, a compressed one in memory, as the Python holds it). `cargo test -p apk` (with `PMU_TPK`)
 runs it on made-up builds (binary and protobuf manifests written in the test); the golden test runs
-both implementations case by case and compares status, stdout, stderr and every output file:
-
-```bash
-RS_ROOT=... setup-rs/tools/rs.sh <worktree> bash -c 'PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk \
-  PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH=<worktree>/convert:/opt/pylibs \
-  /opt/py/bin/python3 tests/golden/apk_golden.py <scratch> --pmu <pmu> [--real <a folder of APKs>]'
-```
+both implementations case by case and compared status, stdout, stderr and every output file (retired
+with the Python: `git show 2147a04:setup-rs/tests/golden/apk_golden.py`).
 
 `shaderx`'s golden data comes from the reference Python: `tests/golden/shaderx_golden.py <data>
 <config.json> <out> [--converted <converted data>]` runs the shaders step's own code on every Shader
