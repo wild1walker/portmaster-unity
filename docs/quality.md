@@ -204,7 +204,7 @@ What did not go in: realtime reflection probes off (a mirror can show the player
 White Mirror's game code drives its depth of field), bloom quality (no game here had it on where
 it mattered).
 
-## Picture changes no one sees (2026-11-27, in progress)
+## Picture changes no one sees (2026-11-27)
 
 The rule for every Unity port since 2026-11-26: a picture change is allowed when a person cannot see it on the
 handheld (3.5 - 4 inch, 640x480 / 720x480); the game play never changes. Candidates are the options that
@@ -225,11 +225,29 @@ setting, the worst 6x6 block, crops of the worst ones).
 
 | option | gain | worst measured | verdict |
 |---|---|---|---|
-| `UA_GL_RENAME=near` + `UA_GL_SAMECLEAR=1` | King's Pass 33.3 / 33.9 -> 36.0 / 36.5 fps (+8 - 10 %, measured 2026-10, muOS; not measured again yet) | City of Tears, 49 frames (frames 2000 - 4450 every 50; one copy left out a frame, 439 clears): SSIM 0.99994 at worst (mean 0.99996), PSNR 62.2 - 70 dB, largest difference 6 of 255, **0** pixels over 8 in any frame, 3.6 % of the pixels differ at all (by 1 - 6, along the edges of the sprites the brightness pass touches); looked at 4x with the difference x8: not visible | passes in City of Tears; King's Pass and a boss not yet replayed (the King's Pass trace was cut short), the gain not yet measured again: **not made a default yet** |
+| `UA_GL_RENAME=near` + `UA_GL_SAMECLEAR=1` | none in the game today (below) | the picture, replayed: City of Tears 49 frames, SSIM >= 0.99994, at most 6 of 255, 0 pixels over 8; King's Pass 24 frames (2700 - 3295), SSIM >= 0.99994, at most 6, 0 over 8; Gruz Mother (Hall of Gods) 24 frames in the fight (3700 - 4295), SSIM >= 0.99988, at most 9, at most 2 pixels over 8 in a frame, 10 % of the pixels off by 1 - 6; side by side, also 4x: not visible. One copy left out a frame (the brightness pass: the grab copies are gone with `grab_fetch`, the blur's copy back with `ASMPATCH_HK_BLUR=off`) | **stays off**: the picture passes, the game does not gain (below) |
 | textures `quality = "fast"` (instead of medium) | texture time -33 % (setup-speed.md) | against medium: all texels 34.21 -> 33.68 dB; 65 of 80 textures lose in their worst 1 % of blocks (by 0.73 dB on average, at most 3.7 dB); 38 of 80 under SSIM 0.99 against medium (lowest 0.963); worst blocks from about 30 dB to 14 - 20 dB: a 6x6 block of the wrong alpha sticking out of a sprite's edge, a light streak broken into blocks | fails: stays medium |
 | textures `tiers` (#29's medium tiers) | texture time -25 % (setup-speed.md) | all texels 34.21 -> 34.17 dB; 29 textures lose in their worst 1 % (0.31 dB on average, at most 1.7); 18 of 80 under SSIM 0.99 against medium (lowest 0.957); worst blocks 23 - 28 dB -> 14 - 20 dB, the same kind of block errors in light streaks | fails: stays off |
 | `shaders.grab_fetch` | King's Pass +8 % (+11 % passes) | not measured here: Hollow Knight already ships it (`"always"`, the port's own decision); it needs two converted data sets to compare | open |
 
-Pictures (Mac work drive, not in the repository): /Volumes/Unity3/work/nearpic/cmp/city/worst-frame.png and
+Why `UA_GL_RENAME=near` stays off although its picture passes (muOS, Hollow Knight 64-bit with the port's settings,
+King's Pass, A B A B from 50 C, fps from 50 s on):
+
+- With the port's `UA_GL_REC=auto` it is not in the call path at all: the recorder is put together first and turns
+  itself off at the first swap where no present thread runs (the fbdev handhelds), and while it is on, ua_host
+  leaves `UA_GPU_IDLE`, `UA_GL_RENAME` and `UA_GL_SAMECLEAR` out ("[host] UA_GL_REC is on: ..."). 55.35 / 55.38 fps
+  without, 55.51 / 56.60 with: 0 copies left out. (A change that decides `auto` before the layers are put
+  together, from the display path, is in /Volumes/Unity3/work/nearpic/glrec-auto-early.patch, not committed.)
+- With `UA_GL_REC=0` in both runs: 57.61 / 57.16 fps without; with it, in the game (the port's `UA_GL_ARENA`,
+  `UA_GL_SPEC`, `UA_GLES_POOL` under it) the probe of the brightness pass found it "close to a copy" 138 times
+  in a row and never left it out: King's Pass at 5 fps (each probe reads back). The replay, with the driver
+  right under it, settles after three probes; in the game something under it (or the draw's inputs) makes the
+  same draw new every time. Not followed further: King's Pass is at 57 - 60 fps without it, and one pass is all
+  it could leave out. (The other run with it, 60.00 fps, never left the title: its heap stayed at 96 MB; not a
+  result.)
+
+So: the picture bar is met, but there is nothing to gain and a stall to fix first; it stays opt-in.
+
+Pictures (Mac work drive, not in the repository): /Volumes/Unity3/work/nearpic/cmp/{city,kp,gg}/worst-frame.png and
 worst-crop.png; /Volumes/Unity3/work/nearpic/cmp/tex-fast/crops/, tex-tiers/crops/ (source | medium | the
 option, 8x), the tables cmp/tex-*/tex.tsv.
