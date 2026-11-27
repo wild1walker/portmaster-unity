@@ -51,24 +51,16 @@ TARC=(); tar --version 2>/dev/null | grep -q bsdtar && TARC=(--no-xattrs --no-ma
 echo "== copying to $(dev_name):$REMOTE"
 remote_sizes=$(dev_sh "mkdir -p $(q "$REMOTE") && cd $(q "$REMOTE") && find . -type f ! -name 'shot-*' ! -name '*.log' -exec stat -c '%s %Y %n' {} ';'") || {
   echo "cannot reach $(dev_name) (ssh must work without a password prompt; adb: adb devices lists it)"; exit 1; }
-changed=$(cd "$GAME" && REMOTE_SIZES="$remote_sizes" python3 -I -c '
-import os
-have = {}
-for line in os.environ["REMOTE_SIZES"].splitlines():
-    size, mtime, name = line.split(" ", 2)
-    have[os.path.normpath(name)] = (int(size), int(mtime))
-for top, dirs, files in os.walk("."):
-    dirs[:] = [d for d in dirs if not d.startswith(".")]
-    for f in files:
-        p = os.path.normpath(os.path.join(top, f))
-        if f.startswith(".") or f.startswith("shot-") or f.endswith(".log"):
-            continue
-        st = os.stat(p)
-        if have.get(p) != (st.st_size, int(st.st_mtime)):
-            print(p)')
+# the files whose size or time differ from the handheld's copy (hidden files and folders, shots and logs left out)
+lstat() { stat -c '%s %Y %n' "$@" 2>/dev/null || stat -f '%z %m %N' "$@"; }    # (GNU, else BSD stat)
+local_sizes=$(cd "$GAME" && find . \( -name '.?*' -prune \) -o -type f ! -name 'shot-*' ! -name '*.log' -print | while IFS= read -r f; do lstat "$f"; done)
+strip='{ n = $0; sub(/^[^ ]* [^ ]* /, "", n) }'
+changed=$(awk "$strip NR == FNR { have[n] = \$1 \" \" \$2; next } { if (have[n] != \$1 \" \" \$2) print n }" \
+  <(printf '%s\n' "$remote_sizes") <(printf '%s\n' "$local_sizes"))
+mb=$(awk "NR == FNR { c[\$0] = 1; next } $strip { if (n in c) s += \$1 } END { print int(s / 1048576) }" \
+  <(printf '%s\n' "$changed") <(printf '%s\n' "$local_sizes"))
 if [ -n "$changed" ]; then
   n=$(printf '%s\n' "$changed" | wc -l | tr -d ' ')
-  mb=$(cd "$GAME" && printf '%s\n' "$changed" | python3 -I -c 'import os,sys; print(sum(os.path.getsize(l.strip()) for l in sys.stdin) >> 20)')
   echo "   $n changed file(s), $mb MB"
   (cd "$GAME" && printf '%s\n' "$changed" | COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -T -) | dev_tar_in "$REMOTE" ||
     { echo "copy failed"; exit 1; }
@@ -109,43 +101,4 @@ echo "== results in $OUT"
 mkdir -p "$OUT" && rm -f "$OUT"/shot-*.ppm "$OUT"/shot-*.png
 dev_tar_out "$REMOTE" run.log mem.log 'shot-*.ppm' | tar -xf - -C "$OUT" ||
   { echo "fetching the results failed"; exit 1; }
-python3 -I - "$OUT" <<'EOF'
-import glob, os, re, sys
-out = sys.argv[1]
-log = open(os.path.join(out, 'run.log'), errors='replace').read()
-fps = [m.groups() for m in re.finditer(r'\[fps\] ([\d.]+) fps, frame [\d.]+ avg / ([\d.]+) p99 .* \((\d+) frames, \d+ total, (\d+) s\)(?: rss (\d+) MB)?', log)]
-if fps:
-    # the first window holds the load: leave it out of the average when there are others
-    w = fps[1:] if len(fps) > 1 else fps
-    frames = sum(int(f[2]) for f in w); secs = sum(int(f[2]) / float(f[0]) for f in w if float(f[0]) > 0)
-    print(f'frames:  {frames / secs:.1f} fps average after the first window, lowest window {min(float(f[0]) for f in w):.1f} fps, '
-          f'worst p99 {max(float(f[1]) for f in w):.1f} ms ({len(fps)} windows)')
-else:
-    print('frames:  no [fps] lines: the game did not reach its first frames (see run.log)')
-mem = open(os.path.join(out, 'mem.log')).read() if os.path.exists(os.path.join(out, 'mem.log')) else ''
-avail = [int(x) for x in re.findall(r'avail=(\d+)M', mem)]; rss = [int(x) for x in re.findall(r'rss=(\d+)M', mem)]
-if avail:
-    print(f'memory:  game up to {max(rss or [0])} MB resident; the system had {min(avail)} MB available at the lowest')
-end = re.findall(r'^exit (-?\d+)$', log, re.M); code = end[-1] if end else '?'
-crash = re.findall(r'^.*(?:\[crash\]|FORTIFY|abort message|Fatal signal|SIGSEGV).*$', log, re.M)
-if 'LOW MEMORY' in log:
-    ended = 'stopped by the memory watchdog: the game needs less memory (e.g. smaller textures, textures.scale)'
-elif crash:
-    ended = f'crashed (exit {code}): ' + crash[0][:200]
-elif '[uatest] ran the full' in log:
-    ended = 'ran the whole time (stopped at the end)'
-else:
-    m = re.search(r'exited on its own after (\d+) s', log)
-    ended = f'the game exited on its own{" after " + m.group(1) + " s" if m else ""}, exit {code} (see run.log)'
-print('ended:   ' + ended)
-shots = sorted(glob.glob(os.path.join(out, 'shot-*.ppm')), key=lambda f: int(re.findall(r'\d+', os.path.basename(f))[0]))
-try:
-    from PIL import Image
-    for f in shots:
-        Image.open(f).save(f[:-4] + '.png'); os.remove(f)
-    shots = [f[:-4] + '.png' for f in shots]
-except ImportError:
-    pass
-if shots:
-    print('shots:   ' + ' '.join(os.path.basename(f) for f in shots))
-EOF
+"$PU/setup-rs/tools/pmu-dev.sh" uatest-sum "$OUT"

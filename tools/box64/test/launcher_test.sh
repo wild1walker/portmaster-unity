@@ -1,9 +1,9 @@
 #!/bin/bash
-# Runs a box64-route launcher (setup-rs/templates/box64/launcher.sh, as `pmunity route
-# --launcher` or `pmunity port new --route box64` writes it) end to end in the test rig's container,
+# Runs a box64-route launcher (setup-rs/templates/box64/launcher.sh, as `pmu route
+# --launcher` or `pmu port new --route box64` writes it) end to end in the test rig's container,
 # with a stand-in PortMaster (mockpm/: control.txt, Westonpack's westonwrap.sh) and the port's
 # folder laid out as on a handheld after its setup: box64, glxes/gl4es, box64.env, unityprefs.sh,
-# game.env (`pmunity route --env`), gamedata. (port_test.sh tests a whole release zip, setup too.)
+# game.env (`pmu route --env`, setup-rs/tools/pmu.sh), gamedata. (port_test.sh tests a whole release zip, setup too.)
 #
 #   tools/box64/test/launcher_test.sh <launcher.sh> <game folder> <out dir> [seconds]
 #
@@ -18,8 +18,7 @@ OUTD=${3:?out dir}; SECS=${4:-80}
 mkdir -p "$OUTD"; OUTD=$(cd "$OUTD" && pwd); rm -rf "$OUTD"/shot_* "$OUTD/port"
 BIN=$(cd "${BIN:-$here/out}" && pwd)
 envs=(); for v in $(env | grep -oE '^PMU_[A-Z0-9_]*='); do envs+=(-e "${v%=}"); done
-python3 -I -c "import sys; sys.path.insert(0, sys.argv[1]); from pmunity.route import main; main([sys.argv[2], '--env'])" \
-  "$here/../../convert" "$GAME" > "$OUTD/game.env" || exit 1
+"$here/../../setup-rs/tools/pmu.sh" route "$GAME" --env > "$OUTD/game.env" || exit 1
 docker run --rm --platform linux/arm64 --network none --cpuset-cpus="${CPUS:-0-3}" --shm-size=512m --memory="${MEM:-1500m}" \
   -v "$GAME":/game:ro ${OVERLAY:+-v "$(cd "$OVERLAY" && pwd)":/overlay:ro} -v "$OUTD":/out -v "$BIN":/pm:ro \
   -v "$here":/rig:ro -v "$here/test/mockpm":/mockpm:ro -v "$LAUNCHER":/launcher.sh:ro \
@@ -65,4 +64,4 @@ mkdir -p /out/port; cp $P/log.txt $P/player.log /out/port/ 2>/dev/null
 find $P/conf -name prefs -exec cp {} /out/port/prefs \; 2>/dev/null
 ls $P/conf/dynacache 2>/dev/null | head -3 > /out/port/dynacache.txt
 tail -5 /out/launcher.out'
-python3 -I "$here/rigstats.py" "$OUTD" --png     # the screenshots as PNGs
+"$here/../../setup-rs/tools/pmu-dev.sh" rigstats "$OUTD" --png     # the screenshots as PNGs

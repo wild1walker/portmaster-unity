@@ -188,7 +188,7 @@ function mergeMap(rep, portMap) {
   return m;
 }
 function mapText(rep, pmap) {
-  const lines = ['# plugins.map (pmunity android-data; docs/plugins.md): what the runtime gives each DllImport name',
+  const lines = ['# plugins.map (pmu android-data; docs/plugins.md): what the runtime gives each DllImport name',
     '#   map <name> lib <file in lib/> | stub <id> | host <system library> | none',
     '#   sig <name> <entry> <result> <args>: argument classes for the softfp thunks of glibc libraries'];
   for (const name of Object.keys(pmap).sort((a, b) => cmpStr(a.toLowerCase(), b.toLowerCase()))) {

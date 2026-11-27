@@ -1,4 +1,4 @@
-// The port's packing step (pmunity android-data) as its patchscript runs it, read from the patchscript: the
+// The port's packing step (pmu android-data) as its patchscript runs it, read from the patchscript: the
 // command line is found and its words expanded with the script's own variables (simple assignments, and
 // `[ -f "<file>" ] && V=<value>` tests answered from what is staged); the options become android.js's build
 // and pack. An option the page does not do, or an --assembly-patch command it has no build of, is Unsupported:

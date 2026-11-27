@@ -1,7 +1,7 @@
 #!/bin/bash
 # rehearse.sh <port zip> <game folder or archive> <work dir> [emu seconds] [input script]
 #
-# A port's first launch rehearsed on a PC, as on a handheld: the release zip (`pmunity port package`)
+# A port's first launch rehearsed on a PC, as on a handheld: the release zip (`pmu port package`)
 # is unpacked into <work>/roms/ports, the game copied into its gamedata/, and the port's own
 # launcher started in an aarch64 container with a handheld's tools (busybox first on PATH, bash,
 # curl, PortMaster's 7-Zip, 1 GB of RAM, the network on) and a stand-in for PortMaster
@@ -17,7 +17,6 @@
 #   ANSWERS         answers to the port's questions, e.g. "TEXTURE_QUALITY=fast" (default: none,
 #                   as a PortMaster without questions)
 #   REHEARSE_IMAGE  the container image (default ua-port-rehearse, built from rehearse/Dockerfile)
-#   PYTHON          a Python with Pillow, for shots.png (default python3)
 #   REHEARSE_DONE   the file a finished setup leaves in the port folder (default .setup_done)
 #   PM_PYTHON       PortMaster's python_3.11.squashfs, for a launcher that mounts it (libs/): unpacked
 #                   into $HOME/python_3.11 in the container instead (mount and umount do nothing there)
@@ -57,7 +56,7 @@
 #                   has where the game is an APFS clone (cp -c) that the setup's space checks count whole
 #   REHEARSE_MEMLOG=1  the setup's memory sampled twice a second into <work>/mem.log (the container's: all,
 #                   anonymous, page cache; each process over 2 MB: RSS/anonymous/peak RSS in MB; the setup's
-#                   step and its last line), then each program's peak and the step it was in (tools/port/memlog.py):
+#                   step and its last line), then each program's peak and the step it was in (`pmu-dev memlog`):
 #                   which step and program need the most of a handheld's memory
 #   EMU_ARCH        the emulated rig's architecture (tools/emu/emu.sh: armhf or arm64); default:
 #                   arm64 when the installed game is an arm64-v8a build (android_package.json "abi"),
@@ -68,7 +67,6 @@ ZIP=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); GAME=$2; WORK=$3; SECS=${4:
 HERE=$(cd "$(dirname "$0")" && pwd); PU=$(cd "$HERE/../.." && pwd)
 PM7Z=${PM_7ZZ:?set PM_7ZZ to PortMaster\'s 7zzs.aarch64}
 IMG=${REHEARSE_IMAGE:-ua-port-rehearse}
-PY=${PYTHON:-python3}
 mkdir -p "$WORK"; WORK=$(cd "$WORK" && pwd)
 docker image inspect "$IMG" >/dev/null 2>&1 || docker build --platform linux/arm64 -t "$IMG" "$HERE/rehearse"
 
@@ -84,17 +82,10 @@ fi
 rm -rf "$R"; mkdir -p "$R/ports"
 [ -z "${REHEARSE_OVER:-}" ] || cp -cR "$REHEARSE_OVER/roms/." "$R/" 2>/dev/null || cp -R "$REHEARSE_OVER/roms/." "$R/"
 # the release zip, unpacked as PortMaster does (file modes kept; over an earlier install with REHEARSE_OVER)
-"$PY" -I - "$ZIP" "$R/ports" <<'PY'
-import os, sys, zipfile
-with zipfile.ZipFile(sys.argv[1]) as z:
-    for i in z.infolist():
-        p = z.extract(i, sys.argv[2])
-        m = i.external_attr >> 16 & 0o777
-        if m:
-            os.chmod(p, m)
-PY
+# (the zip's own Unix modes kept: unzip restores them)
+unzip -qo "$ZIP" -d "$R/ports"
 pj=$(ls "$R"/ports/*/port.json | head -1)
-read -r name launcher < <("$PY" -I -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['items'][1], d['items'][0])" "$pj")
+read -r name launcher < <(jq -r '"\(.items[1]) \(.items[0])"' "$pj")
 P="$R/ports/$name"
 echo "port $name, launcher $launcher"
 if [ "${REHEARSE_AARCH64_ONLY:-}" = 1 ]; then
@@ -195,7 +186,7 @@ docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"}
   -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_MEMLOG:+(/rbin/memsamp /roms/mem.log '/roms/ports/$name' &); }${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
 echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup log: $P/patchlog.txt"
-if [ -f "$R/mem.log" ]; then mv "$R/mem.log" "$WORK/mem.log"; "$PY" -I "$HERE/memlog.py" "$WORK/mem.log" || true; fi
+if [ -f "$R/mem.log" ]; then mv "$R/mem.log" "$WORK/mem.log"; "$PU/setup-rs/tools/pmu-dev.sh" memlog "$WORK/mem.log" || true; fi
 grep -h "PATCH_FAIL_MSG" "$P/patchlog.txt" 2>/dev/null && exit 1
 [ -f "$P/${REHEARSE_DONE:-.setup_done}" ] || { echo "setup did not finish"; tail -20 "$WORK/launch1.log"; exit 1; }
 [ -z "${REHEARSE_OVER:-}" ] || echo "after the update: $(head -1 "$P/${REHEARSE_DONE:-.setup_done}" | cut -c1-120); setup folder: $(ls "$P/setup" 2>/dev/null | wc -l | tr -d ' ') entries"
@@ -235,53 +226,7 @@ for f in 0.2 0.4 0.65 0.9; do
   t=$(awk "BEGIN{print int($SECS*$f)}"); sleep $((t - prev)); prev=$t; touch "$E/shot.req"
 done
 wait
-"$PY" -I - "$E" "$WORK/shots.png" <<'PY'
-import glob, sys
-from PIL import Image
-fs = sorted(glob.glob(sys.argv[1] + '/shot-*.ppm'), key=lambda f: int(f.rsplit('-', 1)[1].split('.')[0]))
-ims = [Image.open(f) for f in fs]
-if ims:
-    w, h = ims[0].size
-    s = Image.new('RGB', (w * 2, h * 2))
-    for i, im in enumerate(ims[:4]):
-        s.paste(im, ((i % 2) * w, (i // 2) * h))
-    s.save(sys.argv[2])
-print(len(ims), 'shots', [im.getextrema()[0] for im in ims], '->', sys.argv[2])
-PY
+"$PU/setup-rs/tools/pmu-dev.sh" montage "$E" "$WORK/shots.png"
 # the sound: the OpenSL ES output's raw PCM (its format in run.log) as WAV files, and how loud they are
-[ "${REHEARSE_SOUND:-1}" = 1 ] && "$PY" -I - "$E" "$WORK" <<'PY'
-import array, glob, math, operator, os, re, sys, wave
-e, work = sys.argv[1], sys.argv[2]
-log = open(os.path.join(e, 'run.log'), errors='replace').read()
-fmts = {m.group(1): (int(m.group(2)), int(m.group(3)), int(m.group(4), 16))
-        for m in re.finditer(r'output to /emu/(\S+) \((\d+) Hz, (\d+) ch, fmt 0x([0-9a-f]+)\)', log)}
-pcms = sorted(glob.glob(os.path.join(e, 'sound.pcm*')))
-if not pcms:
-    print('sound: none (the game opened no OpenSL ES output)')
-for p in pcms:
-    name = os.path.basename(p)
-    rate, ch, fmt = fmts.get(name, (48000, 2, 0x8010))
-    if fmt != 0x8010:                       # (SDL's AUDIO_S16LSB; others kept raw)
-        print(f'sound: {p}: format 0x{fmt:x}, {rate} Hz, {ch} ch, left raw'); continue
-    out = os.path.join(work, name.replace('sound.pcm', 'sound') + '.wav')
-    peak, sq, n, loud, secs = 0, 0.0, 0, 0, 0
-    with open(p, 'rb') as f, wave.open(out, 'wb') as w:
-        w.setnchannels(ch); w.setsampwidth(2); w.setframerate(rate)
-        while True:
-            b = f.read(rate * ch * 2)           # a second at a time
-            if len(b) < 2:
-                break
-            b = b[:len(b) // 2 * 2]
-            w.writeframes(b)
-            v = array.array('h', b)
-            if sys.byteorder == 'big':
-                v.byteswap()
-            m = max(map(abs, v))
-            peak = max(peak, m); sq += sum(map(operator.mul, v, v)); n += len(v); secs += 1
-            loud += m > 328                     # (above -40 dBFS)
-    os.remove(p)
-    db = lambda x: f'{20 * math.log10(x / 32768):.1f} dBFS' if x > 0 else 'silent'
-    print(f'sound: {out}: {n / ch / rate:.0f} s, peak {db(peak)}, RMS {db(math.sqrt(sq / n) if n else 0)}, '
-          f'sound in {loud} of {secs} seconds')
-PY
+[ "${REHEARSE_SOUND:-1}" = 1 ] && "$PU/setup-rs/tools/pmu-dev.sh" pcmwav "$E" "$WORK"
 grep -E 'UnityMain thread exits|\[crash\]|FORTIFY|abort message|^exit' "$E/run.log" | head -5 || true

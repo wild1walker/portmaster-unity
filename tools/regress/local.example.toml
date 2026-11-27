@@ -12,19 +12,18 @@ corpus = "/path/to/corpus"
 # APFS volume as the corpus is fastest: android-data then clones the game's files.
 scratch = "/path/to/scratch"
 
-# Python with the converter's requirements (convert/requirements.txt); default: the one running
-# regress.py
-# python = "/path/to/venv/bin/python3"
+# the pmu to test (default: the checkout's tools/port/out/pmu/pmu, which regress.sh builds)
+# pmu = "/path/to/pmu"
 
-# folders holding Unity Android players (`pmunity player fetch <version> <dir>/<version>/pkg`, or
+# folders holding Unity Android players (`pmu player fetch <version> <dir>/<version>/pkg`, or
 # <dir>/<version> itself); a missing version is fetched into <scratch>/players
 players = ["/path/to/unity-players"]
 
-# the IL2CPP route's tools (`pmunity il2cpp --home`, PMUNITY_IL2CPP_HOME)
+# the IL2CPP route's tools (`pmu il2cpp --home`, PMUNITY_IL2CPP_HOME)
 # il2cpp_home = "/path/to/il2cpp-home"
 
 # built tools: the rig's ua_host (runtime/host/out, runtime/host/out/arm64), asmpatch's command,
-# the shader translators (default: this checkout's tools/*/out)
+# the shader translators (linux-arm64 builds: they run in regress.sh's container; default: what pmu finds)
 # hostbin = "/path/to/portmaster-unity/runtime/host/out"
 # hostbin64 = "/path/to/portmaster-unity/runtime/host/out/arm64"
 # asmpatch = "dotnet /path/to/portmaster-unity/tools/asmpatch/out/any/asmpatch.dll"

@@ -18,6 +18,7 @@
 #                the port folder
 #   DONORS, PMU_DIR, PYBUNDLE, PMUNITY_MONO64_WORK, BOX64_OUT, NUGET_PACKAGES, PMUNITY_ASMPATCH, DOTNET,
 #   OUT          passed to pmu (paths mounted); DOTNET defaults to this computer's dotnet when there is one
+#   PMU_ENV      more variables passed (names, space-separated: pmu-dev.sh's)
 # (pmu.sh --serve <dir> runs the request loop alone, until <dir>/stop: crates/port's tests.)
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -85,9 +86,11 @@ while IFS= read -r m; do
   for k in "${mounts[@]+"${mounts[@]}"}"; do case $m/ in "$k"/*) continue 2 ;; esac; done   # (inside one already seen)
   mounts+=("$m")
 done < <(printf '%s\n' "${want[@]}" | sort -u)
-args=(--rm --pull=never --platform linux/arm64 -w "$PWD" -e PMU_HOST_EXEC="$X" -e PMUNITY_REPO="$PM")
+# (TMPDIR in the shared folder: the files a command run here writes into pmu's temporary folders)
+mkdir -p "$X/tmp"
+args=(--rm --pull=never --platform linux/arm64 -w "$PWD" -e PMU_HOST_EXEC="$X" -e TMPDIR="$X/tmp" -e PMUNITY_REPO="$PM")
 for m in "${mounts[@]}"; do args+=(-v "$m:$m"); done
-for v in $VARS PMUNITY_ASMPATCH DOTNET; do [ -z "${!v:-}" ] || args+=(-e "$v=${!v}"); done
+for v in $VARS PMUNITY_ASMPATCH DOTNET ${PMU_ENV:-}; do [ -z "${!v:-}" ] || args+=(-e "$v=${!v}"); done
 case $(uname -s) in Linux) args+=(--user "$(id -u):$(id -g)") ;; esac
 
 docker run "${args[@]}" "$IMG" "$BIN" "$@" &

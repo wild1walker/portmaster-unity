@@ -1,5 +1,5 @@
 // What each kind of port's setup expects in gamedata/, and how it is told that work is done:
-//   standard (pmunity port new): the data folder anywhere under gamedata/ (find_any), its config
+//   standard (pmu port new): the data folder anywhere under gamedata/ (find_any), its config
 //     setup/convert.json with the answers' --set values; answers that change textures saved in
 //     gamedata/.setup/answers/<ID>, which the setup takes before asking
 //   cuphead (portmaster-cuphead's own setup): step 1 done here: gamedata/Cuphead_Data, mono-etc,

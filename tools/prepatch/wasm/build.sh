@@ -4,9 +4,9 @@
 #   Pillow 12.3.0       libImaging/Resample.c, BcnDecode.c (unchanged; shim/Imaging.h stands in for Pillow's)
 #   astc_encoder_py 0.1.12   its astc-encoder sources (ARM, Apache-2.0), no SIMD ISA (portable)
 #   texture2ddecoder 1.0.6   the crunch unpackers (MIT; crunch: zlib)
-#   portmaster-unity    convert/native/guided_astc/guided_astc.c (MIT), its core cut from the Python wrappe
+#   portmaster-unity    setup-rs/vendor/guided_astc/guided_astc.c (MIT), its block code cut from pmu's entry points (ga_init)
 #   lz4 4.4.5 (python-lz4)   its bundled lz4 library: LZ4HC level 9 for bundles as UnityPy writes them (BSD-2)
-# Needs wasi-sdk (WASI_SDK, default ~/wasi-sdk) and python3; PMUNITY = a portmaster-unity checkout.
+# Needs wasi-sdk (WASI_SDK, default ~/wasi-sdk), curl and jq; PMUNITY = a portmaster-unity checkout.
 # The sources go to SRC (default ~/.cache/pmucore-src), fetched from PyPI once.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -17,16 +17,15 @@ PMU=${PMUNITY:?set PMUNITY to a portmaster-unity checkout}
 mkdir -p "$SRC"
 fetch() {   # fetch <pypi name> <version> <unpacked folder>
   [ -d "$SRC/$3" ] && return
-  python3 -I - "$1" "$2" "$SRC" <<'PY'
-import json, sys, tarfile, urllib.request, io
-name, ver, dst = sys.argv[1:]
-d = json.load(urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{ver}/json'))
-u = next(x for x in d['urls'] if x['packagetype'] == 'sdist')
-data = urllib.request.urlopen(u['url']).read()
-import hashlib
-assert hashlib.sha256(data).hexdigest() == u['digests']['sha256'], 'checksum'
-tarfile.open(fileobj=io.BytesIO(data)).extractall(dst, filter='data')
-PY
+  # (PyPI's JSON: the sdist's url and sha256; curl, jq, shasum or sha256sum, tar)
+  local j url sum got
+  j=$(curl -fsSL "https://pypi.org/pypi/$1/$2/json")
+  url=$(printf '%s' "$j" | jq -r '[.urls[] | select(.packagetype == "sdist")][0].url')
+  sum=$(printf '%s' "$j" | jq -r '[.urls[] | select(.packagetype == "sdist")][0].digests.sha256')
+  curl -fsSL -o "$SRC/$1-$2.tar.gz" "$url"
+  got=$({ shasum -a 256 "$SRC/$1-$2.tar.gz" 2>/dev/null || sha256sum "$SRC/$1-$2.tar.gz"; } | cut -d' ' -f1)
+  [ "$got" = "$sum" ] || { echo "$1 $2: checksum" >&2; rm -f "$SRC/$1-$2.tar.gz"; exit 1; }
+  tar -xzf "$SRC/$1-$2.tar.gz" -C "$SRC" && rm -f "$SRC/$1-$2.tar.gz"
 }
 fetch pillow 12.3.0 pillow-12.3.0
 fetch astc-encoder-py 0.1.12 astc_encoder_py-0.1.12
@@ -34,9 +33,10 @@ fetch texture2ddecoder 1.0.6 texture2ddecoder-1.0.6
 fetch lz4 4.4.5 lz4-4.4.5
 
 B=$(mktemp -d); trap 'rm -rf "$B"' EXIT
-# guided_astc's core: everything before the Python wrapper, without Python's and pthreads' headers
-G="$PMU/convert/native/guided_astc/guided_astc.c"
-awk '/^static int get_buf/{exit} {print}' "$G" | grep -vE '^#define (Py_LIMITED_API|PY_SSIZE_T_CLEAN)|^#include <(Python|pthread)\.h>' > "$B/guided_core.inc"
+# guided_astc's core: everything before pmu's plain-buffer entry points (ga_init, ga_encode), without
+# pthreads' header (setup-rs/vendor/guided_astc, the block code of the Python module it replaced)
+G="$PMU/setup-rs/vendor/guided_astc/guided_astc.c"
+awk '/^\/\* ga_init\(\)/{exit} {print}' "$G" | grep -vE '^#define (Py_LIMITED_API|PY_SSIZE_T_CLEAN)|^#include <(Python|pthread)\.h>' > "$B/guided_core.inc"
 
 CC="$SDK/bin/clang --target=wasm32-wasip1 --sysroot=$SDK/share/wasi-sysroot"
 CXX="$SDK/bin/clang++ --target=wasm32-wasip1 --sysroot=$SDK/share/wasi-sysroot"

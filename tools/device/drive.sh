@@ -24,8 +24,8 @@ shot=$(dev_sh "cd $(q "$REMOTE") && n=\$(ls shot-*.ppm 2>/dev/null | wc -l) && t
 [ -n "$shot" ] || { echo "no screenshot (is the game running in $REMOTE?)"; exit 1; }
 tmp=$(mktemp "${TMPDIR:-/tmp}/drive.XXXXXX")
 dev_get "$REMOTE/$shot" "$tmp" || { rm -f "$tmp"; exit 1; }
-if python3 -c 'import PIL' 2>/dev/null && [ "${OUT##*.}" != ppm ]; then
-  python3 -c 'import sys; from PIL import Image; Image.open(sys.argv[1]).save(sys.argv[2])' "$tmp" "$OUT"
+if [ "${OUT##*.}" = png ]; then
+  "$(cd "$(dirname "$0")/../.." && pwd)/setup-rs/tools/pmu-dev.sh" png "$tmp" "$OUT"
   rm -f "$tmp"
 else
   OUT=${OUT%.*}.ppm; mv "$tmp" "$OUT"

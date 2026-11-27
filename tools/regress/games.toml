@@ -6,8 +6,8 @@
 # [[game]]
 #   slug        the corpus slug (games/<slug>/game), or a [games] key of local.toml
 #   id          the run's name for it when one slug is in the list twice (default: slug)
-#   route       android (desktop data -> the 32-bit Mono player) | il2cpp (pmunity il2cpp, the 64-bit
-#               player) | apk (pmunity apk) | box64 (pmunity route, GLES mode) | shaders (the shaders
+#   route       android (desktop data -> the 32-bit Mono player) | il2cpp (pmu il2cpp, the 64-bit
+#               player) | apk (pmu apk) | box64 (pmu route, GLES mode) | shaders (the shaders
 #               step only: a game converted by its own port) | prebuilt (rig only: a game packaged
 #               before, run with the runtime under test)
 #   unity       the Unity version the data must be
@@ -16,7 +16,7 @@
 #   pack        fast level: android-data none | tree (--pack none: the tree, its checks) | all (+ APK, OBB);
 #               a handful of small games, one per Unity era and packing feature: android-data writes
 #               the whole game (the rig level packs every game it runs; --pack all packs them all)
-#   convert     pmunity convert config over the generic one (shaders + settings, GLES3 only, d3d11
+#   convert     pmu convert config over the generic one (shaders + settings, GLES3 only, d3d11
 #               for Windows builds, what `port check` suggests)
 #   asmpatch, streaming_assets   android-data / il2cpp options over the check's suggestions
 #   android_data  more android-data arguments
@@ -308,8 +308,8 @@ slug = "dfu-linux"                 # Daggerfall Unity 1.1.1 (MIT, github.com/Int
 route = "android"                  # Bethesda's free Daggerfall data it stops at its data-folder screen
 unity = "2019.4.40f1"
 covers = ["2019.4", "mono", "same-game-apk"]
-# android-data (the Python) stops in its verification: UnityPy cannot read its [SerializeReference]
-# objects ("Failed to get ref type node"); the rig waits for the route through pmu
+# the retired Python android-data stopped in its verification (UnityPy could not read its
+# [SerializeReference] objects); not in the rig level until a run through pmu is recorded
 
 # ------------------------------------------------------------------ games with their own ports
 
@@ -409,7 +409,7 @@ apk = { target = "arm64" }
 levels = ["fast", "rig"]
 rig = { arch = "arm64", seconds = 300, shots = [60, 150, 280], content = [280], frames_min = 300 }   # its language screen
 
-# ------------------------------------------------------------------ 64-bit IL2CPP route (pmunity il2cpp)
+# ------------------------------------------------------------------ 64-bit IL2CPP route (pmu il2cpp)
 
 [[game]]
 id = "unsung-warriors-il2cpp"

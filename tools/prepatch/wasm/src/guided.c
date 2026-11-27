@@ -1,4 +1,4 @@
-/* guided_astc's core (portmaster-unity convert/native/guided_astc, MIT), single-threaded, with the
+/* guided_astc's core (portmaster-unity setup-rs/vendor/guided_astc, MIT), single-threaded, with the
  * Python wrapper replaced by plain calls. guided_core.inc is cut from guided_astc.c by build.sh. */
 #include <stdint.h>
 #include <string.h>

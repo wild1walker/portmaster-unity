@@ -6,10 +6,10 @@ draws a black screen in the emulated rig. Two levels:
 
 | level | what runs | Docker | checks |
 |---|---|---|---|
-| `fast` | per game: `port check` (or `route` for box64), the converter's shaders step, the other convert steps (`settings`), and where the list says so `android-data` (the tree, or the APK and OBB too); `pmunity apk` for Android builds; `pmunity il2cpp --dry-run` for the IL2CPP route | no | the steps succeed; android-data's own verification; the list's expectations (at least N shaders translated, at most M left out, ...); every count and digest the same as in the baseline |
-| `rig` | per game: the whole route (convert, android-data `--pack all`, or `pmunity apk`, or `pmunity il2cpp` and its build), then the game in the emulated rig (`tools/emu`: QEMU armv7, or native arm64) with screenshots at fixed times, and in Mono games the feature probe (`UA_PROBE`, docs/runtime.md: what a phone gives a game; `runtime/host/managed/build.sh probe` puts `uaprobe.dll` beside ua_host) | yes, one container at a time | no crash, still running when the time is up, frames advancing (at least N), a picture (not black, not one colour) in the shots the list names, log lines; against the baseline: shots that had a picture still have one, frames not far below it, no probe check failing that passed |
+| `fast` | per game: `port check` (or `route` for box64), the converter's shaders step, the other convert steps (`settings`), and where the list says so `android-data` (the tree, or the APK and OBB too); `pmu apk` for Android builds; `pmu il2cpp --dry-run` for the IL2CPP route | no | the steps succeed; android-data's own verification; the list's expectations (at least N shaders translated, at most M left out, ...); every count and digest the same as in the baseline |
+| `rig` | per game: the whole route (convert, android-data `--pack all`, or `pmu apk`, or `pmu il2cpp` and its build), then the game in the emulated rig (`tools/emu`: QEMU armv7, or native arm64) with screenshots at fixed times, and in Mono games the feature probe (`UA_PROBE`, docs/runtime.md: what a phone gives a game; `runtime/host/managed/build.sh probe` puts `uaprobe.dll` beside ua_host) | yes, one container at a time | no crash, still running when the time is up, frames advancing (at least N), a picture (not black, not one colour) in the shots the list names, log lines; against the baseline: shots that had a picture still have one, frames not far below it, no probe check failing that passed |
 
-Run it **before merging a branch that touches `convert/` or `runtime/`**: the fast level for
+Run it **before merging a branch that touches setup-rs's converter or `runtime/`**: the fast level for
 every such branch (and whenever a game's output may change: shaders, android-data, the check's
 suggestions, il2cpp's staging), the rig level for a branch that changes `runtime/`, packing or
 the IL2CPP build, and before a release. If a change is meant to change a game's output, run the
@@ -24,29 +24,33 @@ against the new output.
    own that are not in the corpus (a full port's game) go into `[games]` of the local config.
 2. `cp tools/regress/local.example.toml tools/regress/local.toml` (git ignores it) and set the
    paths: `corpus`, `scratch` (where each game's work goes, deleted after its checks, and the
-   results), `players` (folders of `pmunity player fetch` output; a missing version is fetched),
+   results), `players` (folders of `pmu player fetch` output; a missing version is fetched),
    for the rig the built `ua_host` (`hostbin`, `hostbin64`), for the IL2CPP route `il2cpp_home`.
    Or set them as `REGRESS_<KEY>` environment variables.
 3. Built tools, as for porting: `tools/asmpatch` (games the check gives asmpatch), `tools/hlslcc`
    (Windows builds), `tools/spirvcross` (Vulkan-only builds), the runtime (rig), Docker (rig).
 
-Python 3.11+ with the converter's requirements (`convert/requirements.txt`; the local config's
-`python` runs the converter). regress.py reads the data only through the converter and
-`digest.py`, which runs with Python's `-I`.
+It runs as `pmu-dev regress` (setup-rs/crates/devtools/src/regress) through `regress.sh`: in
+setup-rs's arm64 container (`ua-rust`, setup-rs/docker; Docker on the Mac), which sees this checkout and
+every absolute path of the local config, with this checkout's pmu (`tools/port/out/pmu/pmu`, built
+when older than setup-rs's sources). What needs the computer runs outside the container (pmu.sh's
+host requests): the rig's Docker, asmpatch's .NET, a bisect's `--build`. The shader translators
+(`pmhlslcc`, `pmspirvcross`) run inside it, so the local config names linux-arm64 builds of them.
+It reads the data only through pmu and its own digests (pmu's readers).
 
 ## Running
 
 ```sh
-python3 tools/regress/regress.py fast                      # the whole list, fast level
-python3 tools/regress/regress.py rig                       # the rig level (an evening)
-python3 tools/regress/regress.py fast --only 'tom-city|d3d11'   # regex over ids, slugs, covers tags, routes
-python3 tools/regress/regress.py list                      # the list: games x levels x checks
-python3 tools/regress/regress.py fast --update             # record this run as the baseline
-python3 tools/regress/regress.py fast --checkout ../other  # test another checkout with this list and baseline
+tools/regress/regress.sh fast                      # the whole list, fast level
+tools/regress/regress.sh rig                       # the rig level (an evening)
+tools/regress/regress.sh fast --only 'tom-city|d3d11'   # regex over ids, slugs, covers tags, routes
+tools/regress/regress.sh list                      # the list: games x levels x checks
+tools/regress/regress.sh fast --update             # record this run as the baseline
+tools/regress/regress.sh fast --checkout ../other  # test another checkout with this list and baseline
 # (a worktree has no built tools: set asmpatch, pmhlslcc, pmspirvcross, hostbin in local.toml to built ones)
-python3 tools/regress/regress.py bisect <good> <bad> --level fast --only '^tom-city$'
-python3 tools/regress/regress.py recheck <scratch>/results/rig-<time>   # a finished run, judged again
-python3 -m unittest discover -s tools/regress              # the tool's own tests (synthetic data)
+tools/regress/regress.sh bisect <good> <bad> --level fast --only '^tom-city$'
+tools/regress/regress.sh recheck <scratch>/results/rig-<time>   # a finished run, judged again
+(cd setup-rs && cargo test -p devtools regress)          # the tool's own tests (synthetic data)
 ```
 
 Options: `--keep` keeps each game's work folder (converted files, APK, the rig's device root);
@@ -70,40 +74,6 @@ The result is a table, printed and written to `<scratch>/results/<level>-<time>/
 step logs are in the results folder. `skip`: the game, a player or a tool is not on this machine,
 or the game is not in that level. The exit status is 1 when something failed.
 
-## pmu: the Python and setup-rs's pmu on each game
-
-`regress.py pmu` takes every android, shaders and box64 game of the list through the setup's
-commands twice, by the Python (`python -m pmunity`, the reference) and by pmu (setup-rs's static
-binary), and compares what they leave ([docs/rust-setup.md](../../docs/rust-setup.md): the two must
-write the same bytes). Each game runs `pmu_pair.py` in setup-rs's image (`ua-rust`, Docker: the
-reference Python at `/opt/py` and the musl pmu from the `pmu-target` volume, built first with
-`PMU_TPK=/opt/pylibs/UnityPy/resources/lzma.tpk cargo build --release --target
-aarch64-unknown-linux-musl -p pmu`), on two copies of the data at the same path, in the
-`pmu-scratch` volume. The stages are the android route's: `unpack` (a compressed build), `convert`
-with the convert config a port gets (`port new`'s steps, the check's suggestions, the list's
-`convert` table), then `android-data ... --consume-src --verify-bundles 2 --pack all` with Unity's
-player fetched by pmu into the volume. After each stage it compares the exit statuses, every
-file by size and SHA-256, an archive's entries, the journal as JSON; a stage runs only when the one
-before it gave the same result on both sides.
-
-```sh
-python3 tools/regress/regress.py pmu --pmu-work pmu-pair                    # every game, the port's config
-python3 tools/regress/regress.py pmu --convert-only --set quality.profile=handheld
-python3 tools/regress/regress.py pmu --builtin --set 'shaders.from=["d3d11"]'   # the players' built-in shaders
-python3 tools/regress/regress.py pmu --only '^unsung' --no-consume
-```
-
-Options: `--set`, `--steps` (passed to both converts), `--convert-only` (no android-data),
-`--no-consume` (android-data without `--consume-src`), `--builtin` (the desktop player's
-`Resources/unity default resources` as the data's one assets file, with its globalgamemanagers:
-every GLES3 program and compute kernel rebuilt, `shaders.replace`), `--pmhlslcc`, `--pmspirvcross`, `--asmpatch-bin` (built tools
-for linux-arm64, mounted into the container), `--max-mb` (bigger games are skipped: two copies and
-their archives go into the volume), `--pmu-bin`, `--pmu-scratch`, `--pmu-target`. Differences the
-rule allows are not failures: the journal's `audio.switch` order, a traceback against pmu's
-message, android-data's state file's source mtimes, and log lines (their timings taken out; a log
-that still differs is a note in the table). `pmu_pair.py` also runs by itself on any data folder
-(`--files` takes a subset of its serialized files, `--builtin` the player's resources).
-
 ## The list: games.toml
 
 One `[[game]]` per game and route, named by its corpus slug; the header of
@@ -122,7 +92,7 @@ line, so a slow start from a slow drive does not move them. The rig is the emula
 1 fps for the 32-bit route): frames vary with the Mac's load, so the frame checks are loose.
 
 To add a game: give it a `[[game]]` (its slug, route, Unity version, what it covers, which
-levels, its expectations), run `regress.py fast --only '^<id>$' --update` (and `rig`), look at the
+levels, its expectations), run `regress.sh fast --only '^<id>$' --update` (and `rig`), look at the
 result (the rig's shots are in the results folder), and commit games.toml with the baseline.
 
 ## The baseline: baseline/fast.json, baseline/rig.json
@@ -131,12 +101,16 @@ What a run measured, per game: the check's verdict (route, build kind, versions,
 options; never names), the shaders step's counts, a digest of the GLES3 programs it wrote (per
 file and in all: the SHA-256 of each Shader's GLES3 blob and each ComputeShader's GLES3 variant)
 and of the files it wrote, android-data's counts and the digest of its tree and of the APK's and
-OBB's members, `pmunity apk`'s output, `il2cpp --dry-run`'s staging and commands (machine paths
+OBB's members, `pmu apk`'s output, `il2cpp --dry-run`'s staging and commands (machine paths
 replaced); for the rig, frames, exit, crash and per shot whether it showed a picture (dark share,
 number of colours). Only counts, sizes and hashes of the tools' own output: no game file, no
 picture, no shader or asset name (data files other than Unity's generic `level<n>`,
 `sharedassets<n>.assets`, ... are keyed by a hash of their path). Keep it that way: the
 repository rules ([CONTRIBUTING.md](../../CONTRIBUTING.md)) hold for it.
+
+The digests are pmu's own: a baseline recorded by the retired Python regress.py (before 2026-11-27)
+differs in them, so record it again with `regress.sh fast --update` (and `rig`) on a checkout you trust
+before comparing a branch with it.
 
 The fast level compares exactly: any difference fails, with the keys that differ (and for a
 per-file digest, which files: the names are printed, not stored). `--update` records the values
@@ -147,12 +121,12 @@ baseline as they are now (after tuning an expectation), without running the game
 ## Finding the commit that broke a game
 
 ```sh
-python3 tools/regress/regress.py bisect <good commit> <bad commit> --level fast --only '^<id>$'
+tools/regress/regress.sh bisect <good commit> <bad commit> --level fast --only '^<id>$'
 ```
 
 runs `git bisect` over a temporary worktree (in the scratch folder) of this repository: at each
-commit, this checkout's regress.py, list and baseline judge that worktree's converter (the
-commit's `convert/`), so a commit is bad when the game fails there. For a change in compiled
+commit, this checkout's pmu-dev, list and baseline judge that worktree's tools (the
+commit's pmu, built in the worktree: `--build 'setup-rs/tools/build_pmu.sh tools/port/out/pmu'`), so a commit is bad when the game fails there. For a change in compiled
 parts give the build command: `--build 'runtime/build.sh'` (it runs in the worktree before each
 test; a worktree has no `runtime/thirdparty/libhybris` submodule checkout: link it from your main
 checkout first), and point `hostbin` at the worktree's `runtime/host/out`. A commit at which
@@ -162,11 +136,12 @@ nothing ran (all skipped) is skipped.
 
 Measured on the development Mac (Apple M-series, 8 cores, 8 GB) with the corpus on the internal
 disk and two USB sticks, and the scratch folder on a USB stick that writes about 1 - 2 MB/s,
-shared with another agent's conversions and IL2CPP builds (2026-10-23):
+shared with another agent's conversions and IL2CPP builds (2026-10-23), by the retired Python regress.py
+(pmu-dev regress runs the same steps by pmu; not measured again yet):
 
 | level | games | wall time | the tools' CPU time | what the time goes into |
 |---|---|---|---|---|
-| fast | 54 | 73 min (60 min the second time, with the rig level running beside it) | 13 - 17 min | android-data writing the ten packed games' trees to the stick (0.5 - 7 min each); the rest is CPU: the shaders step in memory (5 s - 4 min a game: Hollow Knight and Cuphead the longest), port checks, `il2cpp --dry-run` (15 - 40 s), `pmunity apk` (about 1 min) |
+| fast | 54 | 73 min (60 min the second time, with the rig level running beside it) | 13 - 17 min | android-data writing the ten packed games' trees to the stick (0.5 - 7 min each); the rest is CPU: the shaders step in memory (5 s - 4 min a game: Hollow Knight and Cuphead the longest), port checks, `il2cpp --dry-run` (15 - 40 s), `pmu apk` (about 1 min) |
 | rig | 17 | about 3 hours (2 h 56 min for 16 of them) | 3 min (the rest is the emulator in Docker) | per game: packing (1 - 12 min on the stick), then the rig run itself (the list's 2 - 10 minutes); the two IL2CPP builds (2019.4: 16 min in all, the Unity 6 mixed build 24 min and 44 in all) |
 
 The fast level's own work is its CPU time: with the scratch folder on an SSD, or on the corpus'

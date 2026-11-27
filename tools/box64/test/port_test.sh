@@ -1,8 +1,8 @@
 #!/bin/bash
-# A box64 port's release zip (`pmunity port package`) run as on a handheld, in the test rig's
+# A box64 port's release zip (`pmu port package`) run as on a handheld, in the test rig's
 # container: unzipped into a ports folder, the game copied into its gamedata/, a stand-in
 # PortMaster (mockpm/: control.txt, the patcher, Westonpack's westonwrap.sh), the launcher started
-# twice: the first launch runs the setup (the port's own Python, `pmunity route --env`, the GLES
+# twice: the first launch runs the setup (the port's own pmu, `pmu route --env`, the GLES
 # shader conversion in place), then the game.
 #
 #   tools/box64/test/port_test.sh <port.zip> <game folder> <work dir> [seconds]
@@ -51,4 +51,4 @@ G=/roms/ports/$PORT
 cp "$G/patchlog.txt" "$G/log.txt" "$G/player.log" "$G/game.env" /out/ 2>/dev/null
 ls -a "$G" > /out/portdir.txt; ls "$G/gamedata" > /out/gamedata.txt
 tail -3 /out/launch.out'
-python3 -I "$here/rigstats.py" "$OUTD" --png
+"$here/../../setup-rs/tools/pmu-dev.sh" rigstats "$OUTD" --png

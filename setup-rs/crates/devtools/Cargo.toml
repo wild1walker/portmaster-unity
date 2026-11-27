@@ -1,0 +1,28 @@
+[package]
+name = "devtools"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "pmu-dev: the porter's and developer's tools that were Python scripts in tools/ and runtime/ (profiling summaries, generators, test helpers); never shipped in a port"
+
+[[bin]]
+name = "pmu-dev"
+path = "src/main.rs"
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+crc32fast = "1"
+regex = { version = "1", default-features = false, features = ["std", "perf", "unicode"] }
+serde_json = "1"
+sha2 = "0.10"
+lzma-rust2 = { version = "0.24", default-features = false, features = ["std", "xz", "optimization"] }
+pkgzip = { path = "../pkgzip" }
+il2cpp = { path = "../il2cpp" }
+unityfs = { path = "../unityfs" }
+libc = "0.2"
+convert = { path = "../convert" }
+port = { path = "../port" }
+serde = "1"
+# (the player survey's disassembly: tools/re, as the Python's used Capstone)
+capstone = "0.12"

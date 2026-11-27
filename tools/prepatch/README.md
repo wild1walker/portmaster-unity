@@ -48,8 +48,8 @@ Each step is the converter's own, ported to JavaScript and WebAssembly, and chec
 | textures | `src/textures.js` | `choose`, the new `.resS`, sprites/atlases, guide keys, strip rule, journal |
 | settings, audio, plugins | `src/steps.js` | the converter's steps; port plugins only where the page knows the plugin file (by its CRC) |
 | shaders | `src/shaders.js` | the shaders step (glcore path) |
-| Unity's player | `src/player.js` | `pmunity player donor` |
-| packing | `src/android.js`, `clrmeta.js`, `plugins.js`, `pack.js` | `pmunity android-data`, with its options read from the patchscript's `pm android-data` line |
+| Unity's player | `src/player.js` | `pmu player donor` |
+| packing | `src/android.js`, `clrmeta.js`, `plugins.js`, `pack.js` | `pmu android-data`, with its options read from the patchscript's `pm android-data` line |
 | code patch | `src/codepatch.js`, `codepatch/` | the port's codepatch (C#, Mono.Cecil) built for WebAssembly; only for the release whose `setup/codepatch` CRC is in `codepatch/known.json` |
 
 One known difference: inside a bundle, the serialized file's metadata keeps Unity's own bytes where UnityPy
@@ -62,7 +62,7 @@ does not know, ports whose setup the page does not know (it then only unpacks th
 
 ```sh
 wasm/build.sh                                         # pmucore.wasm (wasi-sdk at ~/wasi-sdk; PMUNITY=<this checkout>)
-python3 tools/export_typetrees.py src/typetrees.json  # with UnityPy 1.25.4 installed
+../../setup-rs/tools/pmu-dev.sh typetrees src/typetrees.json  # the class database pmu reads (Docker)
 codepatch/build.sh 2026.10.29                         # codepatch/_framework (.NET 8 SDK + wasm-tools workload)
 node tools/build.js                                   # -> prepatch.html (one file, everything embedded)
 ```

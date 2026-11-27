@@ -6,7 +6,7 @@
 # <name> names the run (its results go to $OUT/<name>/); VAR=value settings are passed to that run
 # (ua_host's UA_* switches, PLAN, MEASURE, ...). A --list file holds one run per line, "<name>
 # [VAR=value ...]" in shell quoting ('#' starts a comment): the runs go one after another, then a
-# table compares them (tools/analysis/benchsum.py).
+# table compares them (`pmu-dev benchsum`, setup-rs/tools/pmu-dev.sh).
 # Each run (tools/device/profrun.sh on the handheld, detached: a dropped connection does not end it):
 #   starts the game silent (SDL's dummy driver, ANDROID_SLES_OUTPUT=none; UA_AUDIO, SDL_AUDIODRIVER
 #   and ANDROID_SLES_OUTPUT / _PIPE_CMD settings are refused), follows PLAN to the point to measure (e.g. a save continued from the
@@ -23,8 +23,7 @@
 #                        holds GPU memory and CPU time)
 #   ARCH, HOST_BIN       the ua_host to send (default this checkout's runtime/host/out/ua_host);
 #                        SEND_HOST=0 runs the game folder's own ua_host
-#   SYMS=<dir>           Unity's symbol files for the summaries (benchsum.py --syms; naming them needs
-#                        pyelftools in PYTHON, default python3)
+#   SYMS=<dir>           Unity's symbol files for the summaries (pmu-dev benchsum --syms)
 #   UA_*, SDL_*, GC_*, MONO_* in the environment pass through to every run, as with test.sh
 set -u
 DIR=${1:?usage: DEVICE=user@host profbench.sh <game folder on the handheld> <name> [VAR=value ...] | --list <file>}; shift
@@ -46,11 +45,13 @@ B=$DIR/bench
 runs=()
 if [ "${1:-}" = --list ]; then
   [ -f "${2:-}" ] || { echo "--list: no file ${2:-}"; exit 1; }
-  while IFS= read -r line; do runs+=("$line"); done < <(python3 -I -c '
-import shlex, sys
-for line in open(sys.argv[1]):
-    w = shlex.split(line, comments=True)
-    if w: print(shlex.join(w))' "$2")
+  # (each line split as the shell splits words, # comments left out, then quoted again as one run; the
+  # shell reads the line: $(...) in it runs)
+  while IFS= read -r line || [ -n "$line" ]; do
+    eval "w=( $line
+)"
+    [ ${#w[@]} = 0 ] || runs+=("$(printf '%q ' "${w[@]}")")
+  done < "$2"
 else
   [ -n "${1:-}" ] || { echo "a run name is needed"; exit 1; }
   runs+=("$(printf '%q ' "$@")")
@@ -95,7 +96,7 @@ done
 [ "${STOP_ES:-1}" = 1 ] && base+=("UATEST_STOP_ES=1")
 names=()
 for r in "${runs[@]}"; do
-  eval "set -- $r"       # (words quoted by printf %q / shlex.join above)
+  eval "set -- $r"       # (words quoted by printf %q above)
   name=$1; shift
   case $name in *[!A-Za-z0-9._-]*|'') echo "run name '$name': letters, digits, . _ - only"; exit 1 ;; esac
   envs=("${base[@]+"${base[@]}"}")
@@ -130,4 +131,4 @@ for r in "${runs[@]}"; do
   names+=("$OUT/$name")
 done
 echo "== results in $OUT"
-"${PYTHON:-python3}" -I "$PU/tools/analysis/benchsum.py" ${SYMS:+--syms "$SYMS"} "${names[@]}"
+"$PU/setup-rs/tools/pmu-dev.sh" benchsum ${SYMS:+--syms "$SYMS"} "${names[@]}"
