@@ -183,6 +183,17 @@ extern "C" {
         boxp: *const f32,
         pillow: i32,
     ) -> i32;
+    fn tc_resample_rows(
+        rows: *const *const u8,
+        w: i32,
+        h: i32,
+        out: *mut u8,
+        ow: i32,
+        oh: i32,
+        filter: i32,
+        boxp: *const f32,
+        pillow: i32,
+    ) -> i32;
 }
 
 /// Pillow's IMAGING_TRANSFORM_LANCZOS.
@@ -280,6 +291,65 @@ fn im_resize(img: &Rgba, w: usize, h: usize, bx: [f64; 4], pillow: bool) -> Resu
         return Err(Error::Resize("resampling failed (out of memory)".into()));
     }
     Ok(out)
+}
+
+/// resize() of the image whose rows (top first, `width` pixels each) are `rows`, into `out` (w x h
+/// pixels): the same bytes, without the rows put together first.
+pub fn resize_rows_into(
+    rows: &[&[u8]],
+    width: usize,
+    out: &mut [u8],
+    w: usize,
+    h: usize,
+    bx: [f64; 4],
+) -> Result<(), Error> {
+    let height = rows.len();
+    assert!(rows.iter().all(|r| r.len() == width * 4) && out.len() == w * h * 4);
+    let b = bx.map(|v| v as f32);
+    // (Pillow's other paths, and its refusals: as resize() takes them, from the rows put together)
+    let plain = !((width, height) == (w, h) && bx == [0.0, 0.0, w as f64, h as f64])
+        && height <= width * 100
+        && w >= 1
+        && h >= 1
+        && b[0] >= 0.0
+        && b[1] >= 0.0
+        && b[2] <= width as f32
+        && b[3] <= height as f32
+        && b[2] - b[0] >= 0.0
+        && b[3] - b[1] >= 0.0
+        && !(b[0] - (b[0] as i32) as f32 == 0.0
+            && b[2] - b[0] == w as f32
+            && b[1] - (b[1] as i32) as f32 == 0.0
+            && b[3] - b[1] == h as f32);
+    if !plain {
+        let img = Rgba {
+            width,
+            height,
+            px: rows.concat(),
+        };
+        out.copy_from_slice(&resize(&img, w, h, Some(bx))?.px);
+        return Ok(());
+    }
+    let ptrs: Vec<*const u8> = rows.iter().map(|r| r.as_ptr()).collect();
+    // SAFETY: `height` rows of width * 4 bytes, and out of w * h * 4 (checked above); tc_resample_rows
+    // reads the rows and writes `out` only.
+    let r = unsafe {
+        tc_resample_rows(
+            ptrs.as_ptr(),
+            width as i32,
+            height as i32,
+            out.as_mut_ptr(),
+            w as i32,
+            h as i32,
+            LANCZOS,
+            b.as_ptr(),
+            0,
+        )
+    };
+    if r != 0 {
+        return Err(Error::Resize("resampling failed (out of memory)".into()));
+    }
+    Ok(())
 }
 
 /// textures.py downscale(): an RGBA image -> w x h, filtered with premultiplied alpha.
@@ -398,9 +468,12 @@ mod tests {
             (129, 3, 48, 1),
             (1, 50, 1, 19),
             (513, 257, 192, 96),
+            (800, 600, 300, 225),
+            (300, 300, 150, 150),
+            (40, 30, 120, 90),
         ];
         for (k, &(w, h, ow, oh)) in sizes.iter().enumerate() {
-            for kind in 0..3 {
+            for kind in 0..5 {
                 let mut px = vec![0u8; w * h * 4];
                 for (i, p) in px.chunks_exact_mut(4).enumerate() {
                     let r = rnd();
@@ -411,10 +484,32 @@ mod tests {
                             let on = ((i % w) / 2 + (i / w) / 3) % 2 == 0;
                             p.copy_from_slice(if on { &[255, 255, 255, 255] } else { &[0, 0, 0, 0] });
                         }
-                        _ => {
+                        2 => {
                             let a = (r >> 32) as u8;
                             let b = r.to_le_bytes();
                             p.copy_from_slice(&[b[0].min(a), b[1].min(a), b[2].min(a), a]);
+                        }
+                        // flat tiles of a few sizes (the windows that read one pixel only), a
+                        // pixel of noise here and there
+                        3 => {
+                            let (x, y) = (i % w, i / w);
+                            let t = ((x / (7 + y / 50) + 3 * (y / 13)) % 5) as u8;
+                            let c = [t * 60, 255 - t * 50, t * 17, if t == 0 { 0 } else { 255 - t }];
+                            if r % 97 == 0 {
+                                p.copy_from_slice(&r.to_le_bytes()[..4]);
+                            } else {
+                                p.copy_from_slice(&c);
+                            }
+                        }
+                        // columns: every row the same but a few (the vertical pass's flat windows)
+                        _ => {
+                            let (x, y) = (i % w, i / w);
+                            let v = ((x * 37) % 251) as u8;
+                            if y % 29 == 5 {
+                                p.copy_from_slice(&[255 - v, v, 9, 200]);
+                            } else {
+                                p.copy_from_slice(&[v, v / 2, 255 - v, 255]);
+                            }
                         }
                     }
                 }

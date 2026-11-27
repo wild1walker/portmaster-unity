@@ -54,7 +54,21 @@ Imaging ImagingCopy(Imaging in)
 Imaging tc_resample_rgba(Imaging imIn, int xsize, int ysize, int filter, float box[4], int pillow);
 
 /* (pillow: Pillow's own passes, not the vector ones of pillow_resample.c: the tests' reference) */
+int tc_resample_rows(const UINT8 *const *rows, int w, int h, UINT8 *out, int ow, int oh, int filter, const float box_in[4], int pillow);
+
 int tc_resample(const UINT8 *in, int w, int h, UINT8 *out, int ow, int oh, int filter, const float box_in[4], int pillow)
+{
+    const UINT8 **rows = malloc(sizeof(UINT8 *) * (size_t)(h ? h : 1));
+    if (!rows) return -1;
+    for (int y = 0; y < h; y++) rows[y] = in + (size_t)w * 4 * (size_t)y;
+    int r = tc_resample_rows(rows, w, h, out, ow, oh, filter, box_in, pillow);
+    free(rows);
+    return r;
+}
+
+/* tc_resample of an image given by its rows (each w * 4 bytes, anywhere: a band read bottom first
+ * needs no copy) */
+int tc_resample_rows(const UINT8 *const *rows, int w, int h, UINT8 *out, int ow, int oh, int filter, const float box_in[4], int pillow)
 {
     struct ImagingMemoryInstance src;
     memset(&src, 0, sizeof src);
@@ -65,7 +79,7 @@ int tc_resample(const UINT8 *in, int w, int h, UINT8 *out, int ow, int oh, int f
     src.ysize = h;
     src.image = malloc(sizeof(char *) * (size_t)(h ? h : 1));
     if (!src.image) return -1;
-    for (int y = 0; y < h; y++) src.image[y] = (char *)in + (size_t)w * 4 * (size_t)y;
+    for (int y = 0; y < h; y++) src.image[y] = (char *)rows[y];
     src.image32 = (INT32 **)src.image;
     float box[4] = {box_in[0], box_in[1], box_in[2], box_in[3]};
     Imaging res = tc_resample_rgba(&src, ow, oh, filter, box, pillow);
