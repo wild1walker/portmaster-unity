@@ -4,6 +4,7 @@
 //! `cargo build --release --target aarch64-unknown-linux-musl -p devtools`) where a tool runs there.
 use std::process::ExitCode;
 
+mod astc_guide;
 mod benchsum;
 mod devmon;
 mod elf;
@@ -57,6 +58,7 @@ const TOOLS: &[(&str, &str, Run)] = &[
     ("stacks", "(on the handheld) each thread's syscall and stack of a running ua_host: stacks <pid> [name-filter] [words]", stacks::run),
     ("unityhooks", "runtime/host/unityhooks.c's rows for a player: unityhooks <libunity.so> <libunity.sym.so> [--unity <version abi>]", unityhooks::run),
     ("regress", "tools/regress: the list of games through the tools, compared with the baseline: regress fast|rig|list|bisect|recheck ... (tools/regress/README.md)", regress::run_cli),
+    ("astc-guide", "an ASTC guide file (each hard texture block's encoder effort, chosen on a PC): astc-guide <data> <guide> --config CONFIG [--target medium] [--tol 0] [--set k=v] [--only RX]", astc_guide::run),
     ("prefs", "a game's PlayerPrefs between a PC (Linux player's prefs) and the handheld (ua_host's shared_prefs): prefs show <file> | copy <from> <to> [--all]", prefs::run),
     ("elf-facts", "ELF facts of Android libraries as JSON (relocation formats, notes, TLS; tools/re/survey_player.sh): elf-facts LIB.so...", re::facts_run),
     ("elf-imports", "undefined symbols per library with provider and ABI notes: elf-imports OUTDIR LIB... [--glibc DIR]", re::imports_run),

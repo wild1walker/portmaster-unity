@@ -26,3 +26,6 @@ port = { path = "../port" }
 serde = "1"
 # (the player survey's disassembly: tools/re, as the Python's used Capstone)
 capstone = "0.12"
+texcodec = { path = "../texcodec" }
+# (zlib's own deflate for the ASTC guide's blobs: zlib.compress(codes, 9) wrote them)
+libz-sys = { version = "1", default-features = false, features = ["static"] }

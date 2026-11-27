@@ -461,8 +461,9 @@ S2's converted files is the same with the changes and without, on both handhelds
 
 ## ASTC guide files (2026-10-28)
 
-The retired `pmunity astc-guide` (astc_guide.py, git history; not ported to pmu: the guides shipped
-with ports were recorded with it) ran the texture step on a PC with a recorder: each texture
+`pmu-dev astc-guide <data> <guide> --config <game.json> --target fast|medium` (setup-rs/crates/devtools,
+run by setup-rs/tools/pmu-dev.sh; until 2026-11-27 `pmunity astc-guide`, astc_guide.py) runs pmu's
+texture step on a PC with a recorder: each texture
 level's hard blocks (the ones guided_astc leaves to astc-encoder) are encoded at eleven tiers
 (presets with partition limits, cheapest first) and each block gets the cheapest tier whose error
 is at most the target preset's. The guide holds a tier byte per hard block (zlib), keyed by file,
@@ -481,6 +482,14 @@ Measured block by block (every hard block at every tier, one call each) a medium
 cost what fast does and a fast-target one 0.55x; in a conversion each tier is its own, smaller
 astc-encoder call, and the gap is that overhead. Not measured on a handheld yet. A guide for all of
 Cuphead: about 12 MB.
+
+pmu-dev's guide is the one astc_guide.py wrote with the Linux wheels the setups ran (astc-encoder
+built by GCC 10, as texcodec builds it): byte for byte on Cuphead (2026-11-27, the 10-28 config,
+target medium; the Python in the old ua-rust image). The guides Cuphead ships were recorded with
+the Python on the Mac, whose astc-encoder (Apple clang) rounds a few blocks differently: 3,576 of
+Cuphead's 36 million hard blocks got another tier there (the same levels, counts and CRCs, so
+those guides stay valid; a guide recorded again comes out a few bytes different). Recording all of
+Cuphead takes about 53 minutes in Docker on the Mac (8 cores; the Python on macOS: 27).
 
 ## Textures inlined by the texture step (2026-10-28)
 

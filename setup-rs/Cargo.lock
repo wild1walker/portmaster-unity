@@ -232,6 +232,7 @@ dependencies = [
  "flate2",
  "il2cpp",
  "libc",
+ "libz-sys",
  "lzma-rust2",
  "pkgzip",
  "port",
@@ -239,6 +240,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "texcodec",
  "unityfs",
 ]
 

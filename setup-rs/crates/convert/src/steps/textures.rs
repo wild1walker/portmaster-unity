@@ -275,7 +275,8 @@ impl Codec for TexCodec {
     fn solo(&self) -> Option<Box<dyn Codec + Send>> {
         let es = self.s.encoder().ok()?;
         let guide = self.enc.guide.as_ref().map(|g| g.share());
-        let enc = texcodec::astc::Encoder::new(es, guide).ok()?;
+        let mut enc = texcodec::astc::Encoder::new(es, guide).ok()?;
+        enc.recorder = self.enc.recorder.clone();
         Some(Box::new(TexCodec {
             s: self.s.clone(),
             enc,
@@ -332,7 +333,8 @@ impl Codec for TexCodec {
         s.threads = 1;
         let es = s.encoder().ok()?;
         let guide = self.enc.guide.as_ref().map(|g| g.share());
-        let enc = texcodec::astc::Encoder::new(es, guide).ok()?;
+        let mut enc = texcodec::astc::Encoder::new(es, guide).ok()?;
+        enc.recorder = self.enc.recorder.clone();
         Some(Box::new(TexCodec {
             s,
             enc,
@@ -439,7 +441,7 @@ impl Codec for TexCodec {
 
 /// The step's codec for its settings: textures.py's Astc (the quality and mode checked) and,
 /// guided, the ASTC guide `guide` names, with what the Python logs while it sets them up.
-fn codec(c: &Json, job: &Job) -> Result<Box<dyn Codec>> {
+fn codec(c: &Json, job: &Job, recorder: Option<Recorder>) -> Result<Box<dyn Codec>> {
     let s = texcodec::texture::Settings::from_config(Some(&to_serde(c))).map_err(tex_err)?;
     let es = s.encoder().map_err(tex_err)?;
     let mut guide = None;
@@ -464,11 +466,19 @@ fn codec(c: &Json, job: &Job) -> Result<Box<dyn Codec>> {
         }
     }
     let quality = opt(c, "quality").to_str();
-    let enc = texcodec::astc::Encoder::new(es, guide).map_err(tex_err)?;
+    let guided = es.guided;
+    let mut enc = texcodec::astc::Encoder::new(es, guide).map_err(tex_err)?;
+    if recorder.is_some() {
+        if !guided {
+            return Err(Error::Exit("an ASTC guide needs the guided mode (textures.mode \"guided\")".into()));
+        }
+        enc.guide = None;
+        enc.recorder = recorder;
+    }
     Ok(Box::new(TexCodec { s, enc, quality }))
 }
 
-pub(crate) fn defaults() -> Vec<(&'static str, Json)> {
+pub fn defaults() -> Vec<(&'static str, Json)> {
     let l = |a: i128, b: i128| Json::List(vec![Json::Int(a), Json::Int(b)]);
     vec![
         ("scale", Json::Float(1.0)),
@@ -1967,8 +1977,24 @@ pub fn run(job: &mut Job, args: &Args) -> Result<()> {
     if let Some(w) = why {
         job.log(&w);
     }
-    let enc = codec(&c, job)?;
+    let enc = codec(&c, job, None)?;
     run_with(job, args, enc)
+}
+
+/// A guide recorder shared by the step's encoders (pmu-dev astc-guide).
+pub type Recorder = std::sync::Arc<std::sync::Mutex<texcodec::guide::Recorder>>;
+
+/// The step making an ASTC guide (astc_guide.py's main: textures.run with a recorder): every hard
+/// block of the guided levels tried at every tier; returns the textures settings (DEFAULTS and the
+/// config's) the guide's header names.
+pub fn run_recording(job: &mut Job, args: &Args, recorder: Recorder) -> Result<Json> {
+    let (c, why) = settings(&job.cfg)?;
+    if let Some(w) = why {
+        job.log(&w);
+    }
+    let enc = codec(&c, job, Some(recorder))?;
+    run_with(job, args, enc)?;
+    Ok(c)
 }
 
 /// The step with a given codec (texcodec's in a setup; tests give their own).

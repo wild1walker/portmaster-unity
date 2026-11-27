@@ -306,6 +306,8 @@ pub struct Encoder {
     /// guided: one colour, fitted, DXT seed, one partition, two partitions, searched
     pub counts: [u64; 6],
     pub guide: Option<Guide>,
+    /// making a guide (pmu-dev astc-guide): every hard block tried at every tier (shared by workers)
+    pub recorder: Option<std::sync::Arc<std::sync::Mutex<crate::guide::Recorder>>>,
 }
 
 /// The DXT1 or DXT5 blocks an unscaled level was decoded from, in the order the encoder is given
@@ -327,6 +329,7 @@ impl Encoder {
             ctx: HashMap::new(),
             counts: [0; 6],
             guide,
+            recorder: None,
         })
     }
 
@@ -382,6 +385,58 @@ impl Encoder {
             dump_level(std::path::Path::new(&dir), rgba, w, h, block, &blocks, key)?;
         }
         Ok(blocks)
+    }
+
+    /// astc_guide.Recorder.choose: the hard blocks (rest) encoded at every tier, each decoded and its
+    /// squared error to its texels measured; the recorder picks a tier a block; returns the blocks of
+    /// the chosen tiers (gather's order).
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &mut self,
+        rec: &std::sync::Mutex<crate::guide::Recorder>,
+        key: &str,
+        rgba: &[u8],
+        w: usize,
+        h: usize,
+        block: (u32, u32),
+        rest: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        let (bw, bh) = (block.0 as usize, block.1 as usize);
+        let n = rest.len() / 4;
+        let cols = n.min(GATHER_COLS);
+        let rows = n.div_ceil(cols);
+        let (iw, ih) = (cols * bw, rows * bh);
+        let sub = gather(rgba, w, h, bw, bh, rest, cols);
+        let mut encs = Vec::with_capacity(guide::TIERS.len());
+        let mut errs = Vec::with_capacity(guide::TIERS.len());
+        for i in 0..guide::TIERS.len() {
+            let enc = self.context(block, Tier::Guide(i))?.compress(&sub, iw, ih, block)?;
+            let dec = crate::guide::decode_astc(&enc, iw, ih, bw, bh)?;
+            let mut e = vec![0i64; n];
+            for (k, ek) in e.iter_mut().enumerate() {
+                let (ox, oy) = ((k % cols) * bw, (k / cols) * bh);
+                let mut s = 0i64;
+                for y in oy..oy + bh {
+                    for x in ox..ox + bw {
+                        let p = 4 * (y * iw + x);
+                        // (decoded BGRA against the texels' RGBA)
+                        for (dc, sc) in [(2, 0), (1, 1), (0, 2), (3, 3)] {
+                            let d = dec[p + dc] as i64 - sub[p + sc] as i64;
+                            s += d * d;
+                        }
+                    }
+                }
+                *ek = s;
+            }
+            encs.push(enc);
+            errs.push(e);
+        }
+        let codes = rec.lock().map_err(|_| Error::Astc("guide recorder poisoned".into()))?.choose(key, rest, &errs);
+        let mut chosen = Vec::with_capacity(n * 16);
+        for (k, &t) in codes.iter().enumerate() {
+            chosen.extend_from_slice(&encs[t as usize][16 * k..16 * k + 16]);
+        }
+        Ok(chosen)
     }
 
     fn guided_rows(
@@ -450,6 +505,15 @@ impl Encoder {
             (Tier::Near, std::mem::take(&mut rests[1])),
             (Tier::Other, std::mem::take(&mut rests[2])),
         ];
+        if let (Some(key), Some(rec)) = (key, self.recorder.clone()) {
+            if groups.iter().any(|(_, r)| !r.is_empty()) {
+                // (making a guide: every tier tried, the chosen blocks kept: astc_guide.Recorder.choose)
+                let hard: Vec<u8> = groups.iter().flat_map(|(_, r)| r.iter().copied()).collect();
+                let chosen = self.record(&rec, key, rgba, w, h, block, &hard)?;
+                place(&mut blocks, &chosen, &hard)?;
+                return Ok(blocks);
+            }
+        }
         if let (Some(key), Some(g)) = (key, self.guide.as_mut()) {
             if groups.iter().any(|(_, r)| !r.is_empty()) {
                 let hard: Vec<u8> = groups.iter().flat_map(|(_, r)| r.iter().copied()).collect();

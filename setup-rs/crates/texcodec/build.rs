@@ -5,7 +5,8 @@
 //!     the few C++ runtime functions it needs: no libstdc++ is linked);
 //!   * sinf / cosf / sincosf from Arm's optimized-routines (vendor/optimized-routines): glibc's,
 //!     which the Python's astc-encoder calls, rather than the C library's;
-//!   * texture2ddecoder's crunch unpackers (vendor/texture2ddecoder) and csrc/crunch_capi.cpp;
+//!   * texture2ddecoder's crunch unpackers (vendor/texture2ddecoder) and csrc/crunch_capi.cpp, and its
+//!     ASTC decoder (astc.cpp, csrc/astc_capi.cpp) for the guide recorder (pmu-dev astc-guide);
 //!   * Pillow's Resample.c (vendor/pillow, -O3 as Pillow's wheel), included by csrc/pillow_resample.c
 //!     (its 4-byte passes in NEON on aarch64, the same bytes), with csrc/pillow_shim.c;
 //!   * guided_astc (vendor/guided_astc, -O2 as its wheel).
@@ -105,6 +106,33 @@ fn main() {
         .file(csrc.join("crunch_capi.cpp"))
         .compile("tc_crunch");
 
+    // texture2ddecoder's ASTC decoder (the guide recorder's, pmu-dev astc-guide; the same flags)
+    // (only where its files are: a build script compiled from another checkout, which a target folder
+    // shared with it can hand this one, then builds without it instead of stopping)
+    let astcdec = t2d.join("astc.cpp").is_file() && csrc.join("astc_capi.cpp").is_file();
+    println!("cargo::rustc-check-cfg=cfg(tc_astcdec)");
+    if astcdec {
+        println!("cargo:rustc-cfg=tc_astcdec");
+        cc::Build::new()
+            .cpp(true)
+            .compiler(&cxx)
+            .cpp_link_stdlib(None)
+            .opt_level(3)
+            .debug(false)
+            .warnings(false)
+            .include(&t2d)
+            .define("NDEBUG", None)
+            .flag("-std=c++17")
+            .flag("-fms-extensions")
+            .flag("-fwrapv")
+            .flag("-fno-exceptions")
+            .flag("-fno-rtti")
+            .flag("-fno-threadsafe-statics")
+            .file(t2d.join("astc.cpp"))
+            .file(csrc.join("astc_capi.cpp"))
+            .compile("tc_astcdec");
+    }
+
     // Pillow's resampling
     cc::Build::new()
         .opt_level(3)
@@ -130,6 +158,19 @@ fn main() {
         .file(vendor.join("guided_astc/guided_astc.c"))
         .compile("tc_guided");
 
+    // (every source by name, and this file: a file missing or newer than the last run runs this again;
+    // the folders for the headers and anything added)
+    println!("cargo:rerun-if-changed=build.rs");
+    for f in ASTCENC_SOURCES {
+        println!("cargo:rerun-if-changed={}", src.join(f).display());
+    }
+    for f in ["astcenc_capi.cpp", "crunch_capi.cpp", "astc_capi.cpp", "pillow_resample.c", "pillow_shim.c"] {
+        println!("cargo:rerun-if-changed={}", csrc.join(f).display());
+    }
+    for f in ["crunch.cpp", "unitycrunch.cpp", "astc.cpp"] {
+        println!("cargo:rerun-if-changed={}", t2d.join(f).display());
+    }
+    println!("cargo:rerun-if-changed={}", vendor.join("guided_astc/guided_astc.c").display());
     println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rerun-if-changed=../../vendor");
     println!("cargo:rerun-if-env-changed=TC_CXX");

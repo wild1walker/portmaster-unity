@@ -246,6 +246,73 @@ impl Guide {
     }
 }
 
+/// The recorder of an ASTC guide (astc_guide.Recorder): while the textures step runs on a PC, each
+/// level's hard blocks are encoded at every tier and each block gets the cheapest tier whose block is
+/// at most as far from the pixels as the target preset's (give or take `tol`). The file is written by
+/// pmu-dev astc-guide.
+#[derive(Debug)]
+pub struct Recorder {
+    /// the target preset (fast, medium, thorough) and its tier
+    pub target: String,
+    pub reference: usize,
+    pub tol: f64,
+    /// key -> (hard blocks, rest_crc of their positions, one tier byte a block)
+    pub entries: std::collections::BTreeMap<String, (u64, u32, Vec<u8>)>,
+    /// blocks per tier chosen
+    pub picked: [u64; 11],
+}
+
+/// astc_guide.TARGETS: the tier of each target preset.
+pub const TARGETS: [(&str, usize); 3] = [("fast", 6), ("medium", 9), ("thorough", 10)];
+
+impl Recorder {
+    pub fn new(target: &str, tol: f64) -> Result<Recorder, Error> {
+        let reference = TARGETS
+            .iter()
+            .find(|t| t.0 == target)
+            .map(|t| t.1)
+            .ok_or_else(|| Error::Config(format!("guide target {target:?}: one of fast, medium, thorough")))?;
+        Ok(Recorder { target: target.into(), reference, tol, entries: Default::default(), picked: [0; 11] })
+    }
+
+    /// Chooses each block's tier from its squared error at every tier (errs[tier][block]); records the
+    /// codes under key and returns them.
+    pub fn choose(&mut self, key: &str, rest: &[u8], errs: &[Vec<i64>]) -> Vec<u8> {
+        let n = rest.len() / 4;
+        let mut codes = Vec::with_capacity(n);
+        for k in 0..n {
+            let lim = errs[self.reference][k] as f64 * (1.0 + self.tol);
+            let t = (0..TIERS.len()).find(|&i| i == self.reference || (errs[i][k] as f64) <= lim).unwrap();
+            self.picked[t] += 1;
+            codes.push(t as u8);
+        }
+        self.entries.insert(key.to_string(), (n as u64, rest_crc(rest), codes.clone()));
+        codes
+    }
+}
+
+#[cfg(tc_astcdec)]
+extern "C" {
+    fn tc_decode_astc(data: *const u8, w: std::os::raw::c_long, h: std::os::raw::c_long, bw: i32, bh: i32, image: *mut u32) -> i32;
+}
+
+/// texture2ddecoder.decode_astc: ASTC blocks -> the image as BGRA bytes.
+pub fn decode_astc(data: &[u8], w: usize, h: usize, bw: usize, bh: usize) -> Result<Vec<u8>, Error> {
+    let nb = w.div_ceil(bw) * h.div_ceil(bh);
+    if data.len() < nb * 16 {
+        return Err(Error::Astc("decode: not enough blocks".into()));
+    }
+    #[cfg(not(tc_astcdec))]
+    return Err(Error::Astc("built without texture2ddecoder's ASTC decoder (vendor/texture2ddecoder astc.cpp)".into()));
+    #[cfg(tc_astcdec)]
+    {
+        let mut img = vec![0u32; w * h];
+        // SAFETY: data holds every block of the image, img every texel.
+        unsafe { tc_decode_astc(data.as_ptr(), w as _, h as _, bw as i32, bh as i32, img.as_mut_ptr()) };
+        Ok(img.iter().flat_map(|p| p.to_le_bytes()).collect())
+    }
+}
+
 fn read_upto(f: &File, at: u64, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut got = 0;
     while got < buf.len() {
