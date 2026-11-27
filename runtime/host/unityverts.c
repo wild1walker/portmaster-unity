@@ -11,7 +11,7 @@
 //
 // The same function here: the same VFP operations on the same operands in the same order (each
 // output is the same float, bit for bit: VFP multiply and add, no fused multiply-add, as Unity's
-// code), the matrix in registers, the attribute bytes copied inline for the usual sizes. The flags'
+// code; on AArch64 fmul and fadd, never fmadd), the matrix in registers, the attribute bytes copied inline for the usual sizes. The flags'
 // meaning was read from the code of the row below: 8 a constant normal (the 3x3 matrix's third
 // column, negated with 256 clear), 64 a constant tangent (the 4x4's first column and a sign: 256,
 // 512, 1024, 2048), 512/1024 a mirrored x/y (the matrix's first/second column negated), 16 the
@@ -23,6 +23,12 @@
 // (the emulated rig runs Unity's code too).
 #include "unityverts.h"
 
+// every output the same float as Unity's: a multiply and an add, never fused (AArch64's gcc fuses by default; the
+// ARMv7 build passes -ffp-contract=off)
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC optimize("fp-contract=off")
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +39,11 @@ static const struct uh_row g_rows[] = {
     // TransformVerticesInnerLoop<false, false, true>(unsigned char*, Matrix4x4f const&, Matrix3x3f const&, bool,
     // unsigned int, unsigned char const*, int, unsigned char const*, int, int, GfxTransformVerticesFlags, unsigned int)
     { "6000.0.61f1 armeabi-v7a", "TransformVerticesInnerLoop<false, false, true>", 0xab7344, 0x27c, 'a', 0xa8c11455644d88b3ull },
+    // The arm64-v8a IL2CPP player (Hollow Knight's 64-bit build; read 2026-11-26): the same flags and operations (the
+    // position's products summed m0*x + m4*y, then + m8*z, then m12 +, in that operand order: the A64 branch of the
+    // loop), the 4x4 copied to the stack, Matrix4x4f::Scale(sx, sy, 1) on the copy for 512 /
+    // 1024, the matrix reloaded from the stack for every vertex and memmove called for each vertex's other attributes
+    { "6000.0.61f1 arm64-v8a", "TransformVerticesInnerLoop<false, false, true>", 0x103da64, 0x27c, 'x', 0x081fb010f9c8d210ull },
 };
 
 typedef void (*loop_fn)(unsigned char *dst, const float *m, const float *m3, int b, unsigned count,
@@ -76,9 +87,16 @@ static void fast_loop(unsigned char *dst, const float *m, const float *m3, int b
     for (; count; count--, src += src_stride) {
         float x, y, z;
         memcpy(&x, src, 4); memcpy(&y, src + 4, 4); memcpy(&z, src + 8, 4);
+#if defined(__aarch64__)
+        // the arm64-v8a row's operand order (which of two NaN inputs a VFP/A64 operation returns is its first)
+        float px = m0 * x; px = px + m4 * y; px = px + m8 * z; px = m12 + px;
+        float py = m1 * x; py = py + y * m5; py = py + z * m9; py = m13 + py;
+        float pz = x * m2; pz = pz + m6 * y; pz = pz + z * m10; pz = m14 + pz;
+#else
         float px = m4 * y; px = px + m0 * x; px = px + m8 * z; px = m12 + px;
         float py = y * m5; py = py + m1 * x; py = py + z * m9; py = m13 + py;
         float pz = m6 * y; pz = pz + x * m2; pz = pz + z * m10; pz = m14 + pz;
+#endif
         put(&dst, px); put(&dst, py); put(&dst, pz);
         if (flags & 8) { put(&dst, n0); put(&dst, n1); put(&dst, n2); }
         if (flags & 64) { put(&dst, t0); put(&dst, t1); put(&dst, t2); put(&dst, tw); }

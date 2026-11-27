@@ -1651,6 +1651,9 @@ there saves CPU and heat, not frames; in Gungeon's scenes it is, or the jobs it 
   no single function over 0.3 ms; a rewrite of the whole per-draw path would have to keep Unity's caches and
   render-pass rules exactly. Not started.
 - Unity 2017.4's spin in `JobQueue::WaitForJobGroup` (Gungeon): built as `UA_JOB_SLEEP` (below), measured, no gain.
+- dynamic batching's vertex transform on the 64-bit player (`TransformVerticesInnerLoop<false, false, true>`, 0.27 ms
+  in City of Tears with its `memmove` calls): `UA_FAST_VERTS` given an arm64-v8a row (runtime.md); `check` 0 of
+  20.4 M vertices different, the loop 2.1 -> 1.4 % of the render thread, ~0.1 ms a frame. Exact, below the bar; off.
 
 **Unity 2017.4's job wait (`UA_JOB_SLEEP`, runtime.md).** `WaitForJobGroup` pops and runs queued jobs on any thread;
 when the queue's stack is empty only the main thread sleeps (it adds a semaphore to the group with `SignalOnFinish`
