@@ -4,6 +4,9 @@
 //!   mouse_events        False: BuildSettings.usesOnMouseEvents off (no OnMouse* raycasts)
 //!   trim_joystick_axes  True: InputManager axes named Joy<j>Axis<a> dropped
 //!   audio_sample_rate   AudioManager output rate (0 = keep); real_voices: its real voices
+//!   stack_trace_types   PlayerSettings.m_StackTraceTypes, one per LogType (Error, Assert, Warning, Log, Exception, ...):
+//!                       0 none, 1 script only, 2 full; None = keep. Blasphemous: [1, 1, 0, 0, 1, 1] (its boss AI logs
+//!                       every action: each Debug.Log built a stack trace, 79 % of a fight's slow frames on the G350)
 use super::{field, field_mut, json_value, objects, opt, section};
 use crate::error::{Error, Result};
 use crate::job::Job;
@@ -17,6 +20,7 @@ fn defaults() -> Vec<(&'static str, Json)> {
         ("trim_joystick_axes", Json::Bool(false)),
         ("audio_sample_rate", Json::Int(0)),
         ("real_voices", Json::Int(0)),
+        ("stack_trace_types", Json::Null),
     ]
 }
 
@@ -90,6 +94,24 @@ pub fn run(job: &mut Job) -> Result<()> {
                 }
                 f.sf.save_typetree(pid, &t)?;
                 done.push(format!("audio {} Hz", rate.to_str()));
+            }
+            "PlayerSettings" if !matches!(opt(&c, "stack_trace_types"), Json::Null) => {
+                let mut t = f.sf.read_typetree(pid)?;
+                let want = opt(&c, "stack_trace_types");
+                let n = match want {
+                    Json::List(l) => l.len(),
+                    other => return Err(Error::Value(format!("settings.stack_trace_types: not a list ({})", other.repr()))),
+                };
+                let have = t.get("m_StackTraceTypes").and_then(Value::as_array).map(|a| a.len());
+                match have {
+                    Some(h) if h == n => {
+                        t.set("m_StackTraceTypes", json_value(want)?)?;
+                        f.sf.save_typetree(pid, &t)?;
+                        done.push(format!("stack traces {}", want.to_str()));
+                    }
+                    Some(h) => return Err(Error::Value(format!("settings.stack_trace_types: {n} values, the player has {h}"))),
+                    None => done.push("stack traces: this player has no m_StackTraceTypes (kept)".into()),
+                }
             }
             _ => {}
         }

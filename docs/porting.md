@@ -972,7 +972,12 @@ README.md) took it from 0.24 to 0.10 MB/s (4,000 -> 1,100 objects a second; `sma
 collects inside room changes, and `UA_GC_ARRIVAL_RESET=10` (Mono built from main: the collector needs the
 `reset-allocd` patch) keeps the next room's streaming (28 MB allocated in its first 10 s) from bringing one on right
 after. A 2.5-minute walk through three room changes: no frame over 100 ms in play (before: one to three of 110 -
-180 ms), 52 - 57 fps walking (49 - 55). What a room change still costs is behind the game's loading screen: the
+180 ms), 52 - 57 fps walking (49 - 55). In a fight the boss AI logged every action it started (`EnemyAction.StartAction` -> `Debug.Log`), and the release
+player keeps a script stack trace for every log line (`PlayerSettings.m_StackTraceTypes`, 1 for each type): Unity's
+`ExtractStacktrace` and its strings were 79 % of the slow frames in the Amanecidas' fight and brought collections on
+there. pmu's settings step `stack_trace_types = [1, 1, 0, 0, 1, 1]` (`[convert.settings]`, setup-rs crates/convert/src/steps/settings.rs) keeps them for errors, asserts and
+exceptions and drops them for warnings and plain logs (only the log's text changes): the fight's frames over 100 ms
+6 -> 1 in a minute, its log 10,085 -> 1,269 lines; the fight's frame rate stays 40 - 50 (its own work). What a room change still costs is behind the game's loading screen: the
 engine's `UnloadUnusedAssets` and the game creating the Penitent and his effect pools anew in every room. Two other
 leads did not hold: `UA_JOB_WORKERS` 1, 2 or 3 (and 2017.4 has no `-job-worker-count`) measured the same, and the
 lockstep checker (lockstep.md) did not replay this game's Mono route deterministically (`Time.deltaTime` differs
