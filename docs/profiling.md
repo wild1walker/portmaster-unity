@@ -1828,6 +1828,64 @@ would need an allocator Unity's `GetAllocatorContainingPtr` knows (Unity's `Base
 not built yet. What it would change is where objects lie, so anything Unity orders by address (hash sets keyed by
 pointers, sorts by pointer) could change order: lockstep and glreplay decide.
 
+### Unity 2017.4's job workers: exact, and per game (2026-11-27)
+
+`UA_JOB_WORKERS` changes how many threads run Unity 2017.x's jobs. Whether it can change what they compute was
+read in both 2017.4 players (2017.4.27f1, Enter the Gungeon; 2017.4.40f1, Blasphemous and Cuphead 64-bit; arm64-v8a,
+with Unity's symbol files) and then checked on the handheld.
+
+**Where the count reaches the work.** The queue's thread count (`JobQueue` + 32) is read outside the queue only by
+`JobSystem::GetJobQueueThreadCount`, `CalculateJobCountWithMinIndicesPerJob` (`min(2t + 2, ceil(n / m), 16)`, 1 when
+t is 0), `...MaxWorkerThreads` (that, at most t) and `JobBatchDispatcher` (how many jobs it collects before it wakes
+the workers: scheduling only). Their callers are the jobs that split their work by it: scene culling
+(`CullDynamicScene`, `ScheduleSceneNodesJobs`, Umbra), culling groups, the render queue's extraction
+(`BeginRenderQueueExtraction`, whose `EndRenderQueueExtraction` joins the parts in their index order), light and
+shadow-caster culling, the transform change dispatch, skinned mesh bounds, UI geometry, tilemap camera bounds, physics
+interpolation poses, the navmesh crowd, motion vectors, and the async texture upload (a job when t >= 1, else inline:
+the same upload); in 2017.4.40f1 also `RenderDynamicBatch`, whose vertex budget a geometry job is
+`max(32000 / t, 4000)` (2017.4.27f1 batches on the render thread and does not ask). Each splits an index range into
+blocks; every output is per element or joined in block order, so a split cannot reorder anything.
+
+**Whole runs cannot show it here.** Two lockstep replays of one record (docs/lockstep.md; the checker runs on the
+2017.4 Mono route: record, replay, the state walk and the held loads all work) did not give the same game twice:
+Gungeon's state parts at frame 4 (`dfSpriteAnimation`) and its pictures at frame 25 (bench APK, fixed dungeon seed,
+the Forge's busiest room, 2,285 frames: 218 the same in place between two default replays); Blasphemous's pictures part
+at frame 20 (4,856 frames, New Game to the first level). So `=1` and `=2` replays differing from the default (they do,
+as much as two defaults do) says nothing.
+
+**One run, the game standing still.** `UA_LOCKSTEP_FREEZE` (lockstep.md) stops the game's clock at a frame while Unity
+still culls, extracts, batches and draws every frame; `UA_FRAME_HASH` (runtime.md) hashes every frame; `UA_JOB_SPLIT`
+(runtime.md) makes the split functions answer for other worker counts in turn while the workers stay three:
+
+| scene (RG34XX-SP, muOS) | frames frozen | `UA_JOB_SPLIT` | pictures in the frozen frames | split answers that a count changed |
+|---|---|---|---|---|
+| Gungeon, Forge, `Forge_Joe_Hot_Fire_005` (busiest), mid-fight | 558 | none | 1 | |
+| the same | 558 | `3,1,2:7` (80 switches) | 1 | 506 of 9,095 calls in frames 1,200 - 1,800 (frozen from 1,530) |
+| Blasphemous, first level after New Game | 728 | none / `3,1,2:7` | 1 / 1 | 10 in the whole run |
+| Blasphemous, `loadnoui D06Z01S01` | 1,574 | `3,1,2:7` | 1 | 19 in the whole run: every split there is the same for 1 - 3 workers |
+
+So a different worker count leaves Gungeon's fight picture exactly as it was, and in Blasphemous the count does not
+even change a split (its scenes have too few renderers a block for `ceil(n / m)` to reach 4); only which thread runs a
+job changes. Exact by construction for the per-element jobs that draw nothing (transform dispatch, physics poses).
+
+**Speed** (plain runs, the release's settings, the bench APK: fixed seed, no damage; [fps] lines over 40 s of the
+route; Blasphemous held at 60 by the display, so its CPU from `UA_PROF=200` schedstat, 20 s in `D06Z01S01`):
+
+| | default (3) | `=1` | `=2` |
+|---|---|---|---|
+| Gungeon, Forge busiest room | 53.9, 53.9 fps | 55.0, 54.3 | 53.6 |
+| Gungeon, Bullet Hell, `Hell_Hath_No_Joery_007` (busiest) | 44.1 | 45.2 | 43.7 |
+| Gungeon, the Breach (census, 2026-11-26) | 30.9, 31.2 | 35.0, 35.2 | |
+| Blasphemous `D06Z01S01`: UnityMain / render thread / workers, ms of CPU a frame | 13.73 / 4.93 / 3 x 1.92 | 14.10 / 4.83 / 3.51 | 13.67 / 4.74 / 2.37 + 2.47 |
+| Blasphemous: all sampled threads, ms of CPU a frame (59.4 - 59.9 fps) | 24.4 | 22.4 | 23.3 |
+
+Verdict: exact for both players. Enter the Gungeon: `UA_JOB_WORKERS=1` is a safe default (+2 - 2.5 % in its heavy
+fights, +13 % in the Breach, where the render thread waits on the geometry jobs). Blasphemous: no frame-rate change on
+the H700 (held at 60); `=1` saves 2 ms of CPU a frame but adds 0.4 ms to UnityMain, `=2` saves 1.2 ms and leaves
+UnityMain as it was: a default only after the G350 (min-spec, four slower cores) shows which.
+Cuphead 64-bit (2017.4.40f1) was not profiled: its APK and a trimmed OBB (~950 MB) did not fit the muOS card
+(347 - 823 MB free during the work); built on the Mac, waiting for space.
+
 ## Shader programs: compiles, links and Unity's binary cache
 
 ```sh

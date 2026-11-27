@@ -61,7 +61,7 @@ differences, or the game is not deterministic under the checker and nothing it s
 | `UA_LOCKSTEP_UNITY_CLOCK=0` | leave Unity's own monotonic clock alone |
 | `UA_LOCKSTEP_AUDIO=0` | the silent sound output on the clock again, not paced by frames |
 | `UA_LOCKSTEP_LOADS=0` | scene loads not held to the frame |
-| `UA_LOCKSTEP_FREEZE=<frame>` | a check's aid that changes the game: from `<frame>` on `Time.timeScale = 0` every frame and the virtual clocks (and the wrapped unscaled getters) held at that frame, so the picture stands still while Unity still culls, sorts, batches and draws every frame: with `UA_FRAME_HASH` (runtime.md) a change switched on and off inside one run (`UA_JOB_SPLIT`) shows as a picture that changes at the switches. Stop the inputs before it (a record cut at that frame, keys released) |
+| `UA_LOCKSTEP_FREEZE=<frame>\|<file>` | a check's aid that changes the game: from `<frame>` on (or from the frame that finds `<file>`, looked for every 30 frames: a scripted test touches it once the scene is reached) `Time.timeScale = 0` every frame and the virtual clocks (and the wrapped unscaled getters) held at that frame, so the picture stands still while Unity still culls, sorts, batches and draws every frame: with `UA_FRAME_HASH` (runtime.md) a change switched on and off inside one run (`UA_JOB_SPLIT`) shows as a picture that changes at the switches. Stop the inputs before it (a record cut at that frame, keys released) |
 | `UA_LOCKSTEP_NUDGE=<class>.<field>@<frame>[+<delta>]` | a test aid that changes the game: `<delta>` added to that number field of every script of the class after `<frame>` |
 
 ## What makes a replay the same
@@ -199,3 +199,13 @@ game a frame now and then.
 Open: the sound mixer's progress (FMOD's own thread; exact would be FMOD's output in non-realtime mode, mixed
 on the frame); sound objects recycled on a clip's end; particle systems (their seed and simulation are Unity's
 own).
+
+## Unity 2017.4 (Mono route, 64-bit), 2026-11-27
+
+Enter the Gungeon (2017.4.27f1) and Blasphemous (2017.4.40f1) on muOS: the checker runs as on 6000.0 (the clock through
+`Time.captureFramerate`, the state walk, the held scene loads, the input record), but A against A is far from 0.
+Gungeon (its bench APK: fixed dungeon seed) parts at frame 4 in `dfSpriteAnimation` (dfGUI's sprite animations) and
+from there in nearly every frame; its pictures part at frame 25 and its bullets later differ. Blasphemous's pictures
+part at frame 20. Until those are found, a change on these games is checked inside one run instead
+(`UA_LOCKSTEP_FREEZE` with `UA_FRAME_HASH`, profiling.md "Unity 2017.4's job workers").
+

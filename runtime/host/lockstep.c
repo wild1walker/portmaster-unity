@@ -28,9 +28,10 @@
 //   UA_LOCKSTEP_ICALLS=0        transforms and enabled read through mono_runtime_invoke only
 //   UA_LOCKSTEP_IGNORE=<class>[.<field>][,...]  fields (or all of a class's own fields) left out of the hash: what a
 //                               game keeps of the sound's clock
-//   UA_LOCKSTEP_FREEZE=<f>      a check's aid that CHANGES the game: from frame <f> on Time.timeScale = 0 every frame and
-//                               the virtual clocks stay at frame <f>, so the game's picture stands still while Unity
-//                               still runs every frame's work (a change that alters a picture shows as a new one)
+//   UA_LOCKSTEP_FREEZE=<f>|<file>  a check's aid that CHANGES the game: from frame <f> on (or the frame that finds <file>,
+//                               looked for every 30 frames) Time.timeScale = 0 every frame and the virtual clocks stay
+//                               at that frame, so the game's picture stands still while Unity still runs every frame's
+//                               work (a change that alters a picture shows as a new one)
 //   UA_LOCKSTEP_NUDGE=<class>.<field>@<frame>[+<delta>]   a test aid that CHANGES the game: after frame
 //                               <frame>, <delta> (default 1) added to that number field of every script of
 //                               that class: the checker must name it
@@ -81,6 +82,7 @@ enum { OFF, M_RECORD, M_REPLAY, M_HASH };
 static int g_mode, g_cfg;
 static char g_in_path[512], g_hash_path[512];
 static long g_frames_max, g_dump[8], g_freeze;
+static char g_freeze_file[512];
 static int g_ndump, g_fps = 60, g_seed = 1, g_depth = 2, g_elems = 32, g_settle_ms = 5000, g_clock = 1;
 static char g_nudge_class[128], g_nudge_field[128], g_ignore[1024];
 static long g_nudge_frame = -1;
@@ -98,7 +100,8 @@ static void cfg(void)
     else { fprintf(stderr, "[lockstep] UA_LOCKSTEP=%s: not record:<file>, replay:<file> or hash: off\n", e); return; }
     if ((g_mode == M_RECORD || g_mode == M_REPLAY) && !g_in_path[0]) { fprintf(stderr, "[lockstep] no input file: off\n"); g_mode = OFF; return; }
 #define NUM(var, name, lo) if ((e = getenv(name)) && *e) { long v = atol(e); if (v >= lo) var = v; }
-    NUM(g_frames_max, "UA_LOCKSTEP_FRAMES", 1); NUM(g_freeze, "UA_LOCKSTEP_FREEZE", 1); NUM(g_fps, "UA_LOCKSTEP_FPS", 1); NUM(g_depth, "UA_LOCKSTEP_DEPTH", 0);
+    NUM(g_frames_max, "UA_LOCKSTEP_FRAMES", 1); NUM(g_freeze, "UA_LOCKSTEP_FREEZE", 1);
+    { const char *fz = getenv("UA_LOCKSTEP_FREEZE"); if (fz && (fz[0] < '0' || fz[0] > '9')) snprintf(g_freeze_file, sizeof g_freeze_file, "%s", fz); } NUM(g_fps, "UA_LOCKSTEP_FPS", 1); NUM(g_depth, "UA_LOCKSTEP_DEPTH", 0);
     NUM(g_elems, "UA_LOCKSTEP_ELEMS", 0); NUM(g_settle_ms, "UA_LOCKSTEP_SETTLE", 0);
 #undef NUM
     if ((e = getenv("UA_LOCKSTEP_SEED")) && *e) g_seed = atoi(e);
@@ -1174,6 +1177,7 @@ void lockstep_frame(void)
     long frame = __atomic_add_fetch(&g_frame, 1, __ATOMIC_ACQ_REL);
     if (!g_started && mono_ready() && engine_ready()) { g_started = 1; start_clock(frame); }
     else if (g_started) keep_clock(frame);
+    if (g_freeze_file[0] && !g_freeze && frame % 30 == 0 && access(g_freeze_file, F_OK) == 0) g_freeze = frame;
     if (g_freeze && frame >= g_freeze && g_started && k_time) {
         static MonoMethod *set_ts;
         if (!set_ts) set_ts = M.method_from_name(k_time, "set_timeScale", 1);
