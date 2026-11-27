@@ -50,6 +50,9 @@
 //   play    PreOrderPlayableTraverser::Traverse, at its loop's call of RecursiveVisit for each input of a playable
 //           (x22: the playable's graph node, its inputs at +0x20 (16 bytes each, the Playable first) and their count
 //           at +0x30; x23 / x24: the input's offset and number): the next input's Playable, four lines.
+//   anim    Animator::BuildJobs (6000.0.61f1), at its loop's call of the PlayableOutput's target getter (x21: the output's
+//           slot in the outputs' array, x26 that vector {array, .., count at +0x10}): two ahead the output's lines, one
+//           ahead its Animator's lines that the loop and Animator::Prepare read and its source playable's handle (opt-in).
 //   ps      ParticleSystem::UpdateManualTransformData, at its loop's first call of GameObject::QueryComponentByType (the
 //           Transform's lookup; x24 the page of the global list of particle systems, +0x730: {array, .., count at
 //           +0x10}; x25 the system's number): three ahead the ParticleSystem, two ahead its GameObject and the objects
@@ -70,8 +73,8 @@
 #include "unityprefetch.h"
 #include "unityhooks.h"
 
-enum { STUB_BEH, STUB_SPRITE, STUB_CULL, STUB_PLAY, STUB_PS, STUB_N };
-static const char *const g_stub_name[STUB_N] = { "beh", "sprite", "cull", "play", "ps" };
+enum { STUB_BEH, STUB_SPRITE, STUB_CULL, STUB_PLAY, STUB_PS, STUB_ANIM, STUB_N };
+static const char *const g_stub_name[STUB_N] = { "beh", "sprite", "cull", "play", "ps", "anim" };
 
 #if defined(__aarch64__)
 // The stubs: position-independent code copied into a page near libunity. Each ends in four words the installer
@@ -232,16 +235,49 @@ __asm__(
     "ua_pf_ps_tail:\n"
     "    .word 0, 0, 0, 0\n"
     "ua_pf_ps_end:\n"
+
+    "    .p2align 3\n"
+    "    .globl ua_pf_anim_start, ua_pf_anim_tail, ua_pf_anim_end\n"
+    "ua_pf_anim_start:\n"
+    "    ldr  x9, [x26]\n"                 // the outputs: {array, .., count at +0x10}; x21 the one being built
+    "    ldr  x10, [x26, #0x10]\n"
+    "    add  x10, x9, x10, lsl #3\n"
+    "    add  x11, x21, #16\n"             // two ahead: the PlayableOutput's lines
+    "    cmp  x11, x10\n"
+    "    b.hs 1f\n"
+    "    ldr  x12, [x11]\n"
+    "    prfm pldl1keep, [x12]\n"
+    "    prfm pldl1keep, [x12, #0x40]\n"
+    "    prfm pldl1keep, [x12, #0xc0]\n"
+    "1:  add  x11, x21, #8\n"              // the next one: its Animator (+0xc0) and source playable's handle (+0x30)
+    "    cmp  x11, x10\n"
+    "    b.hs ua_pf_anim_tail\n"
+    "    ldr  x12, [x11]\n"
+    "    ldr  x16, [x12, #0xc0]\n"
+    "    cbz  x16, 2f\n"
+    "    prfm pldl1keep, [x16]\n"          // vtable (the loop's +0xd0 call), Prepare's and the loop's fields
+    "    prfm pldl1keep, [x16, #0x178]\n"
+    "    prfm pldl1keep, [x16, #0x188]\n"
+    "    prfm pldl1keep, [x16, #0x1c0]\n"
+    "    prfm pldl1keep, [x16, #0x478]\n"
+    "    prfm pldl1keep, [x16, #0x5f8]\n"
+    "2:  ldr  x17, [x12, #0x30]\n"
+    "    cbz  x17, ua_pf_anim_tail\n"
+    "    prfm pldl1keep, [x17, #0x20]\n"
+    "ua_pf_anim_tail:\n"
+    "    .word 0, 0, 0, 0\n"
+    "ua_pf_anim_end:\n"
 );
 extern const uint8_t ua_pf_beh_start[], ua_pf_beh_tail[], ua_pf_beh_vt[], ua_pf_beh_end[];
 extern const uint8_t ua_pf_sprite_start[], ua_pf_sprite_tail[], ua_pf_sprite_end[];
 extern const uint8_t ua_pf_cull_start[], ua_pf_cull_tail[], ua_pf_cull_end[];
 extern const uint8_t ua_pf_play_start[], ua_pf_play_tail[], ua_pf_play_end[];
 extern const uint8_t ua_pf_ps_start[], ua_pf_ps_tail[], ua_pf_ps_end[];
+extern const uint8_t ua_pf_anim_start[], ua_pf_anim_tail[], ua_pf_anim_end[];
 
-static const uint8_t *const g_stub_start[STUB_N] = { ua_pf_beh_start, ua_pf_sprite_start, ua_pf_cull_start, ua_pf_play_start, ua_pf_ps_start };
-static const uint8_t *const g_stub_tail[STUB_N] = { ua_pf_beh_tail, ua_pf_sprite_tail, ua_pf_cull_tail, ua_pf_play_tail, ua_pf_ps_tail };
-static const uint8_t *const g_stub_end[STUB_N] = { ua_pf_beh_end, ua_pf_sprite_end, ua_pf_cull_end, ua_pf_play_end, ua_pf_ps_end };
+static const uint8_t *const g_stub_start[STUB_N] = { ua_pf_beh_start, ua_pf_sprite_start, ua_pf_cull_start, ua_pf_play_start, ua_pf_ps_start, ua_pf_anim_start };
+static const uint8_t *const g_stub_tail[STUB_N] = { ua_pf_beh_tail, ua_pf_sprite_tail, ua_pf_cull_tail, ua_pf_play_tail, ua_pf_ps_tail, ua_pf_anim_tail };
+static const uint8_t *const g_stub_end[STUB_N] = { ua_pf_beh_end, ua_pf_sprite_end, ua_pf_cull_end, ua_pf_play_end, ua_pf_ps_end, ua_pf_anim_end };
 #endif
 
 // a call site: the function (its row), the `bl` in it, the function it calls (its row), the stub
@@ -253,7 +289,7 @@ struct pf_site {
 };
 struct pf_player {
     const char *unity;
-    struct pf_site sites[8];
+    struct pf_site sites[10];
     struct uh_row checks[6];        // the code the offsets were read from (checked only)
     uint32_t mb_vtable;             // MonoBehaviour's vtable as objects point to it (its symbol + 0x10)
     uint32_t mb_vt_update;          // its Update slot (CommonUpdate<BehaviourManager>'s call) ...
@@ -291,6 +327,8 @@ static const struct pf_player g_players[] = {
               { "6000.0.61f1 arm64-v8a", "PreOrderPlayableTraverser::RecursiveVisit", 0x9b2998, 0xbc, 'x', 0xf8b390afd5730f12ull }, 1 + STUB_PLAY },
             { { "6000.0.61f1 arm64-v8a", "ParticleSystem::UpdateManualTransformData", 0x11fa950, 0x1a4, 'x', 0x4dbcab5f515c8486ull }, 0x11fa9cc,
               { "6000.0.61f1 arm64-v8a", "GameObject::QueryComponentByType", 0x77b034, 0x44, 'x', 0x823fd1d5d6ddd8a7ull }, 1 + STUB_PS },
+            { { "6000.0.61f1 arm64-v8a", "Animator::BuildJobs", 0xb82fb0, 0x3c8, 'x', 0x215a8a2dbed9cdfdull }, 0xb83050,
+              { "6000.0.61f1 arm64-v8a", "PlayableOutput's target getter (ldr x0, [x0, #0xc0])", 0x7916e4, 0x8, 'x', 0x6b8be5fe6d2e9bfaull }, 1 + STUB_ANIM },
         },
         {
             { "6000.0.61f1 arm64-v8a", "MonoBehaviour::CallUpdateMethod", 0x9d3e78, 0x114, 'x', 0xd695de744b4c0dbdull },
@@ -447,8 +485,8 @@ void unityprefetch_on_load(uintptr_t base, size_t size)
         mprotect(page, (size_t)pg, PROT_READ | PROT_EXEC);
         __builtin___clear_cache((char *)page, (char *)(page + used));
         if (!n) { munmap(page, (size_t)pg); return; }
-        fprintf(stderr, "[unityprefetch] libunity %s: %d call sites fetch ahead (beh %d, sprite %d, cull %d, play %d, ps %d; UA_PREFETCH=%s)\n",
-                p->unity, n, done[STUB_BEH], done[STUB_SPRITE], done[STUB_CULL], done[STUB_PLAY], done[STUB_PS], v);
+        fprintf(stderr, "[unityprefetch] libunity %s: %d call sites fetch ahead (beh %d, sprite %d, cull %d, play %d, ps %d, anim %d; UA_PREFETCH=%s)\n",
+                p->unity, n, done[STUB_BEH], done[STUB_SPRITE], done[STUB_CULL], done[STUB_PLAY], done[STUB_PS], done[STUB_ANIM], v);
         return;
     }
     if (asked) fprintf(stderr, "[unityprefetch] this libunity.so is not one whose loops were read (pmu-dev unityhooks); no prefetch\n");

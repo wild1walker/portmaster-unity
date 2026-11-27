@@ -7,7 +7,7 @@
 // a page followed by an inaccessible one, so a load past what Unity's own code reads faults; prefetched addresses
 // may point anywhere (a PRFM never faults). Lists of 0 to 6 behaviours, sprite loops at every element of lists of
 // 0 to 5, the culling walk's stub at any node address, the playable traversal at every input of
-// graph nodes of 0 to 4 inputs, the particle systems' loop at every system of lists of 0 to 5. Also: the `bl` encoder's reach, the jump to the callee (near and far), the page placement, UA_PREFETCH's
+// graph nodes of 0 to 4 inputs, the particle systems' loop at every system of lists of 0 to 5, Animator::BuildJobs' loop at every output of lists of 0 to 5. Also: the `bl` encoder's reach, the jump to the callee (near and far), the page placement, UA_PREFETCH's
 // names. The memory the stubs walk is compared before and after: they store nothing.
 #include <stdio.h>
 #include <string.h>
@@ -256,6 +256,31 @@ static void test_ps(void)
         }
 }
 
+// Animator::BuildJobs' loop: x26 the outputs' vector {array, .., count at +0x10}, x21 the slot of the one being built;
+// each output (its +0x30 handle and +0xc0 Animator read; both may be 0) at a page's end
+static void test_anim(void)
+{
+    void *stub = install(STUB_ANIM, 0);
+    for (int count = 0; count <= 5; count++)
+        for (int i = 0; i < (count ? count : 1); i++) {
+            uint8_t *vec = guarded(0x18), *arr = guarded(8 * (size_t)(count ? count : 1));
+            uint64_t a = (uint64_t)(uintptr_t)arr, c = (uint64_t)count;
+            memcpy(vec, &a, 8); memcpy(vec + 0x10, &c, 8);
+            for (int k = 0; k < count; k++) {
+                uint8_t *o = guarded(0xc8);
+                uint64_t an = k % 3 == 1 ? 0 : rnd(), h = k % 4 == 2 ? 0 : rnd();
+                memcpy(o + 0xc0, &an, 8); memcpy(o + 0x30, &h, 8);
+                uint64_t op = (uint64_t)(uintptr_t)o; memcpy(arr + 8 * k, &op, 8);
+            }
+            char what[64];
+            snprintf(what, sizeof what, "anim: output %d of %d", i, count);
+            int which[4] = { 0, 1, 21, 26 };
+            uint64_t v[4] = { count ? 0 : rnd(), rnd(), (uint64_t)(uintptr_t)(arr + 8 * i), (uint64_t)(uintptr_t)vec };
+            if (count) memcpy(&v[0], arr + 8 * i, 8);
+            run(stub, which, v, 4, what);
+        }
+}
+
 int main(void)
 {
     CHECK(unityprefetch_wanted("1", "beh") && unityprefetch_wanted("beh,sprite", "sprite") && !unityprefetch_wanted("behx", "beh") &&
@@ -278,6 +303,7 @@ int main(void)
     for (int k = 0; k < 16; k++) { int which[1] = { 23 }; uint64_t v[1] = { k ? rnd() : 0 }; run(cull, which, v, 1, "cull"); }
     test_play();
     test_ps();
+    test_anim();
     printf("%s unityprefetch: %d failure(s)\n", fails ? "FAILED" : "PASSED", fails);
     return fails != 0;
 }
