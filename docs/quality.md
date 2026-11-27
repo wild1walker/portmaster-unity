@@ -203,3 +203,33 @@ What did not go in: realtime reflection probes off (a mirror can show the player
 (moves the culled transition), shadow distance, Bokeh depth of field to Gaussian (another focus;
 White Mirror's game code drives its depth of field), bloom quality (no game here had it on where
 it mattered).
+
+## Picture changes no one sees (2026-11-27, in progress)
+
+The rule for every Unity port since 2026-11-26: a picture change is allowed when a person cannot see it on the
+handheld (3.5 - 4 inch, 640x480 / 720x480); the game play never changes. Candidates are the options that
+were off only because they are not exact. Bar per option: the same frames with and without it, several
+scenes per game; per frame PSNR, SSIM, the largest difference and the pixels off by more than 8 of 255; the
+worst frame and its worst region looked at side by side; SSIM >= 0.99 and nothing a person would see; when
+in doubt it stays off; then the gain measured on muOS.
+
+How the frames are made: one GL trace with pixels (`UA_GL_REC=census UA_GL_REC_FILE_PIXELS=1`, the clock
+fixed by `UA_LOCKSTEP=hash`) replayed twice through the handheld's own Mali (`glreplay --hash-swap-only
+--hash-step N --hash-dump`), once plain and once through ua_host's own layers (`UA_GL_RENAME=near
+UA_GL_SAMECLEAR=1` in glreplay's environment: profiling.md, "Pictures compared call by call"); the window
+before each swap compared with `picdiff frames` (setup-rs/crates/picdiff). The Mali replays one trace
+the same every time (0 differences, above), so every difference is the option's. Textures: the textures
+step run on the Hollow Knight sample (80 textures) at each setting with `PMU_CPU_DUMP` (each level as given
+and as its ASTC decodes), compared with `picdiff tex` (per texture against the source and against today's
+setting, the worst 6x6 block, crops of the worst ones).
+
+| option | gain | worst measured | verdict |
+|---|---|---|---|
+| `UA_GL_RENAME=near` + `UA_GL_SAMECLEAR=1` | King's Pass 33.3 / 33.9 -> 36.0 / 36.5 fps (+8 - 10 %, measured 2026-10, muOS; not measured again yet) | City of Tears, 49 frames (frames 2000 - 4450 every 50; one copy left out a frame, 439 clears): SSIM 0.99994 at worst (mean 0.99996), PSNR 62.2 - 70 dB, largest difference 6 of 255, **0** pixels over 8 in any frame, 3.6 % of the pixels differ at all (by 1 - 6, along the edges of the sprites the brightness pass touches); looked at 4x with the difference x8: not visible | passes in City of Tears; King's Pass and a boss not yet replayed (the King's Pass trace was cut short), the gain not yet measured again: **not made a default yet** |
+| textures `quality = "fast"` (instead of medium) | texture time -33 % (setup-speed.md) | against medium: all texels 34.21 -> 33.68 dB; 65 of 80 textures lose in their worst 1 % of blocks (by 0.73 dB on average, at most 3.7 dB); 38 of 80 under SSIM 0.99 against medium (lowest 0.963); worst blocks from about 30 dB to 14 - 20 dB: a 6x6 block of the wrong alpha sticking out of a sprite's edge, a light streak broken into blocks | fails: stays medium |
+| textures `tiers` (#29's medium tiers) | texture time -25 % (setup-speed.md) | all texels 34.21 -> 34.17 dB; 29 textures lose in their worst 1 % (0.31 dB on average, at most 1.7); 18 of 80 under SSIM 0.99 against medium (lowest 0.957); worst blocks 23 - 28 dB -> 14 - 20 dB, the same kind of block errors in light streaks | fails: stays off |
+| `shaders.grab_fetch` | King's Pass +8 % (+11 % passes) | not measured here: Hollow Knight already ships it (`"always"`, the port's own decision); it needs two converted data sets to compare | open |
+
+Pictures (Mac work drive, not in the repository): /Volumes/Unity3/work/nearpic/cmp/city/worst-frame.png and
+worst-crop.png; /Volumes/Unity3/work/nearpic/cmp/tex-fast/crops/, tex-tiers/crops/ (source | medium | the
+option, 8x), the tables cmp/tex-*/tex.tsv.
