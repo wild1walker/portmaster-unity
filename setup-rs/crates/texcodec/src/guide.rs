@@ -3,8 +3,10 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek};
+use std::os::unix::fs::FileExt;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -129,9 +131,10 @@ pub fn rest_crc(rest: &[u8]) -> u32 {
 /// A guide opened for the textures step (astc_guide.Reader): codes(key, rest) -> one tier byte a
 /// hard block, or None (no entry, or not these blocks).
 pub struct Guide {
-    f: File,
+    // (the file and index shared by the step's workers' guides: read with pread)
+    f: Arc<File>,
     base: u64,
-    index: HashMap<String, [u64; 4]>,
+    index: Arc<HashMap<String, [u64; 4]>>,
     /// The guide was made for these settings and tiers (else it is never used).
     pub ok: bool,
     /// Texture levels guided, and those not in it.
@@ -194,13 +197,25 @@ impl Guide {
                 .is_some_and(|s| py_eq(s, &Value::Object(want)))
             && py_eq(head.get("tiers").unwrap_or(&Value::Array(vec![])), &tiers);
         Ok(Guide {
-            f,
+            f: Arc::new(f),
             base,
-            index,
+            index: Arc::new(index),
             ok,
             used: 0,
             missed: 0,
         })
+    }
+
+    /// The same guide for another encoder (a worker's), its counts from zero.
+    pub fn share(&self) -> Guide {
+        Guide {
+            f: self.f.clone(),
+            base: self.base,
+            index: self.index.clone(),
+            ok: self.ok,
+            used: 0,
+            missed: 0,
+        }
     }
 
     /// The tier of each hard block of the level `key` (rest: their positions, int32 each), or None.
@@ -217,9 +232,8 @@ impl Guide {
             self.missed += 1;
             return Ok(None);
         };
-        self.f.seek(SeekFrom::Start(self.base + e[0]))?;
         let mut z = vec![0u8; e[1] as usize];
-        let got = read_upto(&mut self.f, &mut z)?;
+        let got = read_upto(&self.f, self.base + e[0], &mut z)?;
         z.truncate(got);
         let codes = miniz_oxide::inflate::decompress_to_vec_zlib(&z)
             .map_err(|e| Error::Guide(format!("Error -3 while decompressing data: {e:?}")))?;
@@ -232,10 +246,10 @@ impl Guide {
     }
 }
 
-fn read_upto(f: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
+fn read_upto(f: &File, at: u64, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut got = 0;
     while got < buf.len() {
-        match f.read(&mut buf[got..])? {
+        match f.read_at(&mut buf[got..], at + got as u64)? {
             0 => break,
             k => got += k,
         }

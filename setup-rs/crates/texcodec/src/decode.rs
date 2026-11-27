@@ -170,15 +170,37 @@ pub fn parse_image_data(
     format: i32,
     version: [i64; 2],
 ) -> Result<Decoded, Error> {
+    Ok(parse_image_data_pm(data, width, height, format, version, false)?.0)
+}
+
+/// parse_image_data, and with `premultiply` the texels of the formats decoded block by block into
+/// RGBA (DXT1, DXT3, DXT5, BC7, crunched DXT) premultiplied as they are decoded (image.rs
+/// premultiply_px: the same bytes as premultiplying the image after). The flag: whether they were.
+pub fn parse_image_data_pm(
+    data: &[u8],
+    width: usize,
+    height: usize,
+    format: i32,
+    version: [i64; 2],
+    premultiply: bool,
+) -> Result<(Decoded, bool), Error> {
     if width == 0 || height == 0 {
         // Image.new("RGBA", (0, 0))
-        return Ok(Decoded {
-            mode: Mode::Rgba,
-            width: 0,
-            height: 0,
-            px: Vec::new(),
-        });
+        return Ok((
+            Decoded {
+                mode: Mode::Rgba,
+                width: 0,
+                height: 0,
+                px: Vec::new(),
+            },
+            false,
+        ));
     }
+    let pm = premultiply
+        && matches!(
+            format,
+            tf::DXT1 | tf::DXT1_CRUNCHED | tf::DXT3 | tf::DXT5 | tf::DXT5_CRUNCHED | tf::BC7
+        );
     if data.is_empty() {
         return Err(Error::Decode("Texture2D has no image data".into()));
     }
@@ -194,12 +216,12 @@ pub fn parse_image_data(
         data
     };
     let img = match format {
-        tf::DXT1 | tf::DXT1_CRUNCHED => bcn(data, pw, ph, 1, Mode::Rgba)?,
-        tf::DXT3 => bcn(data, pw, ph, 2, Mode::Rgba)?,
-        tf::DXT5 | tf::DXT5_CRUNCHED => bcn(data, pw, ph, 3, Mode::Rgba)?,
-        tf::BC4 => bcn(data, pw, ph, 4, Mode::L)?,
-        tf::BC5 => bcn(data, pw, ph, 5, Mode::Rgb)?,
-        tf::BC7 => bcn(data, pw, ph, 7, Mode::Rgba)?,
+        tf::DXT1 | tf::DXT1_CRUNCHED => bcn(data, pw, ph, 1, Mode::Rgba, pm)?,
+        tf::DXT3 => bcn(data, pw, ph, 2, Mode::Rgba, pm)?,
+        tf::DXT5 | tf::DXT5_CRUNCHED => bcn(data, pw, ph, 3, Mode::Rgba, pm)?,
+        tf::BC4 => bcn(data, pw, ph, 4, Mode::L, false)?,
+        tf::BC5 => bcn(data, pw, ph, 5, Mode::Rgb, false)?,
+        tf::BC7 => bcn(data, pw, ph, 7, Mode::Rgba, pm)?,
         tf::RGBA32 => raw(data, pw, ph, 4, Mode::Rgba, |s, d| d.copy_from_slice(s))?,
         tf::ARGB32 => raw(data, pw, ph, 4, Mode::Rgba, |s, d| {
             d.copy_from_slice(&[s[1], s[2], s[3], s[0]])
@@ -222,11 +244,14 @@ pub fn parse_image_data(
             )));
         }
     };
-    Ok(if (pw, ph) != (width, height) {
-        crop(&img, width, height)
-    } else {
-        img
-    })
+    Ok((
+        if (pw, ph) != (width, height) {
+            crop(&img, width, height)
+        } else {
+            img
+        },
+        pm,
+    ))
 }
 
 /// The top-left width x height of an image (Pillow's crop((0, 0, width, height))).
@@ -284,7 +309,7 @@ fn raw(
 }
 
 /// Image.frombytes(mode, (w, h), data, "bcn", n): w and h are whole blocks (UnityPy pads them).
-fn bcn(data: &[u8], w: usize, h: usize, n: u8, mode: Mode) -> Result<Decoded, Error> {
+fn bcn(data: &[u8], w: usize, h: usize, n: u8, mode: Mode, pm: bool) -> Result<Decoded, Error> {
     let bpp = bytes_per_pixel(mode);
     let size = if n == 1 || n == 4 { 8 } else { 16 };
     let (bx, by) = (w / 4, h / 4);
@@ -296,38 +321,35 @@ fn bcn(data: &[u8], w: usize, h: usize, n: u8, mode: Mode) -> Result<Decoded, Er
         return Err(Error::Decode("not enough image data".into()));
     }
     let mut px = vec![0u8; w * h * bpp];
+    // (a block the same as the one before decodes to the same texels: a texture's empty or flat
+    // areas are runs of one block)
+    let mut col = [[0u8; 4]; 16];
+    let mut last: Option<&[u8]> = None;
     for b in 0..bx * by {
         let src = &data[b * size..b * size + size];
-        // (DECODE_LOOP's memset; BC5 fills with 0, BC5S would with 128)
-        let mut col = [[0u8; 4]; 16];
-        match n {
-            1 => decode_bc1_color(&mut col, src, false),
-            2 => {
-                decode_bc1_color(&mut col, &src[8..], true);
-                for (i, c) in col.iter_mut().enumerate() {
-                    let av = (src[i >> 1] >> ((i & 1) * 4)) & 0xf;
-                    c[3] = (av << 4) | av;
-                }
+        if last != Some(src) {
+            last = Some(src);
+            // (DECODE_LOOP's memset; BC5 fills with 0, BC5S would with 128)
+            col = [[0u8; 4]; 16];
+            decode_one(&mut col, src, n);
+            if pm {
+                crate::image::premultiply_px(col.as_flattened_mut());
             }
-            3 => {
-                decode_bc1_color(&mut col, &src[8..], true);
-                decode_bc3_alpha(&mut col, src, 3);
-            }
-            4 => decode_bc3_alpha(&mut col, src, 0),
-            5 => {
-                decode_bc3_alpha(&mut col, src, 0);
-                decode_bc3_alpha(&mut col, &src[8..], 1);
-            }
-            7 => decode_bc7_block(&mut col, src),
-            _ => unreachable!(),
         }
         // put_block (whole blocks, ystep 0: rows as stored)
         let (x0, y0) = ((b % bx) * 4, (b / bx) * 4);
         for j in 0..4 {
             let row = ((y0 + j) * w + x0) * bpp;
-            for i in 0..4 {
-                let c = &col[j * 4 + i];
-                px[row + i * bpp..row + i * bpp + bpp].copy_from_slice(&c[..bpp]);
+            if bpp == 4 {
+                let d = &mut px[row..row + 16];
+                for i in 0..4 {
+                    d[4 * i..4 * i + 4].copy_from_slice(&col[j * 4 + i]);
+                }
+            } else {
+                for i in 0..4 {
+                    let c = &col[j * 4 + i];
+                    px[row + i * bpp..row + i * bpp + bpp].copy_from_slice(&c[..bpp]);
+                }
             }
         }
     }
@@ -337,6 +359,32 @@ fn bcn(data: &[u8], w: usize, h: usize, n: u8, mode: Mode) -> Result<Decoded, Er
         height: h,
         px,
     })
+}
+
+/// One BCn block's texels (`col` zeroed before).
+#[inline(always)]
+fn decode_one(col: &mut [[u8; 4]; 16], src: &[u8], n: u8) {
+        match n {
+            1 => decode_bc1_color(col, src, false),
+            2 => {
+                decode_bc1_color(col, &src[8..], true);
+                for (i, c) in col.iter_mut().enumerate() {
+                    let av = (src[i >> 1] >> ((i & 1) * 4)) & 0xf;
+                    c[3] = (av << 4) | av;
+                }
+            }
+            3 => {
+                decode_bc1_color(col, &src[8..], true);
+                decode_bc3_alpha(col, src, 3);
+            }
+            4 => decode_bc3_alpha(col, src, 0),
+            5 => {
+                decode_bc3_alpha(col, src, 0);
+                decode_bc3_alpha(col, &src[8..], 1);
+            }
+            7 => decode_bc7_block(col, src),
+            _ => unreachable!(),
+        }
 }
 
 fn decode_565(x: u16) -> [u8; 4] {
@@ -978,6 +1026,59 @@ mod tests {
             decode_bc7_block(&mut x, &b);
             decode_bc7_block_pillow(&mut y, &b);
             assert_eq!(x, y, "block {b:02x?}");
+        }
+    }
+
+    /// Decoded premultiplied, block by block (runs of one block among them), against the decode
+    /// premultiplied after; and a block the same as the one before decodes as it would alone.
+    #[test]
+    fn premultiplied_and_repeated_blocks_decode_the_same() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let (w, h) = (64usize, 36usize);
+        for (format, size) in [
+            (tf::DXT1, 8usize),
+            (tf::DXT3, 16),
+            (tf::DXT5, 16),
+            (tf::BC7, 16),
+            (tf::BC4, 8),
+            (tf::BC5, 16),
+        ] {
+            let n = (w / 4) * (h / 4);
+            let mut data = Vec::with_capacity(n * size);
+            let mut last = vec![0u8; size];
+            for _ in 0..n {
+                // (half of the blocks repeat the one before)
+                if rnd() % 2 == 0 {
+                    for b in last.iter_mut() {
+                        *b = rnd() as u8;
+                    }
+                }
+                data.extend_from_slice(&last);
+            }
+            let plain = parse_image_data(&data, w, h, format, [2017, 4]).unwrap();
+            let (pm, done) = parse_image_data_pm(&data, w, h, format, [2017, 4], true).unwrap();
+            let mut want = plain.px.clone();
+            if done {
+                crate::image::premultiply_px(&mut want);
+            }
+            assert_eq!(pm.px, want, "format {format}");
+            assert_eq!(done, ![tf::BC4, tf::BC5].contains(&format));
+            // block by block, alone
+            let bpp = bytes_per_pixel(plain.mode);
+            for (b, blk) in data.chunks_exact(size).enumerate() {
+                let one = parse_image_data(blk, 4, 4, format, [2017, 4]).unwrap();
+                let (x0, y0) = ((b % (w / 4)) * 4, (b / (w / 4)) * 4);
+                for j in 0..4 {
+                    let row = ((y0 + j) * w + x0) * bpp;
+                    assert_eq!(&plain.px[row..row + 4 * bpp], &one.px[j * 4 * bpp..(j + 1) * 4 * bpp]);
+                }
+            }
         }
     }
 

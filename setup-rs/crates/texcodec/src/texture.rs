@@ -329,34 +329,58 @@ pub fn convert(
     key: &str,
     unity: Option<&str>,
 ) -> Result<Converted, Error> {
-    let mut out = None;
-    if s.strips
+    if takes_strips(t, ch, s) {
+        if let Some(b) = prof::time(Stage::Strips, || strip_blocks(t, raw, ch, enc))? {
+            return finished(t, ch, b, 1, unity);
+        }
+    }
+    let p = prepare(t, raw, ch, enc.settings.threads, s.prepare_split)?;
+    encode_prepared(t, p, ch, enc, key, unity)
+}
+
+/// Whether convert() tries this texture in strips first (strip_blocks), rather than decoding and
+/// scaling it whole (prepare, then encode_prepared).
+pub fn takes_strips(t: &Texture, ch: &Choice, s: &Settings) -> bool {
+    s.strips
         && ch.mips == 1
         && t.mip_count.unwrap_or(1) == 1
         && (ch.width, ch.height) == (t.width, t.height)
         && ch.width.saturating_mul(ch.height) >= STRIP_MIN_PX
-    {
-        out = prof::time(Stage::Strips, || strip_blocks(t, raw, ch, enc))?.map(|b| (b, 1));
+}
+
+/// convert()'s second half: the prepared levels encoded (on `enc`'s threads), the texture's new
+/// fields. A texture that does not take strips (takes_strips) converts to the same bytes this way,
+/// whoever prepared it and whichever encoder encodes it.
+pub fn encode_prepared(
+    t: &Texture,
+    p: Prepared,
+    ch: &Choice,
+    enc: &mut Encoder,
+    key: &str,
+    unity: Option<&str>,
+) -> Result<Converted, Error> {
+    let mut blob = Vec::new();
+    for (i, level) in p.levels.into_iter().enumerate() {
+        let seed = if i == 0 {
+            p.seed.as_ref().map(|(b, d)| Seed {
+                blocks: b,
+                dxt5: *d,
+            })
+        } else {
+            None
+        };
+        blob.extend(encode(enc, level, ch.block, seed, &format!("{key}|{i}"))?);
     }
-    let (data, nlevels) = match out {
-        Some(o) => o,
-        None => {
-            let p = prepare(t, raw, ch, enc.settings.threads, s.prepare_split)?;
-            let mut blob = Vec::new();
-            for (i, level) in p.levels.into_iter().enumerate() {
-                let seed = if i == 0 {
-                    p.seed.as_ref().map(|(b, d)| Seed {
-                        blocks: b,
-                        dxt5: *d,
-                    })
-                } else {
-                    None
-                };
-                blob.extend(encode(enc, level, ch.block, seed, &format!("{key}|{i}"))?);
-            }
-            (blob, p.nlevels)
-        }
-    };
+    finished(t, ch, blob, p.nlevels, unity)
+}
+
+fn finished(
+    t: &Texture,
+    ch: &Choice,
+    data: Vec<u8>,
+    nlevels: usize,
+    unity: Option<&str>,
+) -> Result<Converted, Error> {
     Ok(Converted {
         format: astc_format_id(ch.block, ch.alpha, unity)?,
         width: ch.width,
@@ -376,16 +400,25 @@ pub fn encode(
     seed: Option<Seed>,
     key: &str,
 ) -> Result<Vec<u8>, Error> {
-    level.flip_rows();
+    prof::time(Stage::Flip, || level.flip_rows());
     enc.encode_rows(&level.px, level.width, level.height, block, seed, Some(key))
 }
 
 /// The decoded and scaled levels of a texture (rows top first) and the first level's DXT blocks
 /// when it keeps its size (textures.py _prepare with seeds).
+#[derive(Debug)]
 pub struct Prepared {
     pub levels: Vec<Rgba>,
     pub nlevels: usize,
     pub seed: Option<(Vec<u8>, bool)>,
+}
+
+impl Prepared {
+    /// The bytes it holds (the levels' pixels, the seed blocks).
+    pub fn bytes(&self) -> usize {
+        self.levels.iter().map(|l| l.px.len()).sum::<usize>()
+            + self.seed.as_ref().map_or(0, |s| s.0.len())
+    }
 }
 
 /// Formats whose blocks seed guided encoding, and whether they are DXT5 (DXT_SEED).
@@ -414,6 +447,17 @@ fn decode_rgba(t: &Texture, data: &[u8], w: usize, h: usize) -> Result<Rgba, Err
     }
     let img = decode::parse_image_data(data, w, h, t.format, t.version)?;
     Ok(image::texture_image(img, t.format == tf::BC4))
+}
+
+/// decode_rgba, premultiplied where the decoder could do it as it decodes (the flag says).
+fn decode_rgba_pm(t: &Texture, data: &[u8], w: usize, h: usize) -> Result<(Rgba, bool), Error> {
+    if t.platform == platform::XBOX360 || decode::is_switch_swizzled(t.platform, t.platform_blob) {
+        return Err(Error::Decode(
+            "console-swizzled texture data is not decoded here".into(),
+        ));
+    }
+    let (img, pm) = decode::parse_image_data_pm(data, w, h, t.format, t.version, true)?;
+    Ok((image::texture_image(img, t.format == tf::BC4), pm))
 }
 
 /// textures.py _prepare(o, ch, fmt, pool, cores, seeds=True). `threads`: the step's cores (the
@@ -670,7 +714,8 @@ pub fn decode_downscale(
     let margin = (3.0 * sy.max(1.0)).ceil() as i64 + 2;
     let rows = ((512.0 / sy) as usize).max(1);
     let starts: Vec<usize> = (0..h).step_by(rows).collect();
-    let band = |i: usize| -> Result<Rgba, Error> {
+    let mut out = Rgba::new(w, h);
+    par_chunks(&mut out.px, rows * w * 4, threads, |i, dst| {
         let y0 = starts[i];
         let y1 = h.min(y0 + rows);
         // source rows, top first
@@ -680,39 +725,40 @@ pub fn decode_downscale(
         let s0 = (sh - b) / bh * bh;
         let s1 = sh.min((sh - a).div_ceil(bh) * bh);
         let data = &raw[(s0 / bh * per).min(raw.len())..(s1 / bh * per).min(raw.len())];
-        let stored = prof::time(Stage::DecodeCpu, || decode_rgba(t, data, sw, s1 - s0))?;
-        // top first: row r is source row sh - s1 + r; keep rows a..b
+        let (mut stored, pm) =
+            prof::time(Stage::DecodeCpu, || decode_rgba_pm(t, data, sw, s1 - s0))?;
+        // top first: row r is source row sh - s1 + r; rows a..b are stored rows n - b + off ..
+        // n - a + off, read in the other order (premultiplied where they are)
         let off = sh - s1;
         let n = s1 - s0;
         let line = sw * 4;
-        let mut img = Rgba {
-            width: sw,
-            height: b - a,
-            px: Vec::with_capacity((b - a) * line),
-        };
-        for r in (a - off)..(b - off) {
-            let sr = n - 1 - r;
-            img.px
-                .extend_from_slice(&stored.px[sr * line..sr * line + line]);
+        let band = prof::Timer::new(Stage::BandCpu);
+        let (lo, hi) = (n + off - b, n + off - a);
+        if !pm {
+            image::premultiply_px(&mut stored.px[lo * line..hi * line]);
         }
-        drop(stored);
-        let _r = prof::Timer::new(Stage::ResizeCpu);
-        img.premultiply();
-        image::resize(
-            &img,
-            w,
-            y1 - y0,
-            Some([
-                0.0,
-                y0 as f64 * sy - a as f64,
-                sw as f64,
-                y1 as f64 * sy - a as f64,
-            ]),
-        )
-    };
-    let mut out = Rgba::new(w, h);
-    par_chunks(&mut out.px, rows * w * 4, threads, |i, dst| {
-        dst.copy_from_slice(&band(i)?.px);
+        let src: Vec<&[u8]> = (lo..hi)
+            .rev()
+            .map(|sr| &stored.px[sr * line..sr * line + line])
+            .collect();
+        drop(band);
+        {
+            let _r = prof::Timer::new(Stage::ResizeCpu);
+            image::resize_rows_into(
+                &src,
+                sw,
+                dst,
+                w,
+                y1 - y0,
+                [
+                    0.0,
+                    y0 as f64 * sy - a as f64,
+                    sw as f64,
+                    y1 as f64 * sy - a as f64,
+                ],
+            )?;
+        }
+        let _p = prof::Timer::new(Stage::PasteCpu);
         // (pixel by pixel: in the band's task, the same bytes as over the whole image after)
         image::unpremultiply_px(dst);
         Ok(())
