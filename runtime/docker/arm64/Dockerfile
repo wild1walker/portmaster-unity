@@ -5,7 +5,7 @@
 FROM arm64v8/ubuntu:20.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential file python3 zlib1g-dev \
+      build-essential file zlib1g-dev \
       libsdl2-dev libegl1-mesa-dev libgles2-mesa-dev libegl-mesa0 libgl1-mesa-dri \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /src

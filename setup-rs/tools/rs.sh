@@ -1,6 +1,6 @@
 #!/bin/bash
 # rs.sh <worktree> <command...>: runs a command in the arm64 Rust image (ua-rust: Rust 1.88, the
-# aarch64 musl target, PortMaster's python_3.11 at /opt/py with the setup's packages at /opt/pylibs)
+# aarch64 musl target, Unity's class database at $PMU_TPK: setup-rs/docker)
 # in <worktree>/setup-rs. Builds go to /target/<worktree's name> in a Docker volume (RS_TARGET_VOLUME,
 # default pmu-target) and the crate cache to another (RS_CARGO_VOLUME, default pmu-cargo): Docker's
 # bind mounts of the host's disks are slow, and broke incremental builds (which stay off).

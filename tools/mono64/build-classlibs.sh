@@ -28,11 +28,12 @@ LINE=$(echo "$V" | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
 B=unity-$LINE-mbe
 mkdir -p "$W/out/$B/classlibs"
 W=$(cd "$W" && pwd); O=$W/out/$B/classlibs
-PY=${PYTHON:-python3}
+# (the top-level "sha" of GitHub's answer: jq when there is one, else its two-space-indented key)
+sha() { if command -v jq >/dev/null 2>&1; then jq -er .sha; else sed -n 's/^  "sha": "\([0-9a-f]*\)".*/\1/p' | head -1 | grep .; fi; }
 VOL=${MONO64_CL_VOLUME:-ua-mono64-cl-$LINE}    # (the docker volume with the tree and the build; an absolute path: a folder of the host)
-api() { curl -sfL "https://api.github.com/repos/$1/contents/$2?ref=$3" | "$PY" -I -c 'import json, sys; print(json.load(sys.stdin)["sha"])'; }
+api() { curl -sfL "https://api.github.com/repos/$1/contents/$2?ref=$3" | sha; }
 tarball() { curl -sfL "https://codeload.github.com/$1/tar.gz/$2"; }
-commit() { curl -sfL "https://api.github.com/repos/$1/commits/$2" | "$PY" -I -c 'import json, sys; print(json.load(sys.stdin)["sha"])'; }
+commit() { curl -sfL "https://api.github.com/repos/$1/commits/$2" | sha; }
 docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 "$PU/runtime/docker/arm64"
 docker image inspect ua-mono64-build >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-mono64-build "$HERE"
 dr() { docker run --rm -i --platform linux/arm64 -v "$VOL":/b ua-mono64-build bash -c "$1"; }
@@ -56,7 +57,7 @@ if ! dr "test -f /b/src/.fetched"; then
     fi
   done
   # the left-out test folders configure.ac names: empty stand-ins (as build-mono.sh)
-  awk '/<<.EOF.$/{f=1;next} /^EOF$/{f=0} f' "$HERE/build-mono.sh" | dr "python3 -I - /b/src"
+  dr "sh -s /b/src" < "$HERE/stubs.sh"
   echo "$B: mono $REF" | dr "cat > /b/src/.fetched"
 fi
 # (bdwgc's Makefile.am includes tests/tests.am, and the download leaves the submodules' tests out: an empty one)

@@ -1,7 +1,7 @@
 // GL test of the SurfaceTexture path with a real GLES 3 context (Mesa's llvmpipe in the test
 // image, surfaceless EGL): decoded pictures go through um_surface_update (EGLImage of the packed
 // 4:2:0 texture behind an external texture), then are drawn as Unity draws them, with the
-// converter's Hidden/VideoDecodeAndroid programs (convert/pmunity/video_decode_android.shader,
+// converter's Hidden/VideoDecodeAndroid programs (setup-rs/crates/androiddata/src/video_decode_android.shader,
 // passed as argv[1]) and texture coordinates from getTransformMatrix. Every pixel is compared
 // with the desktop players' YCbCr -> RGB conversion of the same Y/U/V (nearest chroma), and
 // the upright orientation, the cropping of odd sizes, the alpha split pass and the GL state the
@@ -227,7 +227,7 @@ static void test_size(const char *glsl, int w, int h, int split, int colour)
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    char *glsl = read_file(argc > 1 ? argv[1] : "../../convert/pmunity/video_decode_android.shader");
+    char *glsl = read_file(argc > 1 ? argv[1] : "../../setup-rs/crates/androiddata/src/video_decode_android.shader");
     if (!glsl) { printf("FAILED: no shader file\n"); return 1; }
     EGLDisplay d = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (!eglInitialize(d, NULL, NULL)) { printf("SKIPPED: no EGL display\n"); return 0; }

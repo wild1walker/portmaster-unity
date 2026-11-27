@@ -1,6 +1,6 @@
 #!/bin/sh
 # Stands in for the Android NDK's compiler and binutils inside the pmunity-il2cpp image: the NDK
-# ships them as x86-64 programs only, so `pmunity il2cpp` keeps just the NDK's target files
+# ships them as x86-64 programs only, so `pmu il2cpp` keeps just the NDK's target files
 # (sysroot, libc++, libgcc) and puts this script where il2cpp's Android build looks for its tools:
 #   <ndk>/toolchains/llvm/prebuilt/linux-x86_64/bin/clang, clang++
 #   <ndk>/toolchains/<triple>-4.9/prebuilt/linux-x86_64/bin/<triple>-objcopy, -strip, -ar, -nm

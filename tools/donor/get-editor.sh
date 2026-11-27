@@ -5,7 +5,7 @@
 #   <dir>/Unity.app                       build.sh's <editor>
 #   <dir>/PlaybackEngines/AndroidPlayer   Android Build Support (where Unity.app looks for it)
 # The two installers come from Unity's release API (the version's changeset and its macOS downloads,
-# as `pmunity player url` finds the Android one), downloaded into <dir>/.dl (a stopped download
+# as `pmu player url` finds the Android one), downloaded into <dir>/.dl (a stopped download
 # continues) and removed once unpacked unless KEEP_PKGS=1. PKGS=<folder> takes them from that folder
 # instead (Unity-<version>.pkg and the Android one, any names), nothing downloaded.
 #   ARCH       x86_64 (default: the Intel editor, which Apple silicon runs under Rosetta) or arm64

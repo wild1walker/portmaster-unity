@@ -5,7 +5,7 @@
 // read it with System.IO: File.ReadAllText, Directory.GetFiles, FileStream, XML and SQLite files,
 // mod or level folders. On Android it is "jar:file://<apk or obb>!/assets": the files are inside the
 // archive, where Unity's own APIs (AssetBundle, UnityWebRequest, VideoPlayer) find them and System.IO
-// does not. pmunity android-data --streaming-assets puts StreamingAssets beside the APK as a folder
+// does not. pmu android-data --streaming-assets puts StreamingAssets beside the APK as a folder
 // (StreamingAssets/), and this patch gives the game's code that folder where it read the getter:
 //
 //   streaming-assets       only the reads whose value reaches System.IO (or a native library's path

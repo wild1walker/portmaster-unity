@@ -6,4 +6,4 @@
 ARG BASE=debian:bookworm-slim
 FROM $BASE
 RUN apt-get update && apt-get install -y --no-install-recommends libegl1 libgles2 libegl-mesa0 libgl1-mesa-dri \
-      libsdl2-2.0-0 python3 && rm -rf /var/lib/apt/lists/*
+      libsdl2-2.0-0 && rm -rf /var/lib/apt/lists/*

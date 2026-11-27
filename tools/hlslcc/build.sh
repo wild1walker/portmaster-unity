@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds pmhlslcc (pmhlslcc.cpp): Unity's HLSLcc (https://github.com/Unity-Technologies/HLSLcc,
-# MIT) with a small command-line front end, for `pmunity shaders --from d3d11`. HLSLcc is fetched
+# MIT) with a small command-line front end, for `pmu shaders --from d3d11`. HLSLcc is fetched
 # at the pinned commit below (not kept in this repository); any C++11 compiler builds it (macOS
 # clang, Linux gcc).
 #
@@ -8,7 +8,7 @@
 #                                            HLSLcc's licence (MIT, bstrlib BSD) <out>/pmhlslcc.LICENSE.txt
 #   ARCH=arm64 tools/hlslcc/build.sh [<out dir>]
 #                                            for the handheld (a port's setup translates a Windows
-#                                            build's shaders with it; `pmunity port package` ships
+#                                            build's shaders with it; `pmu port package` ships
 #                                            it): aarch64 Linux, built in Docker in the runtime's
 #                                            ua-build-arm64 image (Ubuntu 20.04, glibc 2.31; libstdc++
 #                                            and libgcc linked in), default out tools/hlslcc/out/linux-arm64.
@@ -17,7 +17,7 @@
 # For an armhf build: the ua-host-armhf image with CC=arm-linux-gnueabihf-gcc
 # CXX=arm-linux-gnueabihf-g++; an <out> that already holds HLSLcc-<commit>/ is not fetched again.
 #
-# Fetching uses curl, wget, python3 or git, whichever there is. Environment: CC, CXX (compilers),
+# Fetching uses curl, wget or git, whichever there is. Environment: CC, CXX (compilers),
 # CXXFLAGS, LDFLAGS, HLSLCC_SRC (an HLSLcc-<commit> folder fetched before). The converter finds the
 # binary through $PMHLSLCC, else tools/hlslcc/out/pmhlslcc, else pmhlslcc on PATH (or `pmunity
 # shaders --hlslcc <path>`).
@@ -51,9 +51,6 @@ if [ ! -f "$src/include/hlslcc.h" ]; then
     curl -fsSL "$url" | tar -xzf - -C "$src.tmp"
   elif command -v wget >/dev/null 2>&1; then
     wget -qO- "$url" | tar -xzf - -C "$src.tmp"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import sys, urllib.request; sys.stdout.buffer.write(urllib.request.urlopen(sys.argv[1]).read())' "$url" \
-      | tar -xzf - -C "$src.tmp"
   else
     git clone -q https://github.com/Unity-Technologies/HLSLcc.git "$src.tmp/HLSLcc-$HLSLCC_COMMIT"
     git -C "$src.tmp/HLSLcc-$HLSLCC_COMMIT" checkout -q "$HLSLCC_COMMIT"

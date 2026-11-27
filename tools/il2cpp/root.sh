@@ -1,5 +1,5 @@
 #!/bin/sh
-# Makes the system `pmunity il2cpp` runs Unity's il2cpp and the C++ build in, as plain folders
+# Makes the system `pmu il2cpp` runs Unity's il2cpp and the C++ build in, as plain folders
 # (<root>/usr, <root>/etc, about 0.85 GB) that are bind-mounted over a stock ubuntu:24.04
 # container's own (`docker run -v <root>/usr:/usr:ro -v <root>/etc:/etc:ro ubuntu:24.04 ...`). No
 # image is built: Docker's own disk only holds the stock image, and the folders can live on any
@@ -7,7 +7,7 @@
 # scripts: none of these needs one; dpkg itself cannot install onto Docker Desktop's file
 # sharing, whose permissions refuse its mode-0 staging folders).
 #
-#   tools/il2cpp/root.sh <root>          (pmunity il2cpp runs it when <root>/.complete is missing)
+#   tools/il2cpp/root.sh <root>          (pmu il2cpp runs it when <root>/.complete is missing)
 #
 # What is installed, from Ubuntu's archive (amd64 and arm64 alike, so it runs natively on Apple
 # Silicon and ARM Linux as on x86-64):

@@ -1,9 +1,9 @@
 #!/bin/bash
 # build.sh <editor> <MonoArmv7|Il2cppArm64|Il2cppArmv7> <out dir>: a donor APK from Unity's editor (Unity.app on
 # macOS) in batch mode: a one-scene game of pong whose APK carries that Unity version's Android player
-# (`pmunity player donor` reads it), written as donor-<version>-mono-armv7.apk or
+# (`pmu player donor` reads it), written as donor-<version>-mono-armv7.apk or
 # donor-<version>-il2cpp-arm64.apk (Il2cppArmv7: -il2cpp-armv7.apk), the names a port's setup reads. Every port of the android and
-# mono-arm64 routes ships these (the handheld never downloads Unity's player): `pmunity port check` and
+# mono-arm64 routes ships these (the handheld never downloads Unity's player): `pmu port check` and
 # `port new` name the ones a port needs, `port package --donors <out dir>` ships them (docs/porting.md,
 # section 5, "Donors"). The editor: get-editor.sh <version> <dir> (unpacked from Unity's installers, no
 # Hub), or one the Unity Hub installed.

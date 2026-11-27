@@ -4,7 +4,7 @@
 #   ARCH=arm64: arm64-v8a players, native in the ua-build-arm64 image (Ubuntu 20.04, glibc 2.31)
 #     -> out/arm64/
 # "./build.sh test" also builds the unit tests and the synthetic Android libraries (test/syn_*.c,
-# packed by test/pack_relocs.py) into out/[arm64/]test/ and runs them: the armhf ones in an arm/v7
+# packed by test/pack_relocs.c) into out/[arm64/]test/ and runs them: the armhf ones in an arm/v7
 # container (Docker's emulation; the qemu-arm of the build image crashes in pthread_create), the
 # arm64 ones natively.
 set -e
@@ -88,7 +88,9 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
     $CC $S -Wl,-Bsymbolic -Wl,--build-id -Wl,-soname,libsyn_rl.so -o $D/libsyn_rl.so $D/syn_rl_asm.o $D/syn_rl.o -L$D -lc $UNW
     $CC $CFLAGS test/test_relayout.c $L -o $D/test_relayout
   fi
-  P="python3 test/pack_relocs.py"
+  # (pack_relocs runs here: built static for the image's target, under its qemu-arm for armhf)
+  $CC -O2 -static -o $D/pack_relocs test/pack_relocs.c
+  P=$D/pack_relocs; [ -n "$T" ] && P="qemu-arm $D/pack_relocs"
   $P --relr $D/libsyn_1.so $D/libsyn_1.so
   $P --aps2 $D/libsyn_2.so $D/libsyn_2.so
   $P --relr --aps2 $D/libsyn_3.so $D/libsyn_3.so

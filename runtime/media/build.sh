@@ -90,11 +90,11 @@ if [ "$1" = test ]; then
       'timeout 900 ./out/test/test_media; [ ! -x ./out/test/test_media_jni ] || timeout 900 ./out/test/test_media_jni; [ ! -x ./out/test/test_media_ndk ] || timeout 900 ./out/test/test_media_ndk; sh test/run_pmhwdec.sh ./out/test'
     docker image inspect ua-emu-armhf >/dev/null 2>&1 && \
       docker run --rm --platform linux/arm/v7 -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless \
-        -e LIBGL_ALWAYS_SOFTWARE=1 ua-emu-armhf timeout 600 ./out/test/test_surface_gl ../../convert/pmunity/video_decode_android.shader
+        -e LIBGL_ALWAYS_SOFTWARE=1 ua-emu-armhf timeout 600 ./out/test/test_surface_gl ../../setup-rs/crates/androiddata/src/video_decode_android.shader
   else
     docker run --rm $PLAT -v "$PWD":/w -w /w $IMG sh -c \
       'timeout 900 ./out/arm64/test/test_media; [ ! -x ./out/arm64/test/test_media_jni ] || timeout 900 ./out/arm64/test/test_media_jni; [ ! -x ./out/arm64/test/test_media_ndk ] || timeout 900 ./out/arm64/test/test_media_ndk; sh test/run_pmhwdec.sh ./out/arm64/test'
     docker run --rm $PLAT -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless -e LIBGL_ALWAYS_SOFTWARE=1 \
-      $IMG timeout 600 ./out/arm64/test/test_surface_gl ../../convert/pmunity/video_decode_android.shader
+      $IMG timeout 600 ./out/arm64/test/test_surface_gl ../../setup-rs/crates/androiddata/src/video_decode_android.shader
   fi
 fi

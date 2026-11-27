@@ -17,7 +17,7 @@
  * bytes (W', H' = width and height rounded up to even): the Y plane on top, then each chroma row
  * as U (W'/2 bytes) followed by V (W'/2 bytes). It is uploaded as it is into a one-channel
  * texture that is the EGLImage behind the SurfaceTexture's external texture, and the converter's
- * Hidden/VideoDecodeAndroid shader (convert/pmunity/video_decode_android.shader) reads Y, U and V
+ * Hidden/VideoDecodeAndroid shader (setup-rs/crates/androiddata/src/video_decode_android.shader) reads Y, U and V
  * from it.
  */
 #ifndef UM_H

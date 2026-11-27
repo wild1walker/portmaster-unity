@@ -4,7 +4,7 @@
 // __stack_chk_guard on 32-bit ARM. It needs libsyn_dep.so and "libc.so" (DT_NEEDED, as bionic
 // libraries do) and imports from the host (strlen, snprintf, pthread_*, sig*), from libsyn_dep.so
 // and from the test's shim table. The same objects are linked as libsyn_0.so .. libsyn_4.so, whose
-// relocations pack_relocs.py then rewrites (RELR, Android's APS2 packing); test_syn.c checks that
+// relocations pack_relocs.c then rewrites (RELR, Android's APS2 packing); test_syn.c checks that
 // each relocates to the same image as libsyn_0.so.
 #include <stddef.h>
 #include <stdint.h>

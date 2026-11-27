@@ -30,10 +30,11 @@ B=unity-$LINE-mbe
 mkdir -p "$W/src" "$W/out/$B"
 W=$(cd "$W" && pwd)
 D=$W/src/$B
-PY=${PYTHON:-python3}
-api() { curl -sfL "https://api.github.com/repos/$1/contents/$2?ref=$3" | "$PY" -I -c 'import json, sys; print(json.load(sys.stdin)["sha"])'; }
+# (the top-level "sha" of GitHub's answer: jq when there is one, else its two-space-indented key)
+sha() { if command -v jq >/dev/null 2>&1; then jq -er .sha; else sed -n 's/^  "sha": "\([0-9a-f]*\)".*/\1/p' | head -1 | grep .; fi; }
+api() { curl -sfL "https://api.github.com/repos/$1/contents/$2?ref=$3" | sha; }
 tarball() { curl -sfL "https://codeload.github.com/$1/tar.gz/$2"; }
-commit() { curl -sfL "https://api.github.com/repos/$1/commits/$2" | "$PY" -I -c 'import json, sys; print(json.load(sys.stdin)["sha"])'; }
+commit() { curl -sfL "https://api.github.com/repos/$1/commits/$2" | sha; }
 if [ ! -f "$D/.fetched" ]; then
   rm -rf "$D"; mkdir -p "$D"
   # one commit for every file fetched (the branch may move between the downloads)
@@ -58,26 +59,7 @@ if [ ! -f "$D/.fetched" ]; then
     tarball Unity-Technologies/mono "$REF" | tar xz $W1 -C "$D" --strip-components=1 '*/external/corefx-bugfix/*'
   fi
   # the left-out test folders configure.ac and the m4 files name: empty stand-ins
-  "$PY" -I - "$D" <<'EOF'
-import glob, os, re, sys
-s = sys.argv[1]
-text = ''.join(open(f, errors='replace').read() for f in [os.path.join(s, 'configure.ac'), os.path.join(s, 'acinclude.m4')]
-               + glob.glob(os.path.join(s, 'm4', '*.m4')) if os.path.exists(f))
-names = set(re.findall(r'\b((?:mono/tests|acceptance-tests)[\w/.+-]*)', text))
-names |= {d + '/Makefile' for d in ('acceptance-tests', 'mono/tests', 'mono/tests/gc-descriptors', 'mono/tests/testing_gac')}
-for n in sorted(names):
-    n = n[:-3] if n.endswith('.in') else n
-    p = os.path.join(s, n)
-    base = os.path.basename(n)
-    if base == 'Makefile':
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        if not os.path.exists(p + '.am'):
-            open(p + '.am', 'w').write('# left out of the runtime-only source download\n')
-    elif not any(m.startswith(n + '/') for m in names):     # a file configure writes from <name>.in
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        if not os.path.exists(p + '.in'):
-            open(p + '.in', 'w').write('\n')
-EOF
+  "$HERE/stubs.sh" "$D"
   echo "$B: mono $REF, bdwgc $GC, libatomic_ops $AO${CF:+, corefx $CF}" > "$D/.fetched"
 fi
 cp "$D/.fetched" "$W/out/$B/SOURCE.txt"         # which commits the libraries were built from

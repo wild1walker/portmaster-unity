@@ -11,7 +11,7 @@
 // DLL editions (InputManager in one of Rewired's own assemblies) alike: any class deriving from
 // Rewired.InputManager_Base whose DetectPlatform has a body.
 //
-// pmunity android-data adds the Joy<j>Axis<a> axes Rewired's Unity input source reads
+// pmu android-data adds the Joy<j>Axis<a> axes Rewired's Unity input source reads
 // (--rewired-joysticks).
 using Mono.Cecil;
 using Mono.Cecil.Cil;

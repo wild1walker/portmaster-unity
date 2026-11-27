@@ -1,7 +1,7 @@
-/* guided_astc for pmu (setup-rs/crates/texcodec): convert/native/guided_astc/guided_astc.c, the
- * textures step's guided ASTC encoder (this repository, MIT), without its Python module. Its block
- * code (the quantization tables through work()) is copied unchanged; ga_encode() at the end does
- * the module's encode() on plain buffers. Keep the two in step: the blocks must stay the same bytes.
+/* guided_astc for pmu (setup-rs/crates/texcodec): the textures step's guided ASTC encoder (this
+ * repository, MIT; it was convert/native/guided_astc/guided_astc.c, a Python module, until 2026-11-27:
+ * its block code, the quantization tables through work(), is the module's unchanged; ga_encode() at
+ * the end does the module's encode() on plain buffers). tools/prepatch/wasm builds its block code too.
  *
  * From the original: each block of an RGBA8 image is looked at first: one colour (a void-extent
  * block), 4x4 blocks close to one line (a fitted single-partition block, kept within the caller's

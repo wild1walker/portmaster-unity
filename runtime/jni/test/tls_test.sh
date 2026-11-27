@@ -21,9 +21,10 @@ docker run --rm --network none -v "$PWD":/src:ro ua-tls-test sh -c '
   { echo "# test bundle"; cat ca.pem; openssl x509 -in ca3.pem -trustout -addtrust serverAuth; openssl x509 -in ca.pem -text; } > bundle.pem
   openssl x509 -in ca.pem -outform der -out der/0.der
   openssl x509 -in ca3.pem -outform der -out der/1.der
-  python3 /src/test/tls/server.py 8443 srv.pem srv.key 2>server.log &
-  python3 /src/test/tls/server.py 8444 bad.pem bad.key 2>>server.log &
-  python3 /src/test/tls/server.py 8080 2>>server.log &
+  gcc -O2 -Wall -o server /src/test/tls/server.c -lmbedtls -lmbedx509 -lmbedcrypto
+  ./server 8443 srv.pem srv.key 2>server.log &
+  ./server 8444 bad.pem bad.key 2>>server.log &
+  ./server 8080 2>>server.log &
   echo "127.0.0.1 tls.test" >> /etc/hosts
   gcc -O2 -g -Wall -std=gnu11 -I/src -o test_tls /src/test/test_tls.c /src/fakejni.c /src/up_tls.c -lmbedtls -lmbedx509 -lmbedcrypto -lpthread -lm
   gcc -O2 -g -Wall -std=gnu11 -I/src -o test_http /src/test/test_http.c /src/fakejni.c /src/unityplayer.c /src/up_android.c \
