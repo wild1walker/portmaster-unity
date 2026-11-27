@@ -17,10 +17,11 @@ B=$(mktemp -d "${TMPDIR:-/tmp}/build-pmu.XXXXXX")
 trap 'rm -rf "$B"' EXIT
 RS_ROOT=${RS_ROOT:-$B} RS_MOUNTS= RS_MEM=${RS_MEM:-3g} "$HERE/rs.sh" "$PM" bash -c '
   set -euo pipefail
-  # (the class database and its licence: /opt/unitypy, $PMU_TPK in the image; the build in this
-  # checkout's own folder of the target volume, rs.sh's /target/<checkout>-release: every checkout is
-  # copied to the same /build/setup-rs with its files' times kept, and a folder shared by checkouts
-  # took another checkout's older sources for unchanged ones, its build scripts included)
+  # (the class database and its licence: /opt/unitypy, $PMU_TPK in the image. The build goes to a
+  # folder of the target volume for this checkout alone, /target/<checkout>-release: every checkout is
+  # copied to the same /build/setup-rs with the times of its files kept, and a folder shared by
+  # checkouts took older sources of one for unchanged ones of another, build scripts included.
+  # No apostrophes in this single-quoted script.)
   export CARGO_TARGET_DIR=$CARGO_TARGET_DIR-release
   T=aarch64-unknown-linux-musl; O=/tmp/out; mkdir -p $O /build; cp -a . /build/setup-rs; cd /build/setup-rs
   command -v "${TC_CXX:-none}" >/dev/null || { echo "ua-rust has no GCC 10 (TC_CXX; setup-rs/docker/Dockerfile.gcc10): the ASTC blocks would not all match" >&2; exit 1; }

@@ -15,7 +15,7 @@ build() {   # build <out dir>
   local out; mkdir -p "$1"; out=$(cd "$1" && pwd)
   RS_ROOT=${RS_ROOT:-$out} RS_MOUNTS= RS_MEM=${RS_MEM:-3g} "$HERE/rs.sh" "$PM" bash -c '
     set -euo pipefail
-    export CARGO_TARGET_DIR=$CARGO_TARGET_DIR-release   # (this checkout's own: build_pmu.sh)
+    export CARGO_TARGET_DIR=$CARGO_TARGET_DIR-release   # (for this checkout alone: build_pmu.sh)
     T=aarch64-unknown-linux-musl; mkdir -p /build; cp -a . /build/setup-rs; cd /build/setup-rs
     cargo build -q --locked --release --target $T -p devtools >&2
     cat $CARGO_TARGET_DIR/$T/release/pmu-dev' > "$out/pmu-dev.tmp"
