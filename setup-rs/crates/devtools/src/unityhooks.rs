@@ -39,6 +39,17 @@ pub const HOOKS: &[(&str, &str, &str)] = &[
     ("_ZN17BufferManagerGLES5ClearE", "BufferManagerGLES::Clear", ""),
     ("_ZN17BufferManagerGLES13InvalidateAllE", "BufferManagerGLES::InvalidateAll", ""),
     ("_ZN17BufferManagerGLESD", "BufferManagerGLES::~BufferManagerGLES", ""),
+    // unityjobs.c (UA_JOB_SLEEP): Unity 2017.x's wait for a job group, and what it calls
+    ("_ZN8JobQueue15WaitForJobGroupE10JobGroupID", "JobQueue::WaitForJobGroup", ""),
+    ("_ZN8JobQueue14SignalOnFinishE10JobGroupIDP9Semaphore", "JobQueue::SignalOnFinish", "call"),
+    ("_ZN8JobQueue4ExecEP7JobInfoxi", "JobQueue::Exec", "call"),
+    ("_ZN8JobQueue5StealEP8JobGroupP7JobInfoxib", "JobQueue::Steal", "call"),
+    ("_ZN11AtomicStack3PopEv", "AtomicStack::Pop", "call"),
+    ("_ZN10AtomicList4LoadERx", "AtomicList::Load", "call"),
+    ("_ZN10AtomicList3TagEv", "AtomicList::Tag", "call"),
+    ("_ZN17PlatformSemaphore6CreateEv", "PlatformSemaphore::Create", "call"),
+    ("_ZN17PlatformSemaphore13WaitForSignalEv", "PlatformSemaphore::WaitForSignal", "call"),
+    ("_ZL15SignalSemaphorePv", "SignalSemaphore", "call"),
     ("_Z15GetGraphicsCapsv", "GetGraphicsCaps", "call"),
     // unitymath.c (UA_INV_MEMO): the 4x4 inverse, its last results kept
     ("_Z20InvertMatrix4x4_FullPKfPf", "InvertMatrix4x4_Full", ""),

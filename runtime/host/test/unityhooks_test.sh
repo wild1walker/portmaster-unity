@@ -5,7 +5,8 @@
 # (test_unitymath.c), unitybeh.c's (test_unitybeh.c), unityscripts.c's (test_unityscripts.c), unityicalls.c's
 # (test_unityicalls.c) and unitylayers.c's (test_unitylayers.c; these four 32-bit only, the ARMv7 player's layout),
 # unityprefetch.c's (test_unityprefetch.c: its stubs, AArch64 only) and nativebeh.c's (test_nativebeh.c: its loop
-# against a model of Unity's, AArch64 only).
+# against a model of Unity's, AArch64 only) and unityjobs.c's (test_unityjobs.c: its wait against a model of Unity
+# 2017.4's job queue).
 # ARCH=armhf (default): built in ua-host-armhf (Thumb-2, as ua_host: the jump's interworking), run in
 # an arm/v7 container; ARCH=arm64: ua-build-arm64. The binaries also run on the handheld.
 set -e
@@ -20,8 +21,9 @@ build='set -e; mkdir -p $O; $CC -O2 -g -Wall -Wextra -o $O/test_unityhooks test/
   $CC -O2 -g -Wall -Wextra -o $O/test_unityicalls test/test_unityicalls.c -lpthread
   $CC -O2 -g -Wall -Wextra -o $O/test_unitylayers test/test_unitylayers.c
   $CC -O2 -g -Wall -Wextra -o $O/test_unityprefetch test/test_unityprefetch.c
-  $CC -O2 -g -Wall -Wextra -o $O/test_nativebeh test/test_nativebeh.c'
-run='$O/test_unityhooks && $O/test_unitypool && $O/test_unityverts && $O/test_unitymath && $O/test_unitybeh && $O/test_unityscripts && $O/test_unityicalls && $O/test_unitylayers && $O/test_unityprefetch && $O/test_nativebeh'
+  $CC -O2 -g -Wall -Wextra -o $O/test_nativebeh test/test_nativebeh.c
+  $CC -O2 -g -Wall -Wextra -o $O/test_unityjobs test/test_unityjobs.c -lpthread'
+run='$O/test_unityhooks && $O/test_unitypool && $O/test_unityverts && $O/test_unitymath && $O/test_unitybeh && $O/test_unityscripts && $O/test_unityicalls && $O/test_unitylayers && $O/test_unityprefetch && $O/test_nativebeh && $O/test_unityjobs'
 if [ "$ARCH" = arm64 ]; then
   O=out/arm64/test
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=$O CC=gcc; $build; $run"

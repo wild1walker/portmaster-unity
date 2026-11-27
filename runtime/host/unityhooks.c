@@ -31,6 +31,8 @@
 //   UA_FMOD_ASYNC=1      FMOD's once-a-frame update on a worker thread (fmodasync.c)
 //   UA_JOB_WORKERS=<n>   Unity 2017.x's job queue made with <n> worker threads instead of its default (the big
 //                        cores less one: 3 on the four-core handhelds); 2017.x has no -job-worker-count switch
+//   UA_JOB_SLEEP=1       Unity 2017.x's render thread sleeps in WaitForJobGroup when there is no job to help with,
+//                        as the main thread does, instead of spinning (unityjobs.c)
 //   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS, UA_GLES_POOL or UA_FAST_VERTS)
 //
 // How a function is found. Unity publishes symbol files for its Android players (`pmu player
@@ -72,6 +74,7 @@
 #include "fmodasync.h"
 #include "unityprefetch.h"
 #include "nativebeh.h"
+#include "unityjobs.h"
 
 enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 #define row uh_row
@@ -387,6 +390,7 @@ void unityhooks_on_load(so_module *m)
     unityscripts_on_load(base, size);           // UA_SCRIPT_FIND
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
     job_workers_on_load(base, size);            // UA_JOB_WORKERS
+    unityjobs_on_load(base, size);              // UA_JOB_SLEEP (unityjobs.c)
     unitylayers_on_load(base, size);            // UaHost::LayersInScene (unitylayers.c)
     fmodasync_on_load(base, size);              // UA_FMOD_ASYNC, UA_FMOD_COUNT (fmodasync.c)
     nativebeh_on_load(base, size);              // UA_NATIVE_BEH (nativebeh.c): before UA_PREFETCH, whose `beh` sites it replaces

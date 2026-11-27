@@ -1572,6 +1572,7 @@ instead of 128, 45.3 against 47.5 fps. Not a default for Hollow Knight while the
 | An attached sprite's position read once instead of three times (Enter the Gungeon's `tk2dBaseSprite.UpdateZDepthAttached`: `m_transform.position` for its y twice and again in `UpdateZDepthInternal` for its z, nothing between that could move it; `zdepth-pos`, 2026-11-16) | exact: a check build read it again in the twin and compared, 150,000 - 700,000 calls a run, 0 differ (Bullet Hell, Keep boss; Knulli and muOS). About 160 attached sprites a frame in Bullet Hell's room, two engine calls each saved. Knulli 44.23 vs 43.50 and 39.67 vs 40.24, muOS 40.56 -> 43.17 and 41.66 vs 41.31, BattleXP G350 28.67 -> 29.67 and 29.19 vs 28.36 fps (A B, B A): noise. Not shipped |
 | The physics step's walk over every body for trigger contacts left out while no body has one (Enter the Gungeon's `PhysicsEngine.LateUpdate`: its last walk loads each body's native pointer and `HasTriggerCollisions`, ~300 bodies, about 0.7 ms a frame on the RG34XX-SP in cache misses (the compiled body's hot instructions, `UA_PROF_CODE_METHOD`); the property's setter counts the set flags; `trig-count`, 2026-11-16) | exact: a check build checked every body whenever the count was 0, none had the flag. But the count is 0 in only 10 % (Bullet Hell) to 15 % (Keep boss) of frames: bodies keep trigger contacts from frame to frame. Not shipped |
 | hooking `GfxDeviceGLES` to drop redundant GL state or uniform re-uploads on the render thread | the render thread's time is spent blocked inside Mali's driver (the grab copies and the first draw after a framebuffer change), not in redundant state Unity sends; the driver's buffer handling, not Unity's call count, is the cost ([GPU, pass by pass](#gpu-pass-by-pass)) |
+| Unity 2017.4's render thread sleeping instead of spinning in `JobQueue::WaitForJobGroup` (`UA_JOB_SLEEP=1`, or `=yield`: its core given away each empty turn; exact; Enter the Gungeon, muOS, 2026-11-27) | no gain: the floor walk 34.45 / 34.73 -> 32.40 / 32.67 fps with the sleep, 34.41 / 32.28 -> 32.62 / 32.54 with the yield, the dungeon room after it 10.9 / 11.4 -> 11.0 / 11.0 and 12.66 / 12.61 -> 12.69 / 12.61. The spinning thread is not idle: it runs the particle geometry jobs pushed while it waits (~500 a second), which a sleeper leaves to the workers ([the render thread by function](#the-render-thread-by-function-and-what-a-rewrite-of-unitys-part-can-reach-muos-2026-11-27)). Option, off |
 
 ## A census across four games: what they share (muOS, 2026-11-26)
 
@@ -1617,6 +1618,62 @@ Cuphead run-and-gun level with 2017.4.9f1's symbols (the job queue's wakes are 0
 G350 (four slower cores: `UA_JOB_WORKERS` matters most where cores are short), and `Worker*` and `ua_glthread` in
 the thread list. Tools: the runner `crun.sh` in /mnt/mmc/uatest/census (each game in its own folder of links to the
 set-up copies), pmu-dev profsum `--exact --areas`.
+
+## The render thread by function, and what a rewrite of Unity's part can reach (muOS, 2026-11-27)
+
+The question: which of Unity's own C++ on the render thread (`UnityGfxDeviceW`: command playback, per-draw setup,
+uniform and texture binding, buffer uploads, the jobs it waits for) could be replaced by leaner code, exactly.
+`UA_PROF=500` recordings of 20 s on the RG34XX-SP (muOS), each port's shipped settings, named with Unity's symbol
+files (6000.0.61f1 arm64: profsum.py with `UA_SYMS` set to an `nm -C` listing of it; 2017.4.27f1 arm64: `--syms`
+with its symbol folder) and ua_host's own (`--lib ua_host.debug`). Milliseconds a frame on a CPU (self time; one
+sample is 2 ms of 20 s).
+
+| | Hollow Knight, King's Pass | Hollow Knight, City of Tears | Enter the Gungeon, a dungeon room with particles |
+|---|---|---|---|
+| fps in the recording | 52.8 | 43.0 | 12.4 (`UA_GL_ARENA_WIDESCAN=1`) |
+| render thread on a CPU | 10.4 ms | 14.9 ms | 42.8 ms |
+| by module | Mali's driver 41 %, libunity 28 %, libc 21 %, ua_host 10 % | 40, 31, 16, 13 % | libunity 51 %, driver 27 %, libc 15 %, ua_host 7 % |
+| Unity's largest | `GfxDeviceWorker::RunCommand` 0.32, `OverridingParameterPreparer::OnPrepareVector` 0.14, `GLESGpuProgramApplier::ApplyVector` 0.12, `TransformVerticesInnerLoop<false, false, true>` 0.09 | `RunCommand` 0.54, `TransformVerticesInnerLoop` 0.27, `ApplyVector` 0.25, `OnPrepareVector` 0.22, `OnPrepareTexture` 0.16, `SetShaderPropertiesCopied` 0.12 | the job wait 14.9 (`AtomicStack::Pop` 6.3, `AtomicList::Load` 4.8, `JobQueue::WaitForJobGroup` 3.5, `AtomicList::Relax` 0.3), `ParticleGeomInit<false>` 1.2, `RunCommand` 0.7, `ParticleGeomWrite` 0.3, particle sort 0.3 |
+| libc and ours | `syscall` (futex) 0.74, `ioctl` 0.28, two libc internals 0.43 (beside glibc's lock code; no symbols), `sched_yield` 0.10 | `syscall` 0.43, `ioctl` 0.30, libc internals 0.6 | `ioctl` 1.9, `bionic_sem_wait`'s watch (`UA_FUTEX_SPIN=400`, the port's H700 setting) 1.2, the arena's `ranged()` 0.6 (about 12 without `WIDESCAN`) |
+
+Inclusive, King's Pass: `GfxDeviceGLES::DrawBufferRanges` 2.25 ms, `GfxFramebufferGLES::MakeCurrentFramebuffer`
+1.57 ms (both mostly the driver: a draw, the end of a render pass), the per-draw parameter path
+(`ApplyValueParameters`, `PrepareValueParameters`, `PrepareOverridingValues`, `SetTextures`, constant buffers)
+about 1 ms. In Hollow Knight the render thread is not the limit (UnityMain is: 16.2 ms in King's Pass), so a cut
+there saves CPU and heat, not frames; in Gungeon's scenes it is, or the jobs it waits for are.
+
+**Read and set aside** (each read in the 6000.0.61f1 arm64 code):
+- uniforms only when they change: Unity already does it. `GLESGpuProgramApplier::ApplyVector` compares the new
+  value with the program's cached copy word by word and returns before `glUniform*` when they are equal.
+- the per-renderer property lookup (`OverridingParameterPreparer::OnPrepareVector`): a binary search over the
+  sheet's sorted property names, a few loads; the time is the sheet's cache misses, not the search.
+- the parameter path as a whole (~1 ms in King's Pass, ~2.5 ms in City of Tears with the driver calls under it):
+  no single function over 0.3 ms; a rewrite of the whole per-draw path would have to keep Unity's caches and
+  render-pass rules exactly. Not started.
+- Unity 2017.4's spin in `JobQueue::WaitForJobGroup` (Gungeon): built as `UA_JOB_SLEEP` (below), measured, no gain.
+
+**Unity 2017.4's job wait (`UA_JOB_SLEEP`, runtime.md).** `WaitForJobGroup` pops and runs queued jobs on any thread;
+when the queue's stack is empty only the main thread sleeps (it adds a semaphore to the group with `SignalOnFinish`
+and waits on it), every other thread spins with an exclusive load/store pair on the stack and one on the group's
+list. Gungeon's render thread waits there for the particle systems' geometry jobs (`DynamicVBO::DrawChunk` ->
+`GeometryJobTasks::PutDynamicVBOGeometryJobFence`). The hook runs the same loop in C, call for call through Unity's
+own functions, and gives the render thread the main thread's branch (`=1`) or a `sched_yield` in place of the
+empty `AtomicList::Relax` (`=yield`); a model of the queue in `test_unityjobs.c` checks that no wake is lost and
+that a wait returns only once its group is done. A B A B in one hold (the `crun.sh gu` flow, the same scenes in
+every run; fps over the run's seconds 40 - 120, a floor walk, and 125 - 190, a room with particle effects):
+
+| | floor walk | particle room | render thread on a CPU (particle room, of 20 s) |
+|---|---|---|---|
+| off / `=1` (sleep) | 34.45, 34.73 / 32.40, 32.67 | 10.9, 11.4 / 11.0, 11.0 | 11.8, 11.1 / 8.4, 8.6 s |
+| off / `=yield`, both with `UA_GL_ARENA_WIDESCAN=1` | 34.41, 32.28 / 32.62, 32.54 | 12.66, 12.61 / 12.69, 12.61 | 10.6 / 10.7 s |
+
+The spin is not idle time: while it waits the render thread pops and runs the geometry jobs pushed after it began
+(`UA_JOB_SLEEP_STATS`: ~2,200 - 2,700 jobs in 5 s with `=yield`, ~60 with the sleep), so the sleeper's jobs wait for
+a worker and the frame gets longer; and with the cores ~47 % busy a freed core buys nothing. The room's time is the
+particle geometry itself (`ParticleSystemGeometryJob::RenderJob` 30 % of the render thread inclusive, the jobs on
+the workers besides) and the wake-ups between the threads (each worker waits for a core ~10 % of the time with the
+cores half idle: wake latency). `UA_GL_ARENA_WIDESCAN` is the one that pays there: 11.0 -> 12.6 fps. The bench's
+fight (`gurun.sh` replay of the tt_forge record) hardly waits at all (0.1 - 2 ms a second).
 
 ## Shader programs: compiles, links and Unity's binary cache
 
