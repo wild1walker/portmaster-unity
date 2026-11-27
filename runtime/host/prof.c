@@ -4,8 +4,10 @@
 //
 //   UA_PROF=<hz>             samples per second and thread while recording (e.g. 250, 500, 1000)
 //   UA_PROF_THREADS=a,b*     threads by name, a trailing * matches a prefix; @swap is the thread that
-//                            presents the frames (default UnityMain,UnityGfxDeviceW: Unity's render
-//                            thread is "UnityGfxDeviceWorker"). "UnityMain" is the thread that runs
+//                            presents the frames (default UnityMain,UnityGfxDeviceW,Worker*,ua_glthread:
+//                            Unity's render thread is "UnityGfxDeviceWorker", Unity 2017.x's job workers
+//                            "Worker Thread", ua_host's GL thread (UA_GL_REC=auto/thread) "ua_glthread";
+//                            a name no thread has costs nothing). "UnityMain" is the thread that runs
 //                            Unity's frames: threads it starts inherit the name until they set theirs
 //   UA_PROF_SECS=<s>         length of a recording (default 20)
 //   UA_PROF_START=<s>        record once, <s> seconds after the first frame (default: only on prof.req)
@@ -1173,7 +1175,7 @@ void prof_init(const char *root)
     if (getenv("UA_PROF_SCAN") && atoi(getenv("UA_PROF_SCAN")) > 0) g_scan = atoi(getenv("UA_PROF_SCAN"));
     g_code = getenv("UA_PROF_CODE") && atoi(getenv("UA_PROF_CODE")) > 0;
     g_stride = HDR + g_depth;
-    const char *names = getenv("UA_PROF_THREADS") && *getenv("UA_PROF_THREADS") ? getenv("UA_PROF_THREADS") : "UnityMain,UnityGfxDeviceW";
+    const char *names = getenv("UA_PROF_THREADS") && *getenv("UA_PROF_THREADS") ? getenv("UA_PROF_THREADS") : "UnityMain,UnityGfxDeviceW,Worker*,ua_glthread";
     char buf[512];
     snprintf(buf, sizeof buf, "%s", names);
     for (char *s = strtok(buf, ","); s && g_nnames < MAX_THREADS; s = strtok(NULL, ","))

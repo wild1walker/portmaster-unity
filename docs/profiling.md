@@ -32,7 +32,7 @@ Before profiling a game's own code, read what its players have already found:
 | variable | effect |
 |---|---|
 | `UA_PROF=<hz>` | samples per second and thread while a recording runs (250 - 1000 is useful; 500 gives 10,000 samples in 20 s) |
-| `UA_PROF_THREADS=a,b*` | threads by name, a trailing `*` matches a prefix, `@swap` the thread that presents the frames (default `UnityMain,UnityGfxDeviceW`: Unity's render thread is `UnityGfxDeviceWorker`, cut to 15 characters; its job threads are `Job.Worker <n>`: `Job.Worker*`; FMOD's mixer `FMOD*`). `UnityMain` is the thread that runs Unity's frames: the threads it starts carry its name until they set their own, and are left out |
+| `UA_PROF_THREADS=a,b*` | threads by name, a trailing `*` matches a prefix, `@swap` the thread that presents the frames (default `UnityMain,UnityGfxDeviceW,Worker*,ua_glthread`: Unity's render thread is `UnityGfxDeviceWorker`, cut to 15 characters; Unity 2017.x's job workers `Worker Thread`, ua_host's GL thread (`UA_GL_REC=auto`) `ua_glthread`; its job threads are `Job.Worker <n>`: `Job.Worker*`; FMOD's mixer `FMOD*`). `UnityMain` is the thread that runs Unity's frames: the threads it starts carry its name until they set their own, and are left out |
 | `UA_PROF_SECS=<s>` | length of a recording (20) |
 | `UA_PROF_START=<s>` | one recording `<s>` s after the first frame (default: none until `prof.req`) |
 | `touch <root>/prof.req` | start a recording now (looked for every second; a number in it is the length) |
