@@ -499,6 +499,7 @@ typedef struct {
     uint8_t *cls;                                    /* per block: a class below */
     int y0, y1;                                      /* block rows of this worker */
     long long err_fit;
+    int *next;                                       /* (pmu) the next block row to take, shared */
 } job;
 
 static void load_block(const job *J, int x, int y, uint8_t *px)
@@ -560,12 +561,20 @@ static float line_residual(const uint8_t *px, int n, int nc)
 }
 
 
+#define GA_ROWS 4
+
 static void *work(void *arg)
 {
     job *J = arg;
     uint8_t px[4 * 144];
     int n = J->bw * J->bh;
-    for (int y = J->y0; y < J->y1; y++)
+    /* (pmu: the rows taken GA_ROWS at a time from the shared counter, so no thread sits idle while
+     * another has the busy part of the image; every block is fitted on its own, so the same bytes) */
+    for (;;) {
+    int y0 = J->next ? __atomic_fetch_add(J->next, GA_ROWS, __ATOMIC_RELAXED) : J->y0;
+    int y1 = J->next ? (y0 + GA_ROWS < J->by ? y0 + GA_ROWS : J->by) : J->y1;
+    if (y0 >= y1) break;
+    for (int y = y0; y < y1; y++)
         for (int x = 0; x < J->bx; x++) {
             size_t b = (size_t)y * J->bx + x;
             load_block(J, x, y, px);
@@ -601,6 +610,8 @@ static void *work(void *arg)
                 J->cls[b] = resid <= J->line ? LINE : resid <= J->near ? NEAR : OTHER;
             }
         }
+    if (!J->next) break;
+    }
     return NULL;
 }
 
@@ -627,12 +638,14 @@ long long ga_encode(const uint8_t *rgba, int w, int h, int bw, int bh, int max_e
     if (threads > by) threads = by;
     job jobs[64];
     pthread_t tid[64];
+    int next_row = 0;
     for (int t = 0; t < threads; t++) {
         job *J = &jobs[t];
         J->img = rgba; J->w = w; J->h = h; J->bw = bw; J->bh = bh; J->bx = bx; J->by = by;
         J->max_err = max_err; J->line = line; J->near = near; J->dxt = dxt; J->dxt5 = dxt5;
         J->out = out; J->cls = cls; J->err_fit = 0;
         J->y0 = (int)((long long)by * t / threads); J->y1 = (int)((long long)by * (t + 1) / threads);
+        J->next = threads > 1 ? &next_row : NULL;
     }
     int started = 1;
     for (int t = 1; t < threads; t++)
