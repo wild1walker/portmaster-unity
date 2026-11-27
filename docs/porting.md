@@ -962,8 +962,8 @@ player has not walked next to loads when entered (about 6 s on the G350, as ente
 
 Stutters in play (Blasphemous on the BattleXP G350, 2026-11-27). The frames over 100 ms in a walk were Mono's full
 collections (115 - 290 ms each: the 2017.4 line's Boehm only collects whole; `UA_MONO64_GC_SLICE` / incremental is not
-in that runtime, and a runtime built with parallel marking, `MONO64_PARALLEL_MARK=1` in tools/mono64/build-mono.sh, gave
-the same lengths). Two things removed them from play: less garbage, and collections moved into the loads. The census
+in that runtime; Mono's `--enable-parallel-mark` does not reach the bdwgc build of that line: the library came out
+byte for byte the same, so parallel marking was not measured). Two things removed them from play: less garbage, and collections moved into the loads. The census
 (`UA_ALLOC_CENSUS`) named the garbage: SmartColliders' `RaycastAll` arrays (44 %), Unity's IMGUI layout groups for
 `OnGUI` scripts that draw nothing or use `GUI` only, and a hidden debug label's position string; asmpatch's
 `smartcolliders-raycast`, `imgui-no-layout`, `blasphemous-core-gui` and `blasphemous-debuginfo-idle` (tools/asmpatch/
