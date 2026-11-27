@@ -1,5 +1,5 @@
 // pmspirvcross: Vulkan shader stages (SPIR-V, or SMOL-V as Unity stores them) -> GLSL ES with
-// Khronos' SPIRV-Cross. The converter (convert/pmunity/shaders/vulkan.py) runs it to give shaders
+// Khronos' SPIRV-Cross. The converter (pmu: setup-rs/crates/convert's vulkan step) runs it to give shaders
 // that only carry Vulkan programs GLES3 ones. build.sh fetches SPIRV-Cross and SMOL-V and builds this.
 //
 //   pmspirvcross [-e 300|310] <stage.spv|stage.smolv>...    translate each stage, print the GLSL

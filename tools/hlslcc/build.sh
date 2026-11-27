@@ -19,7 +19,7 @@
 #
 # Fetching uses curl, wget or git, whichever there is. Environment: CC, CXX (compilers),
 # CXXFLAGS, LDFLAGS, HLSLCC_SRC (an HLSLcc-<commit> folder fetched before). The converter finds the
-# binary through $PMHLSLCC, else tools/hlslcc/out/pmhlslcc, else pmhlslcc on PATH (or `pmunity
+# binary through $PMHLSLCC, else tools/hlslcc/out/pmhlslcc, else pmhlslcc on PATH (or `pmu
 # shaders --hlslcc <path>`).
 set -e
 HLSLCC_COMMIT=3ea1fcd6bd0ac445bc078de0bf32f0950188577b      # master, 2020-09-23 ("bring latest changes from upstream")

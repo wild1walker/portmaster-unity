@@ -1,5 +1,5 @@
 // pmhlslcc: Direct3D 11 shader bytecode (DXBC) -> GLSL with Unity's HLSLcc, the translator Unity
-// itself uses for its OpenGL programs. The converter (convert/pmunity/shaders/dxbc.py) runs it to
+// itself uses for its OpenGL programs. The converter (pmu: setup-rs/crates/convert's d3d11 step) runs it to
 // give a Windows build's D3D11-only shaders GL programs. build.sh fetches HLSLcc and builds this.
 //
 //   pmhlslcc [-l LANG] [-f FLAGS] <stage.dxbc>...    translate one program (its stages, any order)
