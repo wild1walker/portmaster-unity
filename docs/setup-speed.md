@@ -690,6 +690,97 @@ The PSNR of the Hollow Knight sample (every block, against the pixels encoded): 
   the tree does; what writing the converted files straight into it would save is the tree's copy of the 380 inlined files (the G350:
   part of the tree's 55 s, of a 54-minute setup), against the regression run and the rig reading the tree.
 
+## The textures step, the same bytes: cores kept busy (2026-11-26)
+
+`PMU_PROF` now also says, for each stage the step's main thread runs, how many cores the process kept
+busy meanwhile (its CPU time over the stage's wall time), and for the whole step (`whole ... s, CPU ...
+s: ... cores`). Measured with it on the muOS RG34XX-SP (H700, 4x Cortex-A53, the card 97 % full; the
+samples of "Where a setup's hour goes" plus one of Blasphemous: `globalgamemanagers(.assets)`,
+`sharedassets122` and `781`, 148 MB, 26 textures at scale 1, 4x4 `medium`; `convert --steps textures` on a
+fresh copy, the cache dropped, one devlock hold each; main at 2147a04 with the timers only):
+
+| main, muOS (`PMU_PROF`) | Cuphead (193 textures, 4x4 `fast`, the guide) | Hollow Knight (80, 6x6 `medium`) | Blasphemous (26, 4x4 `medium`, scale 1) |
+|---|---|---|---|
+| **the step** | **58 s** (105 s in a run where the card wrote at ~2 MB/s) | **72 / 74 s** | **34 s** |
+| process CPU, cores busy on average | 129 s, 2.27 | 151 s, 2.14 | 77 s, 2.30 |
+| main thread: decoding and scaling (`prepare`) | 18.7 s at 2.22 cores | 1.0 s | 0.2 s |
+| main thread: astc-encoder, guided_astc | 16.7 s at 3.49, 4.7 s at 3.08 | (on the workers) | (in strips on the workers) |
+| main thread waiting for its workers (`wait`) | - (no workers with a guide) | 40 s at 2.7 | 16.5 s at 3.3 |
+| the card: `commit`, `journal`, `objects`, `read` | 5.3 + 0.9 + 1.8 + 1.8 s at 0.02 - 0.6 | 6.0 + 1.0 + 6.2 (10.9) + 7.0 s at 0.01 - 2.0 | 5.2 + 0.5 + 6.1 s at 0.01 - 1.5 |
+| `write` (LZ4 HC, the card) | 3.5 s at 3.1 (20.5 s at 0.5 with the slow card) | 1.9 s | 0.3 s |
+
+What each stage was, then:
+
+- **Cuphead**: the ASTC guide kept every texture on the main thread (a worker could not share it), so
+  `sharedassets3`/`8`'s 180 small textures were converted one at a time with four threads each; each
+  4096 x 4096 atlas was decoded and scaled (2.2 cores: eight bands, one copy turned top first and a
+  premultiply pass each, then the resample), then encoded, the cores idle between the two; `commit`
+  (5.3 s at 0.02 cores) waited for the card's syncs. astc-encoder was 16.7 s at 3.5 cores of a 57 s step:
+  decoding and scaling (18.7 s at 2.2 cores) and the waits were the rest.
+- **Hollow Knight** (6x6 `medium`): astc-encoder is most of the CPU, but the main thread spent 40 s
+  waiting for workers at 2.7 cores (one worker still encoding a big texture at the end of a file while
+  the others had nothing), and `objects`, `commit`, `journal` and `read` ~20 s at 0.05 - 2 cores: the
+  card (the serialized files' objects read through their map, syncs).
+- **Blasphemous** (unscaled, strips): 3.3 cores in its strips; `commit` 5.2 s and `objects` 6.1 s
+  (inline textures read through the map) at under 1.6 cores.
+
+| change (each leaves every converted file as it was) | where |
+|---|---|
+| workers with an ASTC guide: each reads the same file (pread, one index), the counts added up; the big textures' strips likewise | `guide.rs` `Guide::share`, `textures.rs` `worker`, `strips` |
+| textures of 0.25 Mpix or more (new size) are prepared on every core by the main thread and encoded by a **solo encoder** on a thread of its own (all the cores' threads) while the main thread reads, prepares and hands out the next textures; one encoding and one waiting at most, counted in the turns' memory budget. Before, each texture of 1 Mpix or more drained the workers and ran alone, decoding then encoding | `texture.rs` `prepare` / `encode_prepared` (convert's halves), `textures.rs` `SoloJob` |
+| the resampler: an output whose taps all read the same pixel (a flat or transparent run in the horizontal pass, the same 16 bytes down the rows in the vertical) is `init + p * K`, K the sum of its integer coefficients: the same wrapping 32-bit sum as Pillow's term by term (multiplication distributes over it), so the same bytes for one multiply instead of 17. The runs are found with a bitmap per row (NEON compares) and a count per 16-byte column | `pillow_resample.c` |
+| a band of a big scaled texture: its blocks premultiplied as they are decoded (DXT1/3/5, BC7: the 64 bytes of a block once), resampled from the decoded rows where they are (row pointers bottom first, not a copy turned top first) straight into the image; a block the same as the one before (empty and flat areas) not decoded again | `decode.rs` `parse_image_data_pm`, `bcn`; `texture.rs` `decode_downscale`; `image.rs` `resize_rows_into` |
+| guided_astc's threads take 4 block rows at a time from a shared counter (they had a fixed quarter of the image each: the thread with the busy rows finished last) | `vendor/guided_astc` `ga_encode` |
+| a deferred batch past its size or age puts in place the files already synced (in order, with the marks among them) and waits for the card only at twice the size or at the step's end | `job.rs` `commit_ready` |
+| a plain file and the streams beside it (128 MB at most together) are prefetched when the step opens it (`fadvise WILLNEED` on a thread): the step reads them whole anyway (objects, streams, the copy written); only the page cache changes | `textures.rs` `prefetch` |
+
+After (all of the changes, the same handheld, one run each unless shown):
+
+| muOS, `PMU_PROF` | Cuphead | Hollow Knight | Blasphemous |
+|---|---|---|---|
+| **the step** | 99 s, in a slow-card run (main: 58 s fast-card, 105 s slow-card; the paired runs never got the handheld) | **59 s** (-19 %) | (not run again: the card filled up, below) |
+| process CPU, cores busy on average | 115 s, 1.19 (in the slow-card run) | 151 s, **2.57** | |
+| decoding and scaling: copies and premultiply (`band-cpu`, CPU) | 8.6 -> **0.2 s** | | |
+| main thread waiting for its workers (`wait`) | 12 s at 2.7 (it now has workers) | 40 -> **11.3 s** at 3.7 | |
+| the card: `commit`, `objects`, `read` | 6.1, 5.9, 4.3 s | 4.2, 8.0, 3.9 s | |
+
+The process's CPU did not fall much (Cuphead 129 -> 115 s, Hollow Knight the same 151 s): astc-encoder
+is the same, and the resampler's flat runs and the repeated blocks save CPU only where a texture has
+them. What changed is the idle cores: the encoder no longer waits for the decoder, the small textures of
+a file with a guide run on four workers, the main thread no longer waits for one worker at the end of a
+file. What is left idle is the card: `commit`, `objects` (a plain file's new stream, which carries the
+file's other streams too, synced when it is closed) and `write` (the bundles' LZ4 HC, and the card when
+it is slow). The handheld's card was 97 - 100 % full (other tests' files) during these runs and wrote at
+~2 MB/s in some of them (Cuphead's `write` 20 - 27 s instead of 3.5 s): single Cuphead runs moved
+58 <-> 105 s with the same binary. Back-to-back pairs (main and the branch in one hold) were queued, but
+the handheld was busy with other tests for hours and its card filled up (a run stopped with "not enough
+free space"): Cuphead's wall time on the handheld is still to be measured that way. Its CPU fell 129 -> 115 s, and the stages above say where its idle
+cores went.
+
+**Same output.** Every converted file and the journal (md5 of the whole output folder) the same as main's
+for the three samples, in the arm64 container on the builds made as the changes were added (the texcodec
+changes; then the workers, the solo encoder and the commits; then the prefetch; each also with
+`-mtune=cortex-a53`), and on the handheld, whose files are the container's. Tests: `vector_resampling_matches_pillow` (flat tiles,
+columns), `premultiplied_and_repeated_blocks_decode_the_same`, `banded_and_parallel_downscale_match_the_whole_resize`,
+`textures_layer_with_a_solo_encoder` (the stand-in codec's big textures through the solo encoder: the same
+files), `deferred_files_go_in_place_as_they_are_synced`; `cargo test --locked -p texcodec -p convert -p pmu`.
+
+**The encoder's build**: astc-encoder already builds with `-O3` and NEON (`ASTCENC_NEON=1`; aarch64's
+default `-march=armv8-a` has it); `-mtune=cortex-a53` (scheduling only, for the A53's in-order pipeline) gave
+the same blocks on all three samples in the container (a test build, not kept), but its handheld run was
+stopped by the full card: not measured, not changed. The encoder's threads: small textures are each on one
+worker (one-thread contexts), big ones on every core; the work queue across textures is the solo encoder
+above.
+
+**Not done, or did not pay**:
+
+- *NEON BC7*: the decode is now a small share of a band (the repeated blocks and the fused premultiply
+  took most of what was left); a vector BC7 decoder would be a new decoder to prove bit for bit.
+- *Writing a bundle on a thread while the next file converts*: its `write` stage (LZ4 HC) already runs on
+  every core; the bundle's scratch files (`stream.new`, spilled nodes) are shared with the next file's.
+- *A whole setup in the container*: the arm64 container shares the Mac with other helpers' builds; its
+  textures step times moved 2-8x between runs, so only its digests are used here.
+
 ## The setup on a PC: tools/prepatch (2026-10-31)
 
 [tools/prepatch](../tools/prepatch/README.md) is a web page that runs a port's setup in the browser, with
