@@ -1940,6 +1940,24 @@ No item is both 0.5 ms or more and a small exact cut, so nothing was built. Next
 (item 4, exact), and a profile of where the Physics2D sync's moved colliders come from (item 2). The boss level is
 near 60 fps; its UnityMain time is the same kinds of work, smaller.
 
+`UA_JOB_WORKERS` on Cuphead 64-bit (the same setup; `UA_PROF=200`, 20 s from 95 s; A B C A B C runs in one hold,
+twice, cooled before each; the first set's FlyingGenie runs were lost to another test's game left running, 480 MB):
+
+| | default (3) | `=1` | `=2` |
+|---|---|---|---|
+| Platforming_Level_1_2, fps | 44.0, 39.0, 41.2, 40.6 (mean 41.2) | 41.5, 46.0, 38.5, 44.3 (42.6) | 39.6, 40.8, 38.6, 40.1 (39.8) |
+| the same, UnityMain ms of CPU a frame | 21.5, 23.0, 22.0, 22.2 | 22.5, 20.9, 23.1, 21.4 | 22.7, 22.6, 23.5, 22.7 |
+| FlyingGenie, fps (UnityMain ms) | 58.6 (12.3), 56.7 (12.5) | 57.2 (12.8), 57.2 (12.6) | 58.5 (12.2) |
+
+The run-and-gun level's runs spread by 3 - 7 fps for the same setting: where the scripted run takes the player differs
+from run to run, and UnityMain's time follows that. Within that spread `=1` does not differ from the default, and `=2`
+is perhaps 1 fps lower. Unlike Gungeon's render thread, the frame here is held by UnityMain's own work, and the jobs
+it waits for (2.8 ms) take as long with one worker. The level's culling splits do depend on the count (a third of
+its `CalculateJobCount` answers before the freeze). The frozen-picture check (`UA_LOCKSTEP_FREEZE` with
+`UA_JOB_SPLIT`) does not apply to Cuphead: its picture keeps changing with the clock stopped (669 different pictures in
+1,117 frozen frames, from the film-grain overlay), and no split-dependent answer came while frozen. The exactness
+proof for 2017.4.40f1 above covers it (the same player). Verdict: exact, no gain; not a default for Cuphead.
+
 ## Shader programs: compiles, links and Unity's binary cache
 
 ```sh
