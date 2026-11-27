@@ -1,4 +1,4 @@
-//! The command lines of `pmunity il2cpp` and `pmunity il2cpp fetch` (il2cpp.main), read as
+//! The command lines of `pmu il2cpp` and `pmu il2cpp fetch` (il2cpp.main), read as
 //! argparse reads them: options anywhere, `--opt=value`, unique prefixes, `--` ending the options,
 //! `--assembly-patch NAME COMMAND`; argument errors exit 2 with argparse's message.
 use crate::build::{self, BuildOpts};
@@ -206,7 +206,7 @@ impl Parser {
     }
 }
 
-const USAGE: &str = "usage: pmunity il2cpp [-h] [--abi {arm64-v8a,armeabi-v7a}] [--home HOME]
+const USAGE: &str = "usage: pmu il2cpp [-h] [--abi {arm64-v8a,armeabi-v7a}] [--home HOME]
                       [--pkg PKG] [--jobs JOBS] [--image IMAGE] [--keep-cpp]
                       [--strip {low,none}] [--unity VERSION]
                       [--managed-file DLL] [--asmpatch COMMAND]
@@ -216,7 +216,7 @@ const USAGE: &str = "usage: pmunity il2cpp [-h] [--abi {arm64-v8a,armeabi-v7a}] 
                       [--toolchain TOOLCHAIN]
                       data out";
 
-const FETCH_USAGE: &str = "usage: pmunity il2cpp fetch [-h] [--abi {arm64-v8a,armeabi-v7a}]
+const FETCH_USAGE: &str = "usage: pmu il2cpp fetch [-h] [--abi {arm64-v8a,armeabi-v7a}]
                             [--home HOME] [--pkg PKG] [--net {2,2subset,4}]
                             [--on-device] [--toolchain TOOLCHAIN]
                             version";
@@ -246,7 +246,7 @@ pub fn main(argv: &[String]) -> u8 {
         return fetch_main(&argv[1..]);
     }
     let p = Parser {
-        prog: "pmunity il2cpp",
+        prog: "pmu il2cpp",
         usage: USAGE,
         positionals: &["data", "out"],
         opts: vec![
@@ -292,7 +292,7 @@ pub fn main(argv: &[String]) -> u8 {
     let on_device = a.has("--on-device");
     if !on_device {
         return end(Err(Error::NotPorted(
-            "pmu il2cpp: only the build on the handheld (--on-device) is ported; the Docker route (a PC's) stays with `python -m pmunity il2cpp`".into(),
+            "pmu il2cpp: only the build on the handheld (--on-device) is ported; the Docker route (a PC's) went with the Python converter".into(),
         )));
     }
     device::install_ca();
@@ -337,7 +337,7 @@ pub fn main(argv: &[String]) -> u8 {
 /// `il2cpp fetch <version> ...`: prints what it fetched as JSON.
 fn fetch_main(argv: &[String]) -> u8 {
     let p = Parser {
-        prog: "pmunity il2cpp fetch",
+        prog: "pmu il2cpp fetch",
         usage: FETCH_USAGE,
         positionals: &["version"],
         opts: vec![

@@ -1085,7 +1085,7 @@ fn sorted(mut v: Vec<String>) -> Vec<String> {
 pub fn build(o: &BuildOpts) -> Result<Option<Json>> {
     if !o.on_device {
         return Err(Error::NotPorted(
-            "pmu il2cpp: only the build on the handheld (--on-device) is ported; the Docker route stays with `python -m pmunity il2cpp`".into(),
+            "pmu il2cpp: only the build on the handheld (--on-device) is ported; the Docker route (a PC's) went with the Python converter".into(),
         ));
     }
     let with_patches = folder_patches(&o.streaming_assets, o.data_path)?;
@@ -1515,7 +1515,7 @@ pub fn finish(f: &Finish) -> Result<Json> {
     Ok(info)
 }
 
-/// `pmunity il2cpp fetch`: the toolchain (and the handheld's tools); the dict it prints.
+/// `pmu il2cpp fetch`: the toolchain (and the handheld's tools); the dict it prints.
 pub fn fetch_only(
     version: &str,
     abi: &str,

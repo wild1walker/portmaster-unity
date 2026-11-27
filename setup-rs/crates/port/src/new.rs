@@ -207,7 +207,7 @@ pub fn new_with(repo: &Repo, a: &NewArgs, check: Option<Checker>, log: &mut dyn 
         return Err(exit("--data <game> (or a config with game.unity_versions) is needed"));
     }
     if std::env::var("PMUNITY_PORT_HOOKS").is_ok_and(|h| h.split(',').any(|m| !m.is_empty())) {
-        return Err(exit("PMUNITY_PORT_HOOKS: pmu port runs no Python hook modules (run `python -m pmunity port new`)"));
+        return Err(exit("PMUNITY_PORT_HOOKS: hook modules went with the Python packager (a port's own build steps: port.toml [build])"));
     }
     let mut over = Dict::new();
     if let Some(r) = a.route.as_deref().filter(|r| !r.is_empty()) {
@@ -407,7 +407,7 @@ pub fn new_with(repo: &Repo, a: &NewArgs, check: Option<Checker>, log: &mut dyn 
     written.sort();
     written.dedup();
     let mut build = crate::dict! {
-        "made_by" => Val::s("pmunity port new"),
+        "made_by" => Val::s("pmu port new"),
         "config" => Val::Dict(cfg.clone()),
         "route" => Val::Dict(route_out),
         "files" => Val::strs(&written),

@@ -1,11 +1,11 @@
 #!/bin/bash
 # First-run setup on the handheld, run by the launcher through PortMaster's patcher (made with
-# `pmunity port new`, box64 route): prepares the player's own copy of the game's Linux build in
+# `pmu port new`, box64 route): prepares the player's own copy of the game's Linux build in
 # ports/<port>/gamedata/ for box64:
-#   1. the game: its folder (or the archive it came in, unpacked in place), found by `pmunity route`
+#   1. the game: its folder (or the archive it came in, unpacked in place), found by `pmu route`
 #      (`pmu route` where the release has setup/pmu)
 #   2. for the OpenGL ES mode: GLES 3 shader programs next to the game's OpenGL Core ones, and GLES 3
-#      in its graphics API list (pmunity convert, setup/gles.json; in place, the picture unchanged)
+#      in its graphics API list (pmu convert, setup/gles.json; in place, the picture unchanged)
 #   3. ports/<port>/game.env: where the game is and the GL mode, for the launcher
 # The game's code is not changed. Every step can be interrupted: the next launch continues.
 # Log: ports/<port>/patchlog.txt. A line "PATCH_FAIL_MSG:<text>" says why the setup failed.
@@ -51,29 +51,15 @@ SEVENZ="$controlfolder/7zzs.$DEVICE_ARCH"
 mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
 
 # ---- the setup's tools (route and convert): setup/pmu, one static aarch64 program
-# (portmaster-unity's setup-rs); a release without it ships the setup's Python instead (CPython +
-# UnityPy, aarch64: setup/python.tar.gz and the converter)
-if [ -f "$S/pmu" ]; then
-  chmod +x "$S/pmu" 2>/dev/null
-  "$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
-  pm() { "$S/pmu" "$@"; }
-else
-  PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
-  if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4" 2>/dev/null; then
-    step "unpacking the setup tools"
-    rm -rf "$W/python"
-    # (gunzip | tar: some firmwares' BusyBox tar has no -z, e.g. muOS)
-    ( set -o pipefail; gunzip -c "$S/python.tar.gz" | tar -xf - -C "$W" ) || fail "Could not unpack the setup's Python (see patchlog.txt)."
-    PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
-    [ -n "$PY" ] || fail "The setup's Python is incomplete."
-  fi
-  export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
-  pm() { "$PY" -m pmunity "$@"; }
-fi
+# (portmaster-unity's setup-rs)
+[ -f "$S/pmu" ] || fail "The setup's tools (setup/pmu) are missing: unzip the port's release again."
+chmod +x "$S/pmu" 2>/dev/null
+"$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
+pm() { "$S/pmu" "$@"; }
 
 # convert, run again by itself when the kernel stops it (out of memory: a 1 GB handheld) as long as
 # each run gets further: its journal (<data>/.pmunity.json) names the files done and a new run goes
-# on after them (pmu journal-files counts them; with the setup's Python: 0, no second run)
+# on after them (pmu journal-files counts them)
 pm_convert() {   # pm_convert <data folder> <convert's other arguments>
   local j="$1/.pmunity.json" n rc
   while :; do
@@ -86,7 +72,7 @@ pm_convert() {   # pm_convert <data folder> <convert's other arguments>
 }
 convert_failed() {   # convert_failed <convert's status>: the reason, said so the player can act on it
   case "$1" in
-    2) [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python.";;
+    2) fail "The setup's tools cannot convert this game's files (see patchlog.txt).";;
     3) fail "The card is too full to convert the game (patchlog.txt says how much it needs): free some space on it, then launch again.";;
     5) fail "The handheld restarted while the conversion wrote its journal, and the setup lost its place: delete ports/$PORT_NAME/gamedata, put $GAME_WHAT in a new gamedata folder and launch again.";;
   esac

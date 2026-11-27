@@ -1,4 +1,4 @@
-//! `pmu <command> ...`: the commands of `python -m pmunity` (convert/pmunity/__main__.py) that a
+//! `pmu <command> ...`: the commands of `pmu` (convert/pmunity/__main__.py) that a
 //! port's setup runs on the handheld, with the same arguments, output files and exit statuses, so a
 //! setup script can run either. Each command lives in cmd/<name>.rs; until a command is ported it
 //! exits 2 and the setup keeps running the Python one.
@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     match cmd::run(name, &args[1..]) {
         Some(code) => code,
         None => {
-            eprintln!("pmu: {name}: not ported yet (run `python -m pmunity {name}`)");
+            eprintln!("pmu: {name}: no such command");
             ExitCode::from(2)
         }
     }

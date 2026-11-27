@@ -482,7 +482,7 @@ pub fn pack(ctx: &mut Ctx, survey: &Survey) -> Result<Json, Stop> {
     res.set("version_code", ctx.args.version_code.into());
     res.set("unity_version", ctx.unity.to_string().into());
     if ctx.args.il2cpp.is_some() {
-        // (the IL2CPP build's ABI, as `pmunity apk` writes it: what picks the 64-bit ua_host)
+        // (the IL2CPP build's ABI, as `pmu apk` writes it: what picks the 64-bit ua_host)
         let abi = ctx
             .il2cpp_info
             .as_ref()

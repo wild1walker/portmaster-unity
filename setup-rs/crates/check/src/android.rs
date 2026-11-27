@@ -48,7 +48,7 @@ pub fn check_android(repo: &Repo, mut rep: Dict, inputs: &[String], log: &mut dy
     rep.set("routes", Val::List(vec![]));        // (its place among the report's keys; filled below)
     let mut lines: Vec<String> = Vec::new();
     let mut info: Option<Dict> = None;
-    log("reading the Android build (pmunity apk --dry-run)");
+    log("reading the Android build (pmu apk --dry-run)");
     {
         let td = tempdir()?;
         let managed = join(&td.0, "Managed");
@@ -93,7 +93,7 @@ pub fn check_android(repo: &Repo, mut rep: Dict, inputs: &[String], log: &mut dy
                 notes.push(match apk::il2cpp::il2cpp_refusal(&v) {
                     Some(why) => format!("64-bit-only systems: {why}"),
                     None => "64-bit-only systems too: player.il2cpp = true has the setup compile the build's code with Unity's \
-                             IL2CPP on such a handheld, for Unity's arm64 IL2CPP player (`pmunity apk --il2cpp --on-device`: one to \
+                             IL2CPP on such a handheld, for Unity's arm64 IL2CPP player (`pmu apk --il2cpp --on-device`: one to \
                              a few hours, about 1.6 GB free, Wi-Fi; the release then ships ua_host64 too)".to_string(),
                 });
             }
@@ -170,7 +170,7 @@ pub fn check_android(repo: &Repo, mut rep: Dict, inputs: &[String], log: &mut dy
     rep.set("routes", Val::List(vec![Val::Dict(route)]));
     rep.set("route", if ok_any { s("apk") } else { Val::Null });
     if !ok_any {
-        rep.set("unsupported", s(why.unwrap_or_else(|| "not a build pmunity apk reads".into())));
+        rep.set("unsupported", s(why.unwrap_or_else(|| "not a build pmu apk reads".into())));
     }
     Ok(rep)
 }

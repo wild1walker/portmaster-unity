@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 pub fn run(args: &[String]) -> ExitCode {
     let p = Parser {
-        prog: "pmunity unpack",
+        prog: "pmu unpack",
         positionals: &["data"],
         opts: vec![val("--out"), flag("--remove")],
     };

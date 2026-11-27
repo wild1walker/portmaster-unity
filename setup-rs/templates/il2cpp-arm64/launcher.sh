@@ -20,7 +20,7 @@ get_controls
 # @@TITLE@@ on Unity's 64-bit (arm64) IL2CPP Android player, run natively by portmaster-unity's
 # ua_host, for systems without a 32-bit userland. On the first launch the setup builds the game from
 # your copy in ports/@@PORTDIR@@/gamedata/, compiling its code with Unity's IL2CPP on the handheld
-# (see README.md there). Made with `pmunity port new` (@@ROUTE@@ route).
+# (see README.md there). Made with `pmu port new` (@@ROUTE@@ route).
 
 GAMEDIR="/$directory/ports/@@PORTDIR@@"
 cd "$GAMEDIR" || exit 1

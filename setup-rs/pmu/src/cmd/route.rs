@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 pub fn run(args: &[String]) -> ExitCode {
     let p = Parser {
-        prog: "pmunity route",
+        prog: "pmu route",
         positionals: &["path"],
         opts: vec![flag("--json"), flag("--env"), Opt { metavar: Some("OUT"), ..val("--launcher") }, val("--port"), val("--title"), val("--template")],
     };

@@ -1,6 +1,6 @@
 #!/bin/bash
 # What a newer setup does that a game set up by an earlier release has not had yet, done on its
-# installed files (made with `pmunity port new`, android route). The launcher runs this through
+# installed files (made with `pmu port new`, android route). The launcher runs this through
 # PortMaster's patcher when the game is set up and setup/update is there: a release brings the
 # setup folder again, and a setup removes it when it ends, so a game set up by this release never
 # runs it. Now:

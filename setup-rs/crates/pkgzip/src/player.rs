@@ -339,7 +339,7 @@ pub fn fetch(
         None => {
             let Some(r) = release(version)? else {
                 return Err(Error::Exit(format!(
-                    "Unity does not list version {version} (check `python -m pmunity version <data>`)"
+                    "Unity does not list version {version} (check `pmu version <data>`)"
                 )));
             };
             let u = installer_url(&r)?;

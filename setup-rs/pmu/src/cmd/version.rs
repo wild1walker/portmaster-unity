@@ -1,5 +1,5 @@
 //! `pmu version <data>`: the Unity version a game's data was built with and whether the
-//! converter supports it (`python -m pmunity version`: "<version> (supported)" or "(not
+//! converter supports it (`pmu version`: "<version> (supported)" or "(not
 //! supported)"), read from globalgamemanagers, mainData or data.unity3d.
 use std::process::ExitCode;
 

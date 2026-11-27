@@ -853,7 +853,7 @@ pub fn check(tc: &str, groups: &[String]) -> Result<()> {
     Ok(())
 }
 
-const WRAP: &str = "#!/bin/sh\n# pmunity il2cpp --on-device ({what}): run through the toolchain's own glibc loader\n";
+const WRAP: &str = "#!/bin/sh\n# pmu il2cpp --on-device ({what}): run through the toolchain's own glibc loader\n";
 
 /// NO_OUTLINE_SH: -mno-outline for AArch64 and ARMv7 compiles (identical objects, a third of the peak).
 pub const NO_OUTLINE_SH: &str = r#"nool=; c=; a64=

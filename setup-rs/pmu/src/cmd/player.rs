@@ -7,7 +7,7 @@
 use super::argp::{choice, flag, val, Parser};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: pmunity player donor [-h] --apk APK [--backend {mono,il2cpp}] \
+const USAGE: &str = "usage: pmu player donor [-h] --apk APK [--backend {mono,il2cpp}] \
                      [--abi {armeabi-v7a,arm64-v8a}] [--managed] version dir";
 
 const OPTS: &[&str] = &["--help", "--apk", "--backend", "--abi", "--managed"];
@@ -41,20 +41,20 @@ pub fn run(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("donor") => {}
         Some("-h" | "--help") => {
-            println!("usage: pmunity player [-h] {{url,fetch,donor}} ...");
+            println!("usage: pmu player [-h] {{url,fetch,donor}} ...");
             return ExitCode::SUCCESS;
         }
         Some("url") => return url(&args[1..]),
         Some("fetch") => return fetch(&args[1..]),
         Some(c) => {
             eprintln!(
-                "usage: pmunity player [-h] {{url,fetch,donor}} ...\npmunity player: error: argument cmd: \
+                "usage: pmu player [-h] {{url,fetch,donor}} ...\npmunity player: error: argument cmd: \
                  invalid choice: '{c}' (choose from 'url', 'fetch', 'donor')"
             );
             return ExitCode::from(2);
         }
         None => {
-            eprintln!("usage: pmunity player [-h] {{url,fetch,donor}} ...\npmunity player: error: the following arguments are required: cmd");
+            eprintln!("usage: pmu player [-h] {{url,fetch,donor}} ...\npmunity player: error: the following arguments are required: cmd");
             return ExitCode::from(2);
         }
     }
@@ -161,7 +161,7 @@ pub fn run(args: &[String]) -> ExitCode {
 /// `player url <version>`: the version's Android Build Support installer, from Unity's API.
 fn url(args: &[String]) -> ExitCode {
     let p = Parser {
-        prog: "pmunity player url",
+        prog: "pmu player url",
         positionals: &["version"],
         opts: vec![],
     };
@@ -188,7 +188,7 @@ fn url(args: &[String]) -> ExitCode {
 /// `player fetch <version> <dir> ...`: the player files a port needs.
 fn fetch(args: &[String]) -> ExitCode {
     let p = Parser {
-        prog: "pmunity player fetch",
+        prog: "pmu player fetch",
         positionals: &["version", "dir"],
         opts: vec![
             choice("--backend", &["mono", "il2cpp"]),

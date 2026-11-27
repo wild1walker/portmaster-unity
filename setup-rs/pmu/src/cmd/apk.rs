@@ -2,12 +2,12 @@
 //! [--json] [--il2cpp ...]` (crates/apk, apk.py): a game's own Android build laid out for ua_host.
 //! With --il2cpp --on-device a Mono build is compiled for the arm64 IL2CPP player on this machine
 //! (crates/il2cpp); with --il2cpp alone (Docker, a porter's PC) it stops with status 2 (the
-//! Python's `pmunity apk --il2cpp` does that).
+//! Python's `pmu apk --il2cpp` does that).
 use super::argp::{choice, flag, val, Opt, Parser};
 use std::io::Write;
 use std::process::ExitCode;
 
-const PROG: &str = "pmunity apk";
+const PROG: &str = "pmu apk";
 
 pub fn run(args: &[String]) -> ExitCode {
     let p = Parser {
@@ -102,7 +102,7 @@ pub fn run(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
         Err(apk::Fail::NotPorted(m)) => {
-            eprintln!("pmu: apk: not ported yet: {m} (run `python -m pmunity apk`)");
+            eprintln!("pmu: apk: not ported yet: {m} (pmu does not do it)");
             ExitCode::from(2)
         }
     }

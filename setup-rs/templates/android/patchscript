@@ -1,17 +1,17 @@
 #!/bin/bash
 # First-run setup on the handheld, run by the launcher through PortMaster's patcher (made with
-# `pmunity port new`, android route): builds the game for Unity's Android player from the
+# `pmu port new`, android route): builds the game for Unity's Android player from the
 # player's own copy in ports/<port>/gamedata/:
 #   1. the game: its data folder, from the folder or archive (.zip, .7z, .tar.*, macOS .pkg, GOG's
 #      Linux installer .sh: its zip is unpacked, the script never runs) put there
 #   2. Unity's Android player of the game's exact version, from the port's donor (donor/: a small
 #      game of the port's own built with that Unity version, whose APK carries the player); then
-#      Unity's class libraries the build lacks for it (pmunity winbcl: a Windows build of 2021.2+
+#      Unity's class libraries the build lacks for it (pmu winbcl: a Windows build of 2021.2+
 #      has Windows-only ones; a facade such as netstandard.dll), from the same Mono donor (nothing
 #      is read when the build needs none). Nothing is downloaded: no Wi-Fi
-#   3. the conversion (pmunity convert: GLES3 shaders, settings, the port's steps; a Windows
+#   3. the conversion (pmu convert: GLES3 shaders, settings, the port's steps; a Windows
 #      build's Direct3D 11 shaders with setup/pmhlslcc)
-#   4. the APK + OBB the player reads (pmunity android-data; asmpatch when the port uses it)
+#   4. the APK + OBB the player reads (pmu android-data; asmpatch when the port uses it)
 #   5. installing: the player's libraries (and only the Mono runtime the game needs), the game
 # Settings: setup/setup.env (from port.toml). Every step can be interrupted (battery, power button):
 # the next launch continues where it stopped. Log: ports/<port>/patchlog.txt.
@@ -59,30 +59,15 @@ mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
 echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, swap $(awk '/SwapTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, free on the card $(free_mb) MB"
 export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
-# ---- the setup's tools: setup/pmu, one static aarch64 program (portmaster-unity's setup-rs); a
-# port whose conversion needs what pmu does not do yet ships the setup's Python instead (CPython +
-# UnityPy and the image/audio libraries, aarch64: setup/python.tar.gz and the converter)
-if [ -f "$S/pmu" ]; then
-  chmod +x "$S/pmu" 2>/dev/null
-  "$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
-  pm() { "$S/pmu" "$@"; }
-else
-  PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
-  if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4, PIL" 2>/dev/null; then
-    step "unpacking the setup tools"
-    rm -rf "$W/python"
-    # (gunzip | tar: some firmwares' BusyBox tar has no -z, e.g. muOS)
-    ( set -o pipefail; gunzip -c "$S/python.tar.gz" | tar -xf - -C "$W" ) || fail "Could not unpack the setup's Python (see patchlog.txt)."
-    PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
-    [ -n "$PY" ] || fail "The setup's Python is incomplete."
-  fi
-  export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
-  pm() { "$PY" -m pmunity "$@"; }
-fi
+# ---- the setup's tools: setup/pmu, one static aarch64 program (portmaster-unity's setup-rs)
+[ -f "$S/pmu" ] || fail "The setup's tools (setup/pmu) are missing: unzip the port's release again."
+chmod +x "$S/pmu" 2>/dev/null
+"$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
+pm() { "$S/pmu" "$@"; }
 
 # convert, run again by itself when the kernel stops it (out of memory: a 1 GB handheld) as long as
 # each run gets further: its journal (<data>/.pmunity.json) names the files done and a new run goes
-# on after them (pmu journal-files counts them; with the setup's Python: 0, no second run)
+# on after them (pmu journal-files counts them)
 pm_convert() {   # pm_convert <data folder> <convert's other arguments>
   local j="$1/.pmunity.json" n rc
   while :; do
@@ -95,7 +80,7 @@ pm_convert() {   # pm_convert <data folder> <convert's other arguments>
 }
 convert_failed() {   # convert_failed <convert's status>: the reason, said so the player can act on it
   case "$1" in
-    2) [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python.";;
+    2) fail "The setup's tools cannot convert this game's files (see patchlog.txt).";;
     3) fail "The card is too full to convert the game (patchlog.txt says how much it needs): free some space on it, then launch again.";;
     5) fail "The handheld restarted while the conversion wrote its journal, and the setup lost its place: delete ports/$PORT_NAME/gamedata, put $GAME_WHAT in a new gamedata folder and launch again.";;
   esac

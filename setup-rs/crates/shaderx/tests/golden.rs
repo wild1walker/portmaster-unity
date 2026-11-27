@@ -1,5 +1,5 @@
 //! Golden tests against the Python's own output on a game's data: the folder
-//! setup-rs/tests/golden/shaderx_golden.py writes, named by $SHADERX_GOLDEN (skipped without it).
+//! the retired setup-rs/tests/golden/shaderx_golden.py (git show 2147a04:setup-rs/tests/golden/shaderx_golden.py) writes, named by $SHADERX_GOLDEN (skipped without it).
 //! Every Shader's report, edit (fields and compressed blob) and GLES3 programs are compared with
 //! the step's, and with a convert run's output where the folder has it; every distinct program
 //! translation; LZ4HC on made-up inputs; the step's summary line.

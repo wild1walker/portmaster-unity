@@ -136,33 +136,6 @@ fn stub_pmu(t: &Path) -> String {
     port::ps(&d)
 }
 
-/// A tar.gz of (name, data) files (the setup's Python bundle's stand-in).
-fn tar_gz(p: &Path, files: &[(&str, &[u8])]) {
-    let mut tar = Vec::new();
-    for (n, data) in files {
-        let mut h = [0u8; 512];
-        h[..n.len()].copy_from_slice(n.as_bytes());
-        h[100..107].copy_from_slice(b"0000644");
-        h[108..115].copy_from_slice(b"0000000");
-        h[116..123].copy_from_slice(b"0000000");
-        h[124..135].copy_from_slice(format!("{:011o}", data.len()).as_bytes());
-        h[136..147].copy_from_slice(b"00000000000");
-        h[156] = b'0';
-        h[257..263].copy_from_slice(b"ustar\0");
-        h[263..265].copy_from_slice(b"00");
-        h[148..156].copy_from_slice(b"        ");
-        let sum: u32 = h.iter().map(|b| *b as u32).sum();
-        h[148..155].copy_from_slice(format!("{sum:06o}\0").as_bytes());
-        tar.extend_from_slice(&h);
-        tar.extend_from_slice(data);
-        tar.resize(tar.len().div_ceil(512) * 512, 0);
-    }
-    tar.resize(tar.len() + 1024, 0);
-    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    e.write_all(&tar).unwrap();
-    put(p, e.finish().unwrap());
-}
-
 /// The runtime's stand-ins (ua_host with the flip-book stand-in beside it, the decoders' and
 /// libhybris's licences) and package()'s options.
 fn release_parts(t: &Path) -> (String, PackOpts) {
@@ -429,7 +402,7 @@ fn new_files() {
 fn pmu_covers() {
     let base = d("[convert]\nsteps = ['shaders', 'settings', 'audio', 'quality']\n[convert.settings]\ngraphics_apis = [11]\n[player]\n[files]\nplugins = []\n[android_data]\n");
     assert_eq!(text::pmu_covers(&base), (true, vec![]));
-    assert!(text::wants("pmu", &base) && !text::wants("pmunity", &base) && !text::wants("pybundle", &base));
+    assert!(text::wants("pmu", &base));
     let over = |o: &str| merge(&base, &d(o));
     assert_eq!(text::pmu_covers(&over("[files]\nplugins = ['convert/animclips.py']")), (true, vec![]));
     let win = over("[convert.shaders]\nfrom = ['d3d11']");
@@ -450,12 +423,12 @@ fn pmu_covers() {
         ("[files]\nplugins = ['steps/mine.py', 'x.json']", "the port's converter plugins (mine.py)"),
     ] {
         assert_eq!(text::pmu_covers(&over(o)), (false, vec![why.to_string()]));
-        assert!(text::wants("pmunity", &over(o)));
     }
     for route in ["android", "mono-arm64", "box64", "apk", "il2cpp-arm64"] {
         let r = port::routes::route(&repo(), route).unwrap().unwrap();
+        assert!(r.list("package").iter().any(|x| x.eq(&Val::s("pmu"))), "{route}");
         for p in ["pmu?", "pmunity?", "pybundle?"] {
-            assert!(r.list("package").iter().any(|x| x.eq(&Val::s(p))), "{route} {p}");
+            assert!(!r.list("package").iter().any(|x| x.eq(&Val::s(p))), "{route} {p}");
         }
     }
 }
@@ -543,10 +516,18 @@ fn il2cpp_and_mono_arm64_routes() {
 }
 
 #[test]
-fn package_python_setup() {
-    // the release of a port whose setup needs the Python (a converter plugin of the porter's own)
+fn package_build_outputs() {
+    // a port with its own build steps; a port whose setup would need what pmu does not do (a converter
+    // plugin of the porter's own, which the retired setup's Python ran) is refused
     let t = tmp("pkgpy");
     put(&t.0.join("mystep.py"), "STEPS = {}\n");
+    let own = make(&t.0, "[files]\nplugins = [\"mystep.py\"]\n");
+    let cfg = build_cfg(&own);
+    assert_eq!(text::pmu_covers(&cfg), (false, vec!["the port's converter plugins (mystep.py)".to_string()]));
+    let (_, mut opts) = release_parts(&t.0);
+    let e = err_text(package(&repo(), &port::ps(&own), &opts, &mut quiet()));
+    assert!(e.contains("do not do what this port needs: the port's converter plugins (mystep.py)") && e.contains("retired"), "{e}");
+    let t = tmp("pkgbuild");
     let out = make(
         &t.0,
         r##"[build]
@@ -554,22 +535,14 @@ commands = ['printf "#!/bin/sh\\n" > "$BUILD/tool"', 'echo data > "$BUILD/table"
 [build.outputs]
 "setup/files/tool" = "{build}/tool"
 "setup/files/table" = "{build}/table"
-[files]
-plugins = ["mystep.py"]
 "##,
     );
-    let cfg = build_cfg(&out);
-    assert_eq!(text::pmu_covers(&cfg), (false, vec!["the port's converter plugins (mystep.py)".to_string()]));
-    let (_, mut opts) = release_parts(&t.0);
-    let pyb = t.0.join("py.tar.gz");
-    tar_gz(&pyb, &[("python/lib/python3.12/LICENSE.txt", b"PSF"), ("python/lib/python3.12/site-packages/a-1.dist-info/LICENSE", b"MIT a")]);
-    opts.pybundle = Some(port::ps(&pyb));
-    opts.pmu = None;
+    let (_, o2) = release_parts(&t.0);
+    opts = o2;
     opts.submission = true;
     write_png(&out.join("screenshot.png"), 640, 480);
     let mut msgs = Vec::new();
     let z = Zip::open(&package(&repo(), &port::ps(&out), &opts, &mut |m: &str| msgs.push(m.to_string())).unwrap());
-    let lic = String::from_utf8(z.read("mygame/licenses/LICENSE.setup-python.txt")).unwrap();
     assert_eq!(z.read("mygame/screenshot.png"), fs::read(out.join("screenshot.png")).unwrap());
     assert!(z.has("mygame/gameinfo.xml") && !z.has("mygame/cover.png"));
     assert!(!z.names.iter().any(|n| n.contains("testing_thread")));
@@ -590,29 +563,24 @@ plugins = ["mystep.py"]
     }
     assert!(exec(&sub.join("mygame/ua_host")));
     for n in [
-        "My Game.sh", "mygame/ua_host", "mygame/setup/python.tar.gz", "mygame/setup/pmunity/__main__.py",
-        "mygame/setup/pmunity/shaders/glsl.py", "mygame/setup/pmunity/video_decode_android.shader",
-        "mygame/setup/pmunity/il2cpp_device_lock.py", "mygame/setup/tools/il2cpp/ndk-clang.sh", "mygame/licenses/LICENSE.libvpx.txt",
+        "My Game.sh", "mygame/ua_host", "mygame/setup/pmu", "mygame/licenses/LICENSE.libvpx.txt",
         "mygame/licenses/LICENSE.portmaster-unity.txt", "mygame/licenses/LICENSE.libhybris.txt", "mygame/setup/patchscript",
-        "mygame/setup/files/mystep.py",
     ] {
         assert!(z.has(n), "{n}");
     }
-    assert!(!z.names.iter().any(|n| n.contains("port_template") || n.contains("__pycache__")));
-    for n in ["mygame/setup/asmpatch", "mygame/setup/pmhlslcc", "mygame/setup/pmu"] {
+    assert!(!z.names.iter().any(|n| n.contains("pmunity/") || n.contains("python") || n.contains("__pycache__")));
+    for n in ["mygame/setup/asmpatch", "mygame/setup/pmhlslcc"] {
         assert!(!z.has(n), "{n}");
     }
     assert_eq!(z.modes["My Game.sh"], 0o644);
     assert_eq!(z.modes["mygame/ua_host"], 0o755);
     assert_eq!(z.modes["mygame/setup/patchscript"], 0o644);
-    assert_eq!(z.modes["mygame/setup/tools/il2cpp/ndk-clang.sh"], 0o755);
     assert_eq!(z.modes["mygame/setup/files/tool"], 0o755);
     assert_eq!(z.modes["mygame/setup/files/table"], 0o644);
     assert!(z.names.iter().filter(|n| n.starts_with("mygame/licenses/")).all(|n| {
         let f = &n["mygame/licenses/".len()..];
         f.starts_with("LICENSE.") && f.ends_with(".txt") && !f.contains('/')
     }));
-    assert!(lic.contains("MIT a") && lic.contains("PSF"));
     assert!(!z.names.iter().any(|n| n.contains("port.toml")));
 }
 
@@ -872,7 +840,7 @@ fn package_zip() {
     let t = tmp("zip");
     let (rt, opts) = release_parts(&t.0);
     let out = make(&t.0, "[runtime]\nUA_FLIPBOOK = '@flipbooks.txt'\n");
-    let text_file = fs::read(repo().pmunity().join("port.py")).unwrap();
+    let text_file = fs::read(repo().root.join("docs/porting.md")).unwrap();
     for (n, data) in [("libthing.so", [b"\x7fELF".to_vec(), vec![0; 60]].concat()), ("table.bin", vec![0; 64]), ("notes.txt", text_file.clone())] {
         put(&out.join("mygame").join(n), data);
     }

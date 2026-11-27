@@ -1,0 +1,797 @@
+== cuphead
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 9 shaders given GLES3 programs (18 programs, 36 subprograms) in 5 files; 1 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs not translated (glcore4x off)
+  | [t] == settings
+  | [t] settings: graphics APIs [11, 17], mouse events off, input axes 6 -> 4
+  | [t] == textures
+  | [t] textures: no ASTC guide at /tmp/pmu-convert-golden/src/astc_guide_fast.bin
+  | [t] textures: sharedassets3.assets: 2 -> 0 MB (5/7)
+  | [t] textures: StreamingAssets/AssetBundles/atlas_main: 0 -> 0 MB (6/7)
+  | [t] textures: 6 converted (2 -> 0 MB), 2 atlas entries and 2 sprites follow their scaled textures
+  | [t] textures: guided blocks: one colour 0.0 %, fitted 0.0 %, DXT seed 0.0 %, one partition 0.0 %, two partitions 0.6 %, searched 99.4 %
+  | [t] == audio
+  | [t] audio: 3 clips kept compressed in memory (63.7 MiB of PCM), 4 decompressed on load as the game has them (6.5 MiB); budget 16 MiB a scene, the most a scene holds 13.3 MiB (scene 0)
+  | [t] == animclips
+  | [t] animclips: 6 clips, 4 names (S 2, H 2, other 1)
+  | [t] done
+stderr
+  file Data/.pmunity.json 1346 6fddb56f
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 47414 12a81a8e
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/animclips.txt 48 e7a29ebe
+  file Data/globalgamemanagers 648 c4c85013
+  file Data/level0 45720 ac8e9e7b
+  file Data/resources.assets 59272 71c01bf8
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 1872 181f94af
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12056 49ba1d31
+  file Data/sharedassets3.assets.resS 604688 bac431c5
+== again
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: 0 shaders given GLES3 programs (0 programs, 0 subprograms) in 0 files; 0 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] == settings
+  | [t] == textures
+  | [t] textures: no ASTC guide at /tmp/pmu-convert-golden/src/astc_guide_fast.bin
+  | [t] textures: 0 converted (0 -> 0 MB), 0 atlas entries and 0 sprites follow their scaled textures
+  | [t] == audio
+  | [t] audio: 3 clips kept compressed in memory (63.7 MiB of PCM), 4 decompressed on load as the game has them (6.5 MiB); budget 16 MiB a scene, the most a scene holds 13.3 MiB (scene 0)
+  | [t] == animclips
+  | [t] done
+stderr
+  file Data/.pmunity.json 1346 6fddb56f
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 47414 12a81a8e
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/animclips.txt 48 e7a29ebe
+  file Data/globalgamemanagers 648 c4c85013
+  file Data/level0 45720 ac8e9e7b
+  file Data/resources.assets 59272 71c01bf8
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 1872 181f94af
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12056 49ba1d31
+  file Data/sharedassets3.assets.resS 604688 bac431c5
+== resumed
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: 0 shaders given GLES3 programs (0 programs, 0 subprograms) in 0 files; 0 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] == settings
+  | [t] settings: graphics APIs [11, 17], mouse events off, input axes 6 -> 4
+  | [t] == textures
+  | [t] textures: no ASTC guide at /tmp/pmu-convert-golden/src/astc_guide_fast.bin
+  | [t] textures: sharedassets3.assets: 2 -> 0 MB (5/7)
+  | [t] textures: StreamingAssets/AssetBundles/atlas_main: 0 -> 0 MB (6/7)
+  | [t] textures: 6 converted (2 -> 0 MB), 2 atlas entries and 2 sprites follow their scaled textures
+  | [t] textures: guided blocks: one colour 0.0 %, fitted 0.0 %, DXT seed 0.0 %, one partition 0.0 %, two partitions 0.6 %, searched 99.4 %
+  | [t] == audio
+  | [t] audio: 3 clips kept compressed in memory (63.7 MiB of PCM), 4 decompressed on load as the game has them (6.5 MiB); budget 16 MiB a scene, the most a scene holds 13.3 MiB (scene 0)
+  | [t] == animclips
+  | [t] animclips: 6 clips, 4 names (S 2, H 2, other 1)
+  | [t] done
+stderr
+  file Data/.pmunity.json 1346 6fddb56f
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 47414 12a81a8e
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/animclips.txt 48 e7a29ebe
+  file Data/globalgamemanagers 648 c4c85013
+  file Data/level0 45720 ac8e9e7b
+  file Data/resources.assets 59272 71c01bf8
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 1872 181f94af
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12056 49ba1d31
+  file Data/sharedassets3.assets.resS 604688 bac431c5
+== from_pmu
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: 0 shaders given GLES3 programs (0 programs, 0 subprograms) in 0 files; 0 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] == settings
+  | [t] == textures
+  | [t] textures: no ASTC guide at /tmp/pmu-convert-golden/src/astc_guide_fast.bin
+  | [t] textures: 0 converted (0 -> 0 MB), 0 atlas entries and 0 sprites follow their scaled textures
+  | [t] == audio
+  | [t] audio: 3 clips kept compressed in memory (63.7 MiB of PCM), 4 decompressed on load as the game has them (6.5 MiB); budget 16 MiB a scene, the most a scene holds 13.3 MiB (scene 0)
+  | [t] == animclips
+  | [t] animclips: 6 clips, 4 names (S 2, H 2, other 1)
+  | [t] done
+stderr
+  file Data/.pmunity.json 1346 6fddb56f
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 47414 12a81a8e
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/animclips.txt 48 e7a29ebe
+  file Data/globalgamemanagers 648 c4c85013
+  file Data/level0 45720 ac8e9e7b
+  file Data/resources.assets 59272 71c01bf8
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 1872 181f94af
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12056 49ba1d31
+  file Data/sharedassets3.assets.resS 604688 bac431c5
+== textures_unscaled
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == textures
+  | [t] textures: no ASTC guide at /tmp/pmu-convert-golden/src/astc_guide_fast.bin
+  | [t] textures: sharedassets3.assets: 2 -> 4 MB (5/7)
+  | [t] textures: StreamingAssets/AssetBundles/atlas_main: 0 -> 0 MB (6/7)
+  | [t] textures: 7 converted (2 -> 4 MB), 0 atlas entries and 0 sprites follow their scaled textures
+  | [t] textures: guided blocks: one colour 0.0 %, fitted 0.1 %, DXT seed 93.9 %, one partition 0.1 %, two partitions 0.5 %, searched 5.4 %
+  | [t] done
+stderr
+  file Data/.pmunity.json 255 4d36f27f
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 287228 6bf7674b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 8984 890aa653
+  file Data/sharedassets3.assets.resS 4243472 6001a0e7
+== textures_search
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == textures
+  | [t] textures: sharedassets3.assets: 2 -> 0 MB (5/7)
+  | [t] textures: StreamingAssets/AssetBundles/atlas_main: 0 -> 0 MB (6/7)
+  | [t] textures: 6 converted (2 -> 0 MB), 2 atlas entries and 2 sprites follow their scaled textures
+  | [t] done
+stderr
+  file Data/.pmunity.json 454 6001f225
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 46855 0c345e04
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12056 49ba1d31
+  file Data/sharedassets3.assets.resS 604688 3da8bf91
+== textures_only
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == textures
+  | [t] textures: no ASTC guide at /tmp/pmu-convert-golden/src/astc_guide_fast.bin
+  | [t] textures: StreamingAssets/AssetBundles/atlas_main: 0 -> 0 MB (1/2)
+  | [t] textures: 2 converted (0 -> 0 MB), 0 atlas entries and 1 sprites follow their scaled textures
+  | [t] textures: guided blocks: one colour 0.0 %, fitted 0.0 %, DXT seed 0.0 %, one partition 0.0 %, two partitions 0.6 %, searched 99.4 %
+  | [t] done
+stderr
+  file Data/.pmunity.json 234 b4d84c76
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 47414 12a81a8e
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== budget_none
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 9 shaders given GLES3 programs (18 programs, 36 subprograms) in 5 files; 1 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs not translated (glcore4x off)
+  | [t] == settings
+  | [t] settings: graphics APIs [11, 17], mouse events off, input axes 6 -> 4
+  | [t] == audio
+  | [t] audio: 5 clips kept compressed in memory (69.8 MiB of PCM), 2 decompressed on load as the game has them (0.5 MiB); every clip of 10 s or longer
+  | [t] == animclips
+  | [t] animclips: 6 clips, 4 names (S 2, H 2, other 1)
+  | [t] done
+stderr
+  file Data/.pmunity.json 951 b08b1fda
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/animclips.txt 48 e7a29ebe
+  file Data/globalgamemanagers 648 c4c85013
+  file Data/level0 45720 ac8e9e7b
+  file Data/resources.assets 59272 cbd6ea58
+  file Data/sharedassets0.assets 15848 31eb9e56
+  file Data/sharedassets1.assets 1872 181f94af
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== budget_float
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 9 shaders given GLES3 programs (18 programs, 36 subprograms) in 5 files; 1 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs not translated (glcore4x off)
+  | [t] == settings
+  | [t] settings: graphics APIs [11, 17], mouse events off, input axes 6 -> 4
+  | [t] == audio
+  | [t] audio: 6 clips kept compressed in memory (70.2 MiB of PCM), 1 decompressed on load as the game has them (0.1 MiB); budget 4.5 MiB a scene, the most a scene holds 6.8 MiB (scene 1)
+  | [t] == animclips
+  | [t] animclips: 6 clips, 4 names (S 2, H 2, other 1)
+  | [t] done
+stderr
+  file Data/.pmunity.json 990 723b2fa1
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/animclips.txt 48 e7a29ebe
+  file Data/globalgamemanagers 648 c4c85013
+  file Data/level0 45720 ac8e9e7b
+  file Data/resources.assets 59272 cbd6ea58
+  file Data/sharedassets0.assets 15848 31eb9e56
+  file Data/sharedassets1.assets 1872 976c081b
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== audio_cfg
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == audio
+  | [t] audio: the clips were chosen with {'pcm_budget_mb': 16, 'compressed_min_s': 2.0, 'resident_scenes': 2, 'lowmem_pcm_budget_mb': None, 'ram_mb': 1024} before; kept (files may be converted already)
+  | [t] audio: 3 clips kept compressed in memory (63.7 MiB of PCM), 4 decompressed on load as the game has them (6.5 MiB); budget 16 MiB a scene, the most a scene holds 13.3 MiB (scene 0)
+  | [t] done
+stderr
+  file Data/.pmunity.json 533 b290b086
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58016 8fba27db
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 1872 181f94af
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== grab_fetch
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: level0: grab_fetch: UI/Blend/Screen: changed 1 SubShader(s) given a copy without their 1 GrabPass(es), 1 programs reading the framebuffer
+  | [t] shaders: level0: grab_fetch: UI/Blend/Offset: skipped SubShader 0: pass 1 program 0 ((no keywords)): texture(_GrabTexture): its u is not the fragment's screen position (0.5 * P.x / P.w + 0.5)
+  | [t] shaders: level0: grab_fetch: UI/Blend/Named: skipped SubShader 0: named GrabPass '_Named' (copied once a frame: not converted)
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 9 shaders given GLES3 programs (18 programs, 36 subprograms) in 5 files; 1 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs not translated (glcore4x off)
+  | [t] shaders: grab_fetch (always): 1 shaders read the framebuffer instead of a GrabPass copy (1 SubShaders, 1 GrabPasses left out, 1 programs); 2 shaders with GrabPasses left as they are
+  | [t] done
+stderr
+  file Data/.pmunity.json 367 0d5de244
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 47032 a1249d16
+  file Data/resources.assets 59272 b2861088
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== grab_fetch_true
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: level0: grab_fetch: UI/Blend/Screen: changed 1 SubShader(s) given a copy without their 1 GrabPass(es), 1 programs reading the framebuffer; they require framebuffer fetch
+  | [t] shaders: level0: grab_fetch: UI/Blend/Offset: skipped SubShader 0: pass 1 program 0 ((no keywords)): texture(_GrabTexture): its u is not the fragment's screen position (0.5 * P.x / P.w + 0.5)
+  | [t] shaders: level0: grab_fetch: UI/Blend/Named: skipped SubShader 0: named GrabPass '_Named' (copied once a frame: not converted)
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 9 shaders given GLES3 programs (18 programs, 36 subprograms) in 5 files; 1 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs not translated (glcore4x off)
+  | [t] shaders: grab_fetch (where Unity reports framebuffer fetch): 1 shaders read the framebuffer instead of a GrabPass copy (1 SubShaders, 1 GrabPasses left out, 1 programs); 2 shaders with GrabPasses left as they are
+  | [t] done
+stderr
+  file Data/.pmunity.json 367 0d5de244
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 47032 5744d0f2
+  file Data/resources.assets 59272 b2861088
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== grab_fetch_names
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: level0: grab_fetch: UI/Blend/Screen: changed 1 SubShader(s) given a copy without their 1 GrabPass(es), 1 programs reading the framebuffer
+  | [t] shaders: level0: grab_fetch: UI/Blend/Offset: skipped SubShader 0: pass 1 program 0 ((no keywords)): texture(_GrabTexture): its u is not the fragment's screen position (0.5 * P.x / P.w + 0.5)
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 9 shaders given GLES3 programs (18 programs, 36 subprograms) in 5 files; 1 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs not translated (glcore4x off)
+  | [t] shaders: grab_fetch (always): 1 shaders read the framebuffer instead of a GrabPass copy (1 SubShaders, 1 GrabPasses left out, 1 programs); 1 shaders with GrabPasses left as they are
+  | [t] done
+stderr
+  file Data/.pmunity.json 367 0d5de244
+  file Data/Resources/unity_builtin_extra 3760 19a940ad
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 47032 a1249d16
+  file Data/resources.assets 59272 b2861088
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== options
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 9 shaders given GLES3 programs (18 programs, 36 subprograms) in 5 files; 1 not translatable; precision highp; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs translated too: 0 programs; 0 SubShaders left out (no ES equivalent); 0 shaders without programs (stripped) given an empty GLES3 blob
+  | [t] == settings
+  | [t] settings: mouse events off, input axes 6 -> 4, audio 24000 Hz
+  | [t] == audio
+  | [t] audio: 3 clips kept compressed in memory (63.7 MiB of PCM), 4 decompressed on load as the game has them (6.5 MiB); budget 16 MiB a scene, the most a scene holds 13.3 MiB (scene 0)
+  | [t] == animclips
+  | [t] animclips: 6 clips, 4 names (S 2, H 2, other 1)
+  | [t] done
+stderr
+  file Data/.pmunity.json 930 a4044ebf
+  file Data/Resources/unity_builtin_extra 3768 1cd83a14
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 6dc4117e
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 40dff9dc
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/animclips.txt 48 e7a29ebe
+  file Data/globalgamemanagers 648 20d2c4c7
+  file Data/level0 45752 52c11dc3
+  file Data/resources.assets 59288 182e127a
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 1872 181f94af
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== defaults
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 10 shaders given GLES3 programs (20 programs, 40 subprograms) in 6 files; 1 not translatable; precision highp; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs translated too: 0 programs; 0 SubShaders left out (no ES equivalent); 0 shaders without programs (stripped) given an empty GLES3 blob
+  | [t] == settings
+  | [t] settings: nothing to change
+  | [t] == audio
+  | [t] audio: 3 clips kept compressed in memory (63.7 MiB of PCM), 4 decompressed on load as the game has them (6.5 MiB); budget 16 MiB a scene, the most a scene holds 13.3 MiB (scene 0)
+  | [t] done
+stderr
+  file Data/.pmunity.json 1027 df4c0a44
+  file Data/Resources/unity_builtin_extra 3768 1cd83a14
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9781 79707ebd
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353562 6dc4117e
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9836 40dff9dc
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 784 62606f27
+  file Data/level0 45752 52c11dc3
+  file Data/resources.assets 59288 182e127a
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 1872 181f94af
+  file Data/sharedassets2.assets 1592 d4d550fc
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== overlay
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == shaders
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 9 shaders given GLES3 programs (18 programs, 36 subprograms) in 5 files; 1 not translatable; precision default-samplers; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs not translated (glcore4x off)
+  | [t] == settings
+  | [t] settings: graphics APIs [11, 17], mouse events off, input axes 6 -> 4
+  | [t] == textures
+  | [t] textures: no ASTC guide at /tmp/pmu-convert-golden/src/astc_guide_fast.bin
+  | [t] textures: sharedassets3.assets: 2 -> 0 MB (5/7)
+  | [t] textures: StreamingAssets/AssetBundles/atlas_main: 0 -> 0 MB (6/7)
+  | [t] textures: 6 converted (2 -> 0 MB), 2 atlas entries and 2 sprites follow their scaled textures
+  | [t] textures: guided blocks: one colour 0.0 %, fitted 0.0 %, DXT seed 0.0 %, one partition 0.0 %, two partitions 0.6 %, searched 99.4 %
+  | [t] == audio
+  | [t] audio: 3 clips kept compressed in memory (63.7 MiB of PCM), 4 decompressed on load as the game has them (6.5 MiB); budget 16 MiB a scene, the most a scene holds 13.3 MiB (scene 0)
+  | [t] == animclips
+  | [t] animclips: 6 clips, 4 names (S 2, H 2, other 1)
+  | [t] done
+stderr
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+  file Out/.pmunity.json 1346 6fddb56f
+  file Out/Resources/unity_builtin_extra 3760 19a940ad
+  file Out/StreamingAssets/AssetBundles/atlas_main 47414 12a81a8e
+  file Out/StreamingAssets/AssetBundles/tmpfont_big 353562 96203848
+  file Out/StreamingAssets/AssetBundles/tmpfont_main 9836 c2d99d5d
+  file Out/animclips.txt 48 e7a29ebe
+  file Out/globalgamemanagers 648 c4c85013
+  file Out/level0 45720 ac8e9e7b
+  file Out/resources.assets 59272 71c01bf8
+  file Out/sharedassets1.assets 1872 181f94af
+  file Out/sharedassets2.assets 1592 d4d550fc
+  file Out/sharedassets3.assets 12056 49ba1d31
+  file Out/sharedassets3.assets.resS 604688 bac431c5
+== unknown_step
+status 1
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == settings
+  | [t] settings: graphics APIs [11, 17], mouse events off, input axes 6 -> 4
+stderr
+  | unknown step nope; steps: shaders, textures, settings, audio, quality, video, lazy, lazyref, exactindex, fmodcatalogs, animclips
+  file Data/.pmunity.json 74 e6338744
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 648 c4c85013
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== no_data
+status 1
+stdout
+stderr
+  | Missing: no globalgamemanagers, mainData or data.unity3d (not a Unity data folder?)
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== edits
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == settings
+  | [t] settings: nothing to change
+  | [t] == tweaks
+  | [t] tweaks: Resources/unity_builtin_extra: 0 object(s) edited
+  | [t] tweaks: StreamingAssets/AssetBundles/atlas_main: 0 object(s) edited
+  | [t] tweaks: StreamingAssets/AssetBundles/atlas_other: 1 object(s) edited
+  | [t] tweaks: StreamingAssets/AssetBundles/tmpfont_big: 1 object(s) edited
+  | [t] tweaks: StreamingAssets/AssetBundles/tmpfont_main: 1 object(s) edited
+  | [t] tweaks: StreamingAssets/AssetBundles/tmpfont_ready: 1 object(s) edited
+  | [t] tweaks: StreamingAssets/AssetBundles/ui_bundle: 0 object(s) edited
+  | [t] tweaks: globalgamemanagers: 2 object(s) edited
+  | [t] tweaks: level0: 0 object(s) edited
+  | [t] tweaks: resources.assets: 1 object(s) edited
+  | [t] tweaks: sharedassets0.assets: 0 object(s) edited
+  | [t] tweaks: sharedassets1.assets: 0 object(s) edited
+  | [t] tweaks: sharedassets2.assets: 0 object(s) edited
+  | [t] tweaks: sharedassets3.assets: 0 object(s) edited
+  | [t] tweaks: 17 file(s), 7 object(s) edited
+  | [t] == none
+  | [t] none: 0 file(s), 0 object(s) edited
+  | [t] done
+stderr
+  file Data/.pmunity.json 531 9112a013
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9600 316dd71c
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353382 16e0c1ac
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9656 f20bb4fc
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9622 41b93fde
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 784 d20e4a6d
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58016 3107a2ab
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== edits_again
+status 0
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == tweaks
+  | [t] tweaks: 17 file(s), 0 object(s) edited
+  | [t] == shaders
+  | [t] shaders: resources.assets: Custom/Bad: skipped program 0: FRAGMENT: fixed-function built-in 'gl_FragColor'
+  | [t] shaders: 10 shaders given GLES3 programs (20 programs, 40 subprograms) in 6 files; 1 not translatable; precision highp; rewrites: 0 stages (none)
+  | [t] shaders: 1 programs need GLSL ES 3.10 (multisampled textures, texture gather, bit-field functions, storage buffers, binding points, images): GLES 3.1 programs, used where the device has OpenGL ES 3.1+
+  | [t] shaders: GLCore41/43 programs translated too: 0 programs; 0 SubShaders left out (no ES equivalent); 0 shaders without programs (stripped) given an empty GLES3 blob
+  | [t] done
+stderr
+  file Data/.pmunity.json 953 74602a77
+  file Data/Resources/unity_builtin_extra 3768 1cd83a14
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9787 53ef1a6e
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353568 2bdafa3a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 9842 30e10c3d
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9622 41b93fde
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 784 d20e4a6d
+  file Data/level0 45752 52c11dc3
+  file Data/resources.assets 59288 525ae775
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== edits_bad_path
+status 1
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == oops
+stderr
+  | plugin /tmp/pmu-convert-golden/src/edits_bad.json: step oops: globalgamemanagers: AudioManager (path id 3): m_Volume.x: x: m_Volume is not a struct or a list
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== edits_bad_kind
+status 1
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == kind
+stderr
+  | plugin /tmp/pmu-convert-golden/src/edits_bad.json: step kind: globalgamemanagers: AudioManager (path id 3): m_RealVoiceCount: an integer, not a number
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== edits_bad_range
+status 1
+stdout
+  | data: Unity 2017.4.9f1
+  | [t] == range
+stderr
+  | pmu: convert: error: m_RealVoiceCount: 9999999999 out of range
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== edits_mono
+status 1
+stdout
+  | data: Unity 2017.4.9f1
+stderr
+  | plugin /tmp/pmu-convert-golden/src/edits_mono.json: step x, edit 0: MonoBehaviour fields need the game's assemblies (a Python plugin)
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b
+== edits_broken
+status 1
+stdout
+  | data: Unity 2017.4.9f1
+stderr
+  | plugin /tmp/pmu-convert-golden/src/edits_broken.json: Expecting value: line 2 column 1 (char 18)
+  file Data/Resources/unity_builtin_extra 3140 7c99e66f
+  file Data/StreamingAssets/AssetBundles/atlas_main 298646 22b9e07b
+  file Data/StreamingAssets/AssetBundles/atlas_other 9691 cdbc54af
+  file Data/StreamingAssets/AssetBundles/tmpfont_big 353469 0d1cc6de
+  file Data/StreamingAssets/AssetBundles/tmpfont_main 11448 dd27895a
+  file Data/StreamingAssets/AssetBundles/tmpfont_main.manifest 23 fbf83525
+  file Data/StreamingAssets/AssetBundles/tmpfont_ready 9707 45a8ff8b
+  file Data/StreamingAssets/AssetBundles/tmpfont_text 13 7e7d9a7b
+  file Data/StreamingAssets/AssetBundles/ui_bundle 17384 6e8e13d9
+  file Data/globalgamemanagers 780 3be8f1d8
+  file Data/level0 42716 03f2e9bf
+  file Data/resources.assets 58428 a558a09e
+  file Data/sharedassets0.assets 16180 a097b468
+  file Data/sharedassets1.assets 2012 f6e88af0
+  file Data/sharedassets2.assets 1720 d3e656c7
+  file Data/sharedassets3.assets 12488 9b0f8d4d
+  file Data/sharedassets3.assets.resS 2142224 62062c3b

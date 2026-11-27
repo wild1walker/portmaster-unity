@@ -14,16 +14,16 @@ use crate::{fail, io_at, py, Error, Result};
 pub const PREFIX: &str = "assets/AssetBundles/";
 
 /// The first two paragraphs of patch_obb.py's docstring: what it prints on wrong arguments.
-pub const USAGE: &str = "`python -m pmunity patch-obb`: asset bundles added to an installed game as its patch OBB.
-    python -m pmunity patch-obb new <bundles dir> <game dir>     the bundles the game does not have yet
-    python -m pmunity patch-obb ggm <game dir> <out file>        the game's globalgamemanagers (its
-                                                                 Unity version, for `convert`)
-    python -m pmunity patch-obb pack <bundles dir> <game dir>    patch.<version>.<package>.obb
-    python -m pmunity patch-obb check <names file> <bundles dir>... [--game <game dir>]
-                                                                 exits 3 when a copy stopped early: a
-                                                                 bundle shorter than its header says,
-                                                                 or some of the add-on's bundles (the
-                                                                 names file) there and some not";
+pub const USAGE: &str = "`pmu patch-obb`: asset bundles added to an installed game as its patch OBB.
+    pmu patch-obb new <bundles dir> <game dir>     the bundles the game does not have yet
+    pmu patch-obb ggm <game dir> <out file>        the game's globalgamemanagers (its
+                                                   Unity version, for `convert`)
+    pmu patch-obb pack <bundles dir> <game dir>    patch.<version>.<package>.obb
+    pmu patch-obb check <names file> <bundles dir>... [--game <game dir>]
+                                                   exits 3 when a copy stopped early: a
+                                                   bundle shorter than its header says,
+                                                   or some of the add-on's bundles (the
+                                                   names file) there and some not";
 
 /// The built game's android_package.json.
 pub fn package(game: &str) -> Result<Value> {
@@ -426,6 +426,6 @@ mod tests {
     fn usage() {
         let e = main(&["new".into()]).unwrap_err();
         assert_eq!(e.status(), 1);
-        assert!(e.to_string().starts_with("`python -m pmunity patch-obb`"));
+        assert!(e.to_string().starts_with("`pmu patch-obb`"));
     }
 }

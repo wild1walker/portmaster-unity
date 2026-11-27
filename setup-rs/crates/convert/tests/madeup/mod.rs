@@ -1251,7 +1251,7 @@ pub const CUPHEAD_JSON: &str = r#"{
 "#;
 
 /// Scene bundles with streamed textures (android-data's inlining of a bundle of several
-/// serialized files, tests/golden/inline_scenes.sh): `tex_scene` (the shared assets' textures
+/// serialized files, the retired tests/golden/inline_scenes.sh (git show 2147a04:setup-rs/tests/golden/inline_scenes.sh)): `tex_scene` (the shared assets' textures
 /// stream from their .resS, the scene's from its own, a stream nothing reads), `tex_shared` (the
 /// scene's texture streams from the shared assets' .resS too).
 pub fn scene_bundles(db: &ClassDb, dir: &Path) {

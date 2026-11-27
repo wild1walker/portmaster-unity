@@ -213,17 +213,17 @@ fn decide_routes(repo: &Repo, rep: &mut Dict) -> port::Result<()> {
     why.extend(hdrp.clone());
     if mono && build == "windows" && !data.is_empty() && androiddata::winbcl::is_win32_profile(&join(&data, "Managed")) {
         needs.push("Windows-only class libraries (unityjit-win32, Unity 2021.2+): the setup takes the Unix ones from the port's \
-                    Mono donor (`pmunity winbcl --donor`): those its own build carries (mscorlib, System, System.Core, ...); the \
+                    Mono donor (`pmu winbcl --donor`): those its own build carries (mscorlib, System, System.Core, ...); the \
                     game's others stay the Windows ones (named in patchlog.txt)".into());
     }
     let vv = if v.is_empty() { None } else { UV::Version::parse(&v).ok() };
     let unity6 = vv.as_ref().is_some_and(|x| x.line() >= (6000, 0));
     if mono && unity6 && !data.is_empty() && !compressed && !isfile(&joins(&[&data, "Managed", "netstandard.dll"])) {
         needs.push("no netstandard.dll, which every Android engine module of Unity 6 references: the setup adds Unity's own \
-                    facade of this version from the port's Mono donor (`pmunity winbcl --donor`)".into());
+                    facade of this version from the port's Mono donor (`pmu winbcl --donor`)".into());
     }
     if compressed {
-        needs.push("a compressed build: the setup unpacks it first (pmunity unpack)".into());
+        needs.push("a compressed build: the setup unpacks it first (pmu unpack)".into());
     }
     if !v.is_empty() {
         needs.push(donor_need(&v, "mono", "armeabi-v7a"));
@@ -245,7 +245,7 @@ fn decide_routes(repo: &Repo, rep: &mut Dict) -> port::Result<()> {
     why.extend(hdrp.clone());
     let mut needs = Vec::new();
     if why.is_empty() {
-        needs.push("the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmunity il2cpp --on-device`): one to \
+        needs.push("the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to \
                     a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools \
                     and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries \
                     (the one route whose setup downloads)".to_string());
@@ -276,7 +276,7 @@ fn decide_routes(repo: &Repo, rep: &mut Dict) -> port::Result<()> {
     why.extend(hdrp);
     let mut needs = Vec::new();
     if why.is_empty() {
-        needs.push("the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmunity port package` \
+        needs.push("the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` \
                     runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)".to_string());
         needs.push("tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0".into());
         if net35 {
@@ -563,7 +563,7 @@ pub fn check(repo: &Repo, path: &str, asmpatch: Option<&str>, deep: bool, log: L
     let mut d = survey_data(&data, deep && !compressed);
     if compressed {
         push(&mut d, "notes", s("a compressed build: its settings read from data.unity3d; scenes, textures and video are read \
-                                 after `pmunity unpack`"));
+                                 after `pmu unpack`"));
     }
     for n in d.list("notes").to_vec() {
         push(&mut rep, "notes", n);

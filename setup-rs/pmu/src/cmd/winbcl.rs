@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 pub fn run(args: &[String]) -> ExitCode {
     let p = Parser {
-        prog: "python -m pmunity.winbcl",
+        prog: "pmu winbcl",
         positionals: &["data", "out"],
         opts: vec![
             val("--version"),

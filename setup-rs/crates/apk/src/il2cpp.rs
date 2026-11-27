@@ -19,7 +19,7 @@ const GUID: &str = "assets/bin/Data/unity_app_guid";
 const ZIP64_LIMIT: u64 = (1 << 31) - 1;
 const FILECOUNT_LIMIT: usize = (1 << 16) - 1;
 
-/// The `--il2cpp` options apk.py hands `pmunity il2cpp` ({home, pkg, jobs, on_device, toolchain,
+/// The `--il2cpp` options apk.py hands `pmu il2cpp` ({home, pkg, jobs, on_device, toolchain,
 /// link_xml, strip, keep_cpp}).
 #[derive(Debug, Clone, Default)]
 pub struct Il2cppOpts {

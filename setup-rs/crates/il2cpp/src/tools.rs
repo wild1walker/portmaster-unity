@@ -131,7 +131,7 @@ pub fn editor_installer(version: &str) -> Result<String> {
         }
     }
     exit(format!(
-        "Unity does not list version {version} (check `python -m pmunity version <data>`)"
+        "Unity does not list version {version} (check `pmu version <data>`)"
     ))
 }
 

@@ -10,5 +10,5 @@
     "README.md": "README.port.md",
     "package.sh": {"template": "package.sh", "mode": "755"}
   },
-  "package": ["ua_host_arm64", "pmu?", "pmunity?", "pybundle?", "asmpatch?", "pmhlslcc?", "pmspirvcross?"]
+  "package": ["ua_host_arm64", "pmu", "asmpatch?", "pmhlslcc?", "pmspirvcross?"]
 }

@@ -9,6 +9,7 @@ use std::io;
 
 pub mod arch;
 pub mod cpio;
+pub mod host;
 pub mod http;
 pub mod macpkg;
 pub mod nsis;

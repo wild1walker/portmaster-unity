@@ -223,35 +223,6 @@ pub fn gameinfo_image(gi: &str) -> Option<&str> {
     None
 }
 
-/// The setup's Python bundle's licences: `^python/lib/python3\.\d+/LICENSE\.txt$` or
-/// `/site-packages/[^/]+\.dist-info/(LICEN[CS]E[^/]*|licenses/.+|COPYING[^/]*)$`.
-pub fn pybundle_license(n: &str) -> bool {
-    let n = dollar(n);
-    if let Some(r) = n.strip_prefix("python/lib/python3.") {
-        let d = r.bytes().take_while(u8::is_ascii_digit).count();
-        if d > 0 && &r[d..] == "/LICENSE.txt" {
-            return true;
-        }
-    }
-    for (i, _) in n.match_indices("/site-packages/") {
-        let r = &n[i + 15..];
-        let Some(s) = r.find('/') else { continue };
-        let (pkg, rest) = (&r[..s], &r[s + 1..]);
-        // [^/]+\.dist-info: the folder's name ends with .dist-info, before it at least one character
-        if !(pkg.len() > 10 && pkg.ends_with(".dist-info")) {
-            continue;
-        }
-        let f = rest;
-        let ok = (f.starts_with("LICENSE") || f.starts_with("LICENCE")) && !f.contains('/')
-            || f.strip_prefix("licenses/").is_some_and(|x| !x.is_empty() && !x.contains('\n'))
-            || f.starts_with("COPYING") && !f.contains('/');
-        if ok {
-            return true;
-        }
-    }
-    false
-}
-
 /// `re.sub(r'\s+', ' ', s.replace('_', ' ')).strip()`
 pub fn title_case(s: &str) -> String {
     let mut out = String::new();
@@ -339,10 +310,6 @@ mod tests {
         assert!(quoted_gptokeyb("\"$GPTOKEYB2\" \"x\"") && quoted_gptokeyb("\"${GPTOKEYB}\"") && !quoted_gptokeyb("$GPTOKEYB2 \"x\""));
         assert!(markdown("a **b**") && markdown("see [x](y)") && markdown("x\n - y") && !markdown("plain [x] (y)"));
         assert_eq!(gameinfo_image("<image>./g/cover.png</image>"), Some("cover.png"));
-        assert!(pybundle_license("python/lib/python3.12/LICENSE.txt"));
-        assert!(pybundle_license("python/lib/python3.12/site-packages/a-1.dist-info/LICENSE"));
-        assert!(pybundle_license("python/lib/python3.12/site-packages/a-1.dist-info/licenses/x/COPYING"));
-        assert!(!pybundle_license("python/lib/python3.12/site-packages/a/LICENSE"));
         assert_eq!(title_case(" my_game  x "), "my game x");
         assert_eq!(shquote("a b'c"), "'a b'\"'\"'c'");
         assert_eq!(shquote("start:escape,x:space"), "start:escape,x:space");

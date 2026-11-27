@@ -1,7 +1,7 @@
 //! The convert job on made-up data (tests/madeup): Cuphead's steps (textures apart) and what each
 //! leaves in the files and the journal, a second run that finds everything done, and a run
 //! killed between the renames of files committed together. Comparing with the Python's output
-//! on the same data is tests/golden/convert_madeup.sh. Needs $PMU_TPK (skipped without).
+//! on the same data is the retired tests/golden/convert_madeup.sh (git show 2147a04:setup-rs/tests/golden/convert_madeup.sh). Needs $PMU_TPK (skipped without).
 mod madeup;
 
 use convert::cli::{self, Cli};

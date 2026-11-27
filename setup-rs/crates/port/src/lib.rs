@@ -9,13 +9,12 @@
 use std::path::{Path, PathBuf};
 
 pub mod config;
-pub mod host;
+pub use pkgzip::host;
 pub mod new;
 pub mod package;
 pub mod pyjson;
 pub mod routes;
 pub mod rx;
-pub mod tar;
 pub mod text;
 pub mod toml;
 pub mod val;
@@ -57,10 +56,6 @@ impl Repo {
             }
         }
         None
-    }
-
-    pub fn pmunity(&self) -> PathBuf {
-        self.root.join("convert").join("pmunity")
     }
 
     pub fn templates(&self) -> PathBuf {

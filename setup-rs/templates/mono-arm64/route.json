@@ -19,9 +19,7 @@
   "package": [
     "ua_host_arm64",
     "mono64",
-    "pmu?",
-    "pmunity?",
-    "pybundle?",
+    "pmu",
     "asmpatch?",
     "pmhlslcc?",
     "pmspirvcross?"

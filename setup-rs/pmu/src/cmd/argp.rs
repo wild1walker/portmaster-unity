@@ -49,7 +49,7 @@ pub const fn choice(name: &'static str, choices: &'static [&'static str]) -> Opt
     }
 }
 
-/// A parser: the program name argparse prints (`pmunity unpack`), the positionals, the options.
+/// A parser: the program name argparse prints (`pmu unpack`), the positionals, the options.
 pub struct Parser {
     pub prog: &'static str,
     pub positionals: &'static [&'static str],

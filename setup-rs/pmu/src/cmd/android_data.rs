@@ -17,7 +17,7 @@ pub fn say(e: androiddata::Stop) -> u8 {
         Stop::Exit(m) => eprintln!("{m}"),
         Stop::Fail(m) => eprintln!("pmu: error: {m}"),
         Stop::NotPorted(m) => eprintln!(
-            "pmu: android-data: not ported yet: {m} (run `python -m pmunity android-data`)"
+            "pmu: android-data: not ported yet: {m} (pmu does not do it)"
         ),
         Stop::Status(_) => {}
         Stop::Full(m) => {

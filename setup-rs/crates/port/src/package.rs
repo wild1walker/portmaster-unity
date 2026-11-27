@@ -61,7 +61,6 @@ pub struct PackOpts {
     pub ua_host_arm64: Option<String>,
     pub media_licenses: Option<String>,
     pub media_licenses_arm64: Option<String>,
-    pub pybundle: Option<String>,
     pub pmu: Option<String>,
     pub asmpatch_bin: Option<String>,
     pub pmhlslcc_bin: Option<String>,
@@ -271,29 +270,6 @@ pub fn stale_build(stale: &mut Vec<String>, what: &str, built: &Path, root: &Pat
     }
 }
 
-/// One text with the licences inside the setup's Python bundle.
-pub fn pybundle_licenses(tar_path: &str) -> Result<String> {
-    let mut parts: Vec<String> = vec![
-        "The setup's Python (removed from the handheld when the setup is done): python-build-standalone's".into(),
-        "CPython and these packages. Their licences follow.".into(),
-    ];
-    for m in crate::tar::members(tar_path)? {
-        if !m.is_file || !rx::pybundle_license(&m.name) {
-            continue;
-        }
-        let rel = match m.name.strip_prefix("python/lib/python3.") {
-            Some(r) => {
-                let d = r.bytes().take_while(u8::is_ascii_digit).count();
-                if d > 0 && r[d..].starts_with('/') { r[d + 1..].to_string() } else { m.name.clone() }
-            }
-            None => m.name.clone(),
-        };
-        parts.push(format!("\n\n==== {rel} ====\n"));
-        parts.push(String::from_utf8_lossy(&m.data).into_owned());
-    }
-    Ok(parts.join("\n"))
-}
-
 // ---- the components a route's release takes (route.json "package")
 
 fn ua_host_part(ctx: &mut PackCtx, o: &UaOpts, dst: &str, suffix: &str) -> Result<()> {
@@ -426,8 +402,6 @@ fn component(ctx: &mut PackCtx, c: &str, opts: &PackOpts) -> Result<bool> {
         }
         "ua_host_arm64" => ua_host_arm64_part(ctx, opts, "ua_host", "")?,
         "ua_host64" => ua_host_arm64_part(ctx, opts, "ua_host64", ".ua_host64")?,
-        "pmunity" => pmunity_part(ctx)?,
-        "pybundle" => pybundle_part(ctx, opts)?,
         "pmu" => pmu_part(ctx, opts)?,
         "asmpatch" => asmpatch_part(ctx, opts)?,
         "pmhlslcc" => tool_part(ctx, opts, "pmhlslcc")?,
@@ -441,42 +415,8 @@ fn component(ctx: &mut PackCtx, c: &str, opts: &PackOpts) -> Result<bool> {
 fn is_component(c: &str) -> bool {
     matches!(
         c,
-        "ua_host" | "ua_host_arm64" | "ua_host64" | "pmunity" | "pybundle" | "pmu" | "asmpatch" | "pmhlslcc" | "pmspirvcross" | "mono64"
+        "ua_host" | "ua_host_arm64" | "ua_host64" | "pmu" | "asmpatch" | "pmhlslcc" | "pmspirvcross" | "mono64"
     )
-}
-
-/// The converter (convert/pmunity's .py and .shader files) as setup/pmunity, and the NDK stand-in.
-fn pmunity_part(ctx: &mut PackCtx) -> Result<()> {
-    let src = ctx.repo.pmunity();
-    let top = src.parent().unwrap().to_path_buf();
-    fn walk(d: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-        let mut ents: Vec<(String, bool)> = fs::read_dir(d)
-            .map_err(io_at(d))?
-            .filter_map(|e| e.ok())
-            .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path().is_dir()))
-            .collect();
-        ents.sort();
-        for (n, isdir) in &ents {
-            if !isdir && (n.ends_with(".py") || n.ends_with(".shader")) && !mac_junk(n) {
-                out.push(d.join(n));
-            }
-        }
-        for (n, isdir) in &ents {
-            if *isdir && n != "__pycache__" && n != "port_template" {
-                walk(&d.join(n), out)?;
-            }
-        }
-        Ok(())
-    }
-    let mut files = Vec::new();
-    walk(&src, &mut files)?;
-    for f in files {
-        let rel = relpath(&f, &top);
-        ctx.add(&f, &format!("setup/{rel}"), None)?;
-    }
-    let ndk = ctx.repo.root.join("tools/il2cpp/ndk-clang.sh");
-    ctx.add(&ndk, "setup/tools/il2cpp/ndk-clang.sh", Some(0o755))?;
-    Ok(())
 }
 
 fn pmu_part(ctx: &mut PackCtx, opts: &PackOpts) -> Result<()> {
@@ -514,26 +454,6 @@ fn pmu_part(ctx: &mut PackCtx, opts: &PackOpts) -> Result<()> {
         ctx.license_file(&n, &d.join("licenses").join(&n))?;
     }
     Ok(())
-}
-
-fn pybundle_part(ctx: &mut PackCtx, opts: &PackOpts) -> Result<()> {
-    let p = match given(&opts.pybundle, Some("PYBUNDLE")) {
-        Some(p) => PathBuf::from(p),
-        None => {
-            let p = ctx.repo.root.join("tools/port/out/python.tar.gz");
-            if !p.is_file() {
-                if opts.no_build {
-                    return Err(exit("the setup's Python: --pybundle FILE (tools/port/build_pybundle.sh builds it)"));
-                }
-                let b = ctx.repo.root.join("tools/port/build_pybundle.sh");
-                ctx.run("building the setup's Python (tools/port/build_pybundle.sh)", Command::new(b).arg(&p))?;
-            }
-            p
-        }
-    };
-    ctx.add(&p, "setup/python.tar.gz", None)?;
-    let text = pybundle_licenses(&ps(&p))?;
-    ctx.license_text("LICENSE.setup-python.txt", &text)
 }
 
 fn version_key(v: &str) -> Vec<u64> {
@@ -1080,11 +1000,11 @@ fn write_submission(ctx: &PackCtx, out: &Path, launcher: &str, imgs: &[(&str, Op
 pub fn package(repo: &Repo, port_src: &str, opts: &PackOpts, log: &mut dyn FnMut(&str)) -> Result<PathBuf> {
     let port_src = abspath(Path::new(port_src));
     if std::env::var("PMUNITY_PORT_HOOKS").is_ok_and(|h| h.split(',').any(|m| !m.is_empty())) {
-        return Err(exit("PMUNITY_PORT_HOOKS: pmu port runs no Python hook modules (run `python -m pmunity port package`)"));
+        return Err(exit("PMUNITY_PORT_HOOKS: hook modules went with the Python packager (a port's own build steps: port.toml [build])"));
     }
     let bj = port_src.join("port.build.json");
     if !bj.is_file() {
-        return Err(exit(format!("{}: no port.build.json (make the port with `pmunity port new` first)", port_src.display())));
+        return Err(exit(format!("{}: no port.build.json (make the port with `pmu port new` first)", port_src.display())));
     }
     let build = pyjson::loads(&read_text(&bj)?)?;
     let bd = build.as_dict().cloned().unwrap_or_default();
@@ -1102,6 +1022,13 @@ pub fn package(repo: &Repo, port_src: &str, opts: &PackOpts, log: &mut dyn FnMut
     if a64 && !AARCH64_ROUTES.contains(&rname.as_str()) {
         return Err(exit(format!(
             "port.aarch64_only: this port folder was made for the {rname} route (an armhf setup and player): run `port new` again, which takes the mono-arm64 route"
+        )));
+    }
+    let (covers, why) = crate::text::pmu_covers(&cfg);
+    if !covers {
+        return Err(exit(format!(
+            "the setup's tools (pmu) do not do what this port needs: {}; the setup's Python that did is retired (docs/porting.md)",
+            why.join(", ")
         )));
     }
     let zipdir = out.join("zip");

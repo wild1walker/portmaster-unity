@@ -197,7 +197,7 @@ pub struct Args {
 }
 
 pub const USAGE: &str =
-    "usage: pmunity android-data [-h] --src SRC [--pkg PKG] [--out OUT] [--name NAME]
+    "usage: pmu android-data [-h] --src SRC [--pkg PKG] [--out OUT] [--name NAME]
                              [--platform-patch {data,none}]
                              [--graphics-apis GRAPHICS_APIS]
                              [--mt-rendering {keep,on,off}]

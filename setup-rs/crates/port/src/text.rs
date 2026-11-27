@@ -23,8 +23,8 @@ pub fn route_text(route: &str) -> Option<&'static str> {
         "android" => "Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime",
         "il2cpp-arm64" => "the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)",
         "mono-arm64" => "the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)",
-        "box64" => "the game's own x86-64 Linux player under box64 (tools/box64, `pmunity route`)",
-        "apk" => "the game's own Android build (`pmunity apk`)",
+        "box64" => "the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)",
+        "apk" => "the game's own Android build (`pmu apk`)",
         _ => return None,
     })
 }
@@ -75,7 +75,6 @@ fn build_step(c: &str) -> Option<&'static str> {
         "ua_host" => "runtime/build.sh                                            # ua_host, the 32-bit runtime (Docker)",
         "ua_host_arm64" => "ARCH=arm64 runtime/build.sh                                 # ua_host, the 64-bit runtime (Docker)",
         "ua_host64" => "ARCH=arm64 runtime/build.sh                                 # ua_host64, the 64-bit runtime (Docker)",
-        "pybundle" => "tools/port/build_pybundle.sh tools/port/out/python.tar.gz   # the setup's Python, aarch64 (Docker)",
         "pmu" => "setup-rs/tools/build_pmu.sh tools/port/out/pmu               # the setup's tools, pmu, aarch64 (Docker)",
         "asmpatch" => "tools/asmpatch/build.sh                                     # asmpatch (.NET 8 SDK)",
         "pmhlslcc" => "ARCH=arm64 tools/hlslcc/build.sh                            # pmhlslcc, HLSLcc for the setup, aarch64 (Docker)",
@@ -125,7 +124,7 @@ pub fn setup_env(cfg: &Dict, extra: &[String], sections: Option<&[Val]>) -> Stri
     let a = ad.get("asmpatch");
     let int0 = |k: &str| Val::int_or0(g.get(k)).unwrap_or(0);
     let mut lines: Vec<String> = vec![
-        "# Written by `pmunity port new` from port.toml: the setup's settings (sourced by patchscript).".into(),
+        "# Written by `pmu port new` from port.toml: the setup's settings (sourced by patchscript).".into(),
         format!("PORT_NAME={}", qv(p.get("name"))),
         format!("PORT_TITLE={}", qv(p.get("title"))),
         format!("PORT_ROUTE={}", qv(p.get("route"))),
@@ -831,7 +830,6 @@ pub fn wants(part: &str, cfg: &Dict) -> bool {
         "pmhlslcc" => needs_pmhlslcc(cfg),
         "pmspirvcross" => needs_pmspirvcross(cfg),
         "pmu" => pmu,
-        "pmunity" | "pybundle" => !pmu,
         "ua_host" => (abis.is_empty() || has("armeabi-v7a")) && !cfg.dict("port").truthy("aarch64_only"),
         "ua_host64" => abis.is_empty() || has("arm64-v8a") || pl.truthy("il2cpp"),
         _ => true,

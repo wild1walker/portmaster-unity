@@ -1,6 +1,6 @@
 //! Golden test: texcodec against the Python's own textures step on real game data.
 //!
-//! setup-rs/tests/golden/textures_golden.py dumps, for each Texture2D the step looks at, its
+//! the retired setup-rs/tests/golden/textures_golden.py (git show 2147a04:setup-rs/tests/golden/textures_golden.py) dumps, for each Texture2D the step looks at, its
 //! fields, raw pixels and what textures.py made of it (manifest.jsonl). This test reads such a
 //! dump from $TEXCODEC_GOLDEN and checks every texture: the same decision, and for converted ones
 //! the same new fields and the same bytes (SHA-256 of the data), the same guided-block counts and

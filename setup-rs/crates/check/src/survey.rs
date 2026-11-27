@@ -624,7 +624,7 @@ pub fn survey_data(data: &str, deep: bool) -> Dict {
                 }
             }
             if deep {
-                push(r, "notes", s("a compressed build: its scenes and textures are surveyed after `pmunity unpack <data>` (or pmu unpack)"));
+                push(r, "notes", s("a compressed build: its scenes and textures are surveyed after `pmu unpack <data>` (or pmu unpack)"));
             }
             Ok(())
         };

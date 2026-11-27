@@ -1,6 +1,6 @@
 //! `apk` on made-up builds (convert/tests/test_apk.py's, written here): binary and protobuf
 //! manifests, ABI choice, OBBs, splits and containers, an App Bundle, refusals; the zips it writes
-//! read back (aligned stored data, deflate as zlib's). tests/golden/apk_golden.py compares the
+//! read back (aligned stored data, deflate as zlib's). the retired tests/golden/apk_golden.py (git show 2147a04:setup-rs/tests/golden/apk_golden.py) compares the
 //! whole command with the Python on these and on real builds.
 use std::fs;
 use std::path::{Path, PathBuf};

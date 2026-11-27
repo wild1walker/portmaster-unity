@@ -1399,7 +1399,7 @@ const STUBS: &[&str] = &[
 /// plugins.map for ua_host (runtime/host/plugins.c); Err (ValueError) for an unknown stub.
 pub fn map_text(rep: &Survey, pmap: &Json) -> Result<String, String> {
     let mut lines: Vec<String> = vec![
-        "# plugins.map (pmunity android-data; docs/plugins.md): what the runtime gives each DllImport name".into(),
+        "# plugins.map (pmu android-data; docs/plugins.md): what the runtime gives each DllImport name".into(),
         "#   map <name> lib <file in lib/> | stub <id> | host <system library> | none".into(),
         "#   sig <name> <entry> <result> <args>: argument classes for the softfp thunks of glibc libraries".into(),
     ];
@@ -1647,7 +1647,7 @@ mod tests {
     }
 
     /// PMU_PLUGINS_DATA=<a game's data folder> PMU_PLUGINS_OUT=<file>: its plugins.map with the default
-    /// map, to compare with `python -m pmunity plugins <data> --map <file>` (skipped without them)
+    /// map, to compare with `pmu plugins <data> --map <file>` (skipped without them)
     #[test]
     fn map_of_a_game() {
         let (Ok(data), Ok(out)) = (

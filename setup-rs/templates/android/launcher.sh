@@ -19,7 +19,7 @@ get_controls
 
 # @@TITLE@@ on Unity's own Android player, run natively on the handheld's 32-bit userland by
 # portmaster-unity's ua_host. On the first launch the setup builds the game from your copy in
-# ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmunity port new` (@@ROUTE@@ route).
+# ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmu port new` (@@ROUTE@@ route).
 
 GAMEDIR="/$directory/ports/@@PORTDIR@@"
 cd "$GAMEDIR" || exit 1

@@ -1,6 +1,6 @@
 #!/bin/bash
 # First-run setup on the handheld, run by the launcher through PortMaster's patcher (made with
-# `pmunity port new`, il2cpp-arm64 route): builds the game for Unity's 64-bit (arm64) IL2CPP
+# `pmu port new`, il2cpp-arm64 route): builds the game for Unity's 64-bit (arm64) IL2CPP
 # Android player from the player's own copy in ports/<port>/gamedata/, for systems without a 32-bit
 # userland (Unity's Android Mono players are 32-bit only):
 #   1. the game: its data folder, from the folder or archive (.zip, .7z, .tar.*, macOS .pkg, GOG's
@@ -67,30 +67,15 @@ fi
 export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
 
 # ---- the setup's tools: setup/pmu, one static aarch64 program (portmaster-unity's setup-rs, with
-# the IL2CPP build's tools: the NDK stand-in ndk-clang.sh is built into it); a port whose
-# conversion needs what pmu does not do yet ships the setup's Python instead (CPython + UnityPy and
-# the image/audio libraries, aarch64: setup/python.tar.gz, the converter and tools/il2cpp)
-if [ -f "$S/pmu" ]; then
-  chmod +x "$S/pmu" 2>/dev/null
-  "$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
-  pm() { "$S/pmu" "$@"; }
-else
-  PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
-  if [ -z "$PY" ] || ! "$PY" -c "import UnityPy, lz4, PIL" 2>/dev/null; then
-    step "unpacking the setup tools"
-    rm -rf "$W/python"
-    # (gunzip | tar: some firmwares' BusyBox tar has no -z, e.g. muOS)
-    ( set -o pipefail; gunzip -c "$S/python.tar.gz" | tar -xf - -C "$W" ) || fail "Could not unpack the setup's Python (see patchlog.txt)."
-    PY=$(ls "$W"/python/bin/python3.[0-9]* 2>/dev/null | grep -v -- '-config' | head -1)
-    [ -n "$PY" ] || fail "The setup's Python is incomplete."
-  fi
-  export PYTHONPATH="$S" PYTHONDONTWRITEBYTECODE=1
-  pm() { "$PY" -m pmunity "$@"; }
-fi
+# the IL2CPP build's tools: the NDK stand-in ndk-clang.sh is built into it)
+[ -f "$S/pmu" ] || fail "The setup's tools (setup/pmu) are missing: unzip the port's release again."
+chmod +x "$S/pmu" 2>/dev/null
+"$S/pmu" >/dev/null 2>&1; [ $? = 2 ] || fail "The setup's tools (setup/pmu) do not run on this system (see patchlog.txt)."
+pm() { "$S/pmu" "$@"; }
 
 # convert, run again by itself when the kernel stops it (out of memory: a 1 GB handheld) as long as
 # each run gets further: its journal (<data>/.pmunity.json) names the files done and a new run goes
-# on after them (pmu journal-files counts them; with the setup's Python: 0, no second run)
+# on after them (pmu journal-files counts them)
 pm_convert() {   # pm_convert <data folder> <convert's other arguments>
   local j="$1/.pmunity.json" n rc
   while :; do
@@ -103,7 +88,7 @@ pm_convert() {   # pm_convert <data folder> <convert's other arguments>
 }
 convert_failed() {   # convert_failed <convert's status>: the reason, said so the player can act on it
   case "$1" in
-    2) [ -f "$S/pmu" ] && fail "The setup's tools cannot convert this game's files yet (see patchlog.txt): the port needs the setup's Python.";;
+    2) fail "The setup's tools cannot convert this game's files (see patchlog.txt).";;
     3) fail "The card is too full to convert the game (patchlog.txt says how much it needs): free some space on it, then launch again.";;
     5) fail "The handheld restarted while the conversion wrote its journal, and the setup lost its place: delete ports/$PORT_NAME/gamedata, put $GAME_WHAT in a new gamedata folder and launch again.";;
   esac

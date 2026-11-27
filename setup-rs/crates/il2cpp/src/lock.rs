@@ -68,35 +68,3 @@ pub const PACKAGES: &[Package] = &[
 ];
 
 pub const DOTNET: Dotnet = Dotnet { version: "8.0.32", url: "https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.32/dotnet-runtime-8.0.32-linux-arm64.tar.gz", size: 29918137, sha256: "63e261015861eb65c7b6a13aab0f5f84da1b9213bfb68b3db17c8a02b9a0ce7b" };
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The Python's pins, read from il2cpp_device_lock.py (when the repository is there).
-    #[test]
-    fn same_as_the_python() {
-        let p = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../convert/pmunity/il2cpp_device_lock.py"
-        );
-        let Ok(t) = std::fs::read_to_string(p) else {
-            return;
-        };
-        let mut n = 0;
-        for line in t.lines().filter(|l| l.trim_start().starts_with("{'name'")) {
-            let p = &PACKAGES[n];
-            for v in [p.name, p.group, p.version, p.filename, p.sha256] {
-                assert!(line.contains(&format!("'{v}'")), "{line}");
-            }
-            assert!(line.contains(&format!("'size': {},", p.size)), "{line}");
-            n += 1;
-        }
-        assert_eq!(n, PACKAGES.len());
-        assert!(t.contains(&format!("'snapshot': '{SNAPSHOT}'")));
-        for v in [DOTNET.version, DOTNET.url, DOTNET.sha256] {
-            assert!(t.contains(&format!("'{v}'")));
-        }
-        assert!(t.contains(&format!("'size': {},", DOTNET.size)));
-    }
-}

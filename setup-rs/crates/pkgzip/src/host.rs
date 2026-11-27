@@ -1,4 +1,4 @@
-//! The commands pmu runs for a port's builds, run on the porter's computer when pmu itself runs in
+//! (pkgzip::host; crates/port re-exports it.) The commands pmu runs for a port's builds, run on the porter's computer when pmu itself runs in
 //! a container (setup-rs/tools/pmu.sh): the runtime's and the tools' build scripts (Docker), the
 //! port's own `build.commands`, asmpatch's build (.NET 8 SDK) and its survey. The container has
 //! neither Docker nor .NET; the computer has both, as it had for the Python, which ran there.
@@ -91,11 +91,11 @@ pub fn status(cmd: &mut Command) -> io::Result<ExitStatus> {
     }
 }
 
-/// cmd.output() (stdin closed), on the computer when pmu runs in pmu.sh's container.
+/// cmd.output(), on the computer (stdin closed there) when pmu runs in pmu.sh's container.
 pub fn output(cmd: &mut Command) -> io::Result<Output> {
     match dir() {
         Some(d) => request_in(&d, cmd, true).map(|(status, stdout, stderr)| Output { status, stdout, stderr }),
-        None => cmd.stdin(std::process::Stdio::null()).output(),
+        None => cmd.output(),
     }
 }
 

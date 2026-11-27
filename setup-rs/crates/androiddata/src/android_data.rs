@@ -719,7 +719,7 @@ fn check_source(ctx: &mut Ctx) -> Result<(), Stop> {
     let uns = |m: String| Stop::Exit(m);
     if !is_file(&py::join(&src, "globalgamemanagers")) && is_file(&py::join(&src, "data.unity3d")) {
         return Err(uns(format!(
-            "{src}: a compressed build (data.unity3d): unpack it first with `python -m pmunity unpack {src}`"
+            "{src}: a compressed build (data.unity3d): unpack it first with `pmu unpack {src}`"
         )));
     }
     let v = UV::of_data(&src).map_err(|e| uns(e.0))?;
@@ -800,7 +800,7 @@ fn check_source(ctx: &mut Ctx) -> Result<(), Stop> {
         let ij = py::join(&il, "il2cpp.json");
         if !is_file(&ij) {
             return Err(uns(format!(
-                "--il2cpp {il}: no il2cpp.json (the output folder of `pmunity il2cpp`)"
+                "--il2cpp {il}: no il2cpp.json (the output folder of `pmu il2cpp`)"
             )));
         }
         let b = fs::read(&ij).map_err(io_at(&ij))?;
@@ -1105,7 +1105,7 @@ fn plan(ctx: &mut Ctx) -> Result<Vec<Item>, Stop> {
 
 // ------------------------------------------------------------------- --il2cpp
 
-/// il2cpp_items: the game's code is the libil2cpp.so `pmunity il2cpp` built: instead of
+/// il2cpp_items: the game's code is the libil2cpp.so `pmu il2cpp` built: instead of
 /// Managed/*.dll and Mono's config the player gets what il2cpp wrote for it (Managed/Metadata,
 /// Resources, etc), and the stamp libunity copies it out again by (2020.x: boot.config's
 /// buildDate; 2021.x+: unity_app_guid), both from the metadata.
@@ -1181,7 +1181,7 @@ pub fn il2cpp_app_guid(metadata: &str) -> Result<String, Stop> {
     ))
 }
 
-/// il2cpp_mismatch: why a `pmunity il2cpp` output does not go with this data and player.
+/// il2cpp_mismatch: why a `pmu il2cpp` output does not go with this data and player.
 fn il2cpp_mismatch(
     info: &Json,
     data_unity: &Version,
@@ -1228,7 +1228,7 @@ fn il2cpp_folder_patches(
         if built == "obb" {
             warn.push(format!(
                 "--streaming-assets {streaming_assets}: the IL2CPP build has no streaming-assets patch (its il2cpp.json: obb), \
-                 so the files are beside the APK but the game's code still reads the jar path (`pmunity il2cpp \
+                 so the files are beside the APK but the game's code still reads the jar path (`pmu il2cpp \
                  --streaming-assets {streaming_assets} --asmpatch ...`)"
             ));
         } else {
@@ -1260,7 +1260,7 @@ fn il2cpp_folder_patches(
     if data_path && !built_dp {
         warn.push(format!(
             "--data-path: the IL2CPP build has no data-path patch, so {}/ is beside the APK but the game's code still reads \
-             Application.dataPath (`pmunity il2cpp --data-path --asmpatch ...`)",
+             Application.dataPath (`pmu il2cpp --data-path --asmpatch ...`)",
             ST::FOLDER
         ));
     }
@@ -1350,7 +1350,7 @@ pub fn run(mut args: Args) -> Result<(), Stop> {
         }
         if !given.is_empty() {
             return Err(Stop::Exit(format!(
-                "{} with --il2cpp: the assemblies are compiled into libil2cpp.so, so these go to `pmunity il2cpp` (its options \
+                "{} with --il2cpp: the assemblies are compiled into libil2cpp.so, so these go to `pmu il2cpp` (its options \
                  of the same names), not to android-data",
                 given.join(", ")
             )));
@@ -2136,10 +2136,8 @@ fn patch_command(
             .into_iter()
             .map(|w| w.replace("{managed}", managed).replace("{out}", &td))
             .collect();
-        let r = std::process::Command::new(&words[0])
-            .args(&words[1..])
-            .stdin(std::process::Stdio::inherit())
-            .output()
+        // (on the porter's computer through setup-rs/tools/pmu.sh: run there, pkgzip::host)
+        let r = pkgzip::host::output(std::process::Command::new(&words[0]).args(&words[1..]).stdin(std::process::Stdio::inherit()))
             .map_err(|e| Stop::Fail(format!("{e}: {}", py::str_repr(&words[0]))))?;
         let stdout = String::from_utf8_lossy(&r.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&r.stderr).into_owned();
@@ -2204,9 +2202,7 @@ fn asmpatch_chain(
             paths::shlex_split(cmd).map_err(|e| Stop::Fail(format!("ValueError: {e}")))?;
         words.push(managed.to_string());
         words.push(work.clone());
-        let r = std::process::Command::new(&words[0])
-            .args(&words[1..])
-            .output()
+        let r = pkgzip::host::output(std::process::Command::new(&words[0]).args(&words[1..]))
             .map_err(|e| Stop::Fail(format!("{e}: {}", py::str_repr(&words[0]))))?;
         let stdout = String::from_utf8_lossy(&r.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&r.stderr).into_owned();

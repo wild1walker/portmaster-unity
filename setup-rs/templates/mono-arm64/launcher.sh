@@ -20,7 +20,7 @@ get_controls
 # @@TITLE@@ on Unity's 64-bit (arm64) Android player, its own code run by Unity's Mono built for
 # 64-bit ARM Linux (shipped with the port), natively by portmaster-unity's ua_host: for systems
 # without a 32-bit userland, with no IL2CPP compile. On the first launch the setup builds the game
-# from your copy in ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmunity port new`
+# from your copy in ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmu port new`
 # (@@ROUTE@@ route).
 
 GAMEDIR="/$directory/ports/@@PORTDIR@@"

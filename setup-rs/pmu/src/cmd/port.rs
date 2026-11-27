@@ -37,7 +37,7 @@ fn status(r: port::Result<PathBuf>) -> ExitCode {
 }
 
 pub fn run(args: &[String]) -> ExitCode {
-    let usage = "usage: pmunity port [-h] {check,new,package,routes} ...";
+    let usage = "usage: pmu port [-h] {check,new,package,routes} ...";
     let Some(sub) = args.first() else {
         eprintln!("{usage}\npmunity port: error: the following arguments are required: cmd");
         return ExitCode::from(2);
@@ -63,7 +63,7 @@ pub fn run(args: &[String]) -> ExitCode {
 
 fn new(args: &[String]) -> ExitCode {
     let p = Parser {
-        prog: "pmunity port new",
+        prog: "pmu port new",
         positionals: &["name"],
         opts: vec![
             val("--data"),
@@ -102,7 +102,7 @@ fn new(args: &[String]) -> ExitCode {
 
 fn package(args: &[String]) -> ExitCode {
     let p = Parser {
-        prog: "pmunity port package",
+        prog: "pmu port package",
         positionals: &["port"],
         opts: vec![
             val("--out"),
@@ -110,7 +110,6 @@ fn package(args: &[String]) -> ExitCode {
             val("--runtime"),
             val("--ua-host"),
             val("--media-licenses"),
-            val("--pybundle"),
             val("--pmu"),
             val("--asmpatch-bin"),
             val("--pmhlslcc-bin"),
@@ -135,7 +134,6 @@ fn package(args: &[String]) -> ExitCode {
         donors: s("--donors"),
         ua_host: s("--ua-host"),
         media_licenses: s("--media-licenses"),
-        pybundle: s("--pybundle"),
         pmu: s("--pmu"),
         asmpatch_bin: s("--asmpatch-bin"),
         pmhlslcc_bin: s("--pmhlslcc-bin"),
@@ -151,7 +149,7 @@ fn package(args: &[String]) -> ExitCode {
 /// `port check <game> [--json] [--asmpatch CMD] [--no-scan]`: the report (status 1 when no route fits).
 fn check(args: &[String]) -> ExitCode {
     let p = Parser {
-        prog: "pmunity port check",
+        prog: "pmu port check",
         positionals: &["game"],
         opts: vec![flag("--json"), val("--asmpatch"), flag("--no-scan")],
     };
@@ -181,7 +179,7 @@ fn check(args: &[String]) -> ExitCode {
 
 /// `port routes`: the routes and whether their templates are here.
 fn routes(args: &[String]) -> ExitCode {
-    let p = Parser { prog: "pmunity port routes", positionals: &[], opts: vec![] };
+    let p = Parser { prog: "pmu port routes", positionals: &[], opts: vec![] };
     if let Err(code) = p.parse(args) {
         return code;
     }

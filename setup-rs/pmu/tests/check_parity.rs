@@ -1,14 +1,12 @@
-//! `pmu port check`, `pmu port new --data`, `pmu port routes` and `pmu route` against the Python
-//! they were ported from (convert/pmunity: port.py's check with route.py's, plugins.py's and
-//! streaming.py's parts of it), on made-up games: executables' headers, assemblies' metadata,
-//! plugins, soundbanks and (with the class database, $PMU_TPK) serialized files and bundles
-//! written here. No game or Unity data.
+//! `pmu port check`, `pmu port new --data`, `pmu port routes` and `pmu route` on made-up games:
+//! executables' headers, assemblies' metadata, plugins, soundbanks and (with the class database,
+//! $PMU_TPK) serialized files and bundles written here. No game or Unity data.
 //!
-//! check_parity: with PMU_PARITY_PYTHON (a Python 3.11+ with convert/requirements.txt) each case
-//! runs the Python and pmu at the same paths and compares the exit status, stdout, stderr and
-//! every file left. check_golden: the same cases against tests/golden/check.txt, written from a
-//! run whose every output was the Python's byte for byte; PMU_CHECK_BLESS=1 writes it again.
-//! Without PMU_TPK the cases that read serialized objects are left out (both tests say so).
+//! check_golden: the cases against tests/golden/check.txt, written from a run whose every output was
+//! the Python's byte for byte (convert/pmunity's port.py check with route.py's, plugins.py's and
+//! streaming.py's parts, compared by the check_parity test until both left with convert/ on
+//! 2026-11-27); PMU_CHECK_BLESS=1 writes it again.
+//! Without PMU_TPK the cases that read serialized objects are left out (the test says so).
 #[path = "../../crates/convert/tests/madeup/mod.rs"]
 mod madeup;
 mod made;
@@ -337,24 +335,14 @@ struct Run {
     stderr: Vec<String>,
 }
 
-fn run_case(base: &Path, case: &Case, python: Option<&str>) -> Run {
+fn run_case(base: &Path, case: &Case) -> Run {
     let work = base.join("work");
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).unwrap();
     let mut r = Run { statuses: vec![], stdout: vec![], stderr: vec![] };
     for cmd in &case.cmds {
-        let mut c = match python {
-            Some(py) => {
-                let mut c = Command::new(py);
-                c.arg("-m").arg("pmunity").env("PYTHONPATH", wt().join("convert")).env("PYTHONDONTWRITEBYTECODE", "1").env_remove("PMUNITY_REPO");
-                c
-            }
-            None => {
-                let mut c = Command::new(env!("CARGO_BIN_EXE_pmu"));
-                c.env("PMUNITY_REPO", wt());
-                c
-            }
-        };
+        let mut c = Command::new(env!("CARGO_BIN_EXE_pmu"));
+        c.env("PMUNITY_REPO", wt());
         c.args(cmd).current_dir(&work);
         for k in ["PMUNITY_ASMPATCH", "PMUNITY_PORT_HOOKS", "DOTNET", "DONORS"] {
             c.env_remove(k);
@@ -399,71 +387,13 @@ fn err_text(s: &str) -> String {
     }
 }
 
-#[test]
-fn check_parity() {
-    let Some(py) = std::env::var("PMU_PARITY_PYTHON").ok().filter(|p| !p.is_empty()) else {
-        eprintln!("check_parity: skipped (PMU_PARITY_PYTHON: a Python 3.11+ with convert/requirements.txt)");
-        return;
-    };
-    let db = madeup::db();
-    if db.is_none() {
-        eprintln!("check_parity: without PMU_TPK the cases with serialized objects are left out");
-    }
-    let keep = std::env::var("PMU_PARITY_DIR").ok().filter(|p| !p.is_empty());
-    let base = keep.clone().map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("pmu-check-parity-{}", std::process::id())));
-    let _ = fs::remove_dir_all(&base);
-    fs::create_dir_all(&base).unwrap();
-    let base = base.canonicalize().unwrap();
-    inputs(&base, db.as_deref());
-    let mut failures: Vec<String> = Vec::new();
-    for case in cases(&base, db.is_some()) {
-        let mut outs = Vec::new();
-        for (impl_, python) in [("py", Some(py.as_str())), ("rs", None)] {
-            let r = run_case(&base, &case, python);
-            let dst = base.join(case.name).join(impl_);
-            let _ = fs::remove_dir_all(&dst);
-            fs::create_dir_all(dst.parent().unwrap()).unwrap();
-            fs::rename(base.join("work"), &dst).unwrap();
-            outs.push((r, tree(&dst)));
-        }
-        let ((rp, tp), (rr, tr)) = (&outs[0], &outs[1]);
-        let mut fail = |m: String| failures.push(format!("{}: {m}", case.name));
-        for k in 0..case.cmds.len() {
-            if rp.statuses[k] != rr.statuses[k] {
-                fail(format!("command {k} exit {} (Python) != {} (pmu): py stderr {:?} / pmu stderr {:?}", rp.statuses[k], rr.statuses[k], rp.stderr[k], rr.stderr[k]));
-            }
-            if rp.stdout[k] != rr.stdout[k] {
-                let (a, b): (Vec<&str>, Vec<&str>) = (rp.stdout[k].lines().collect(), rr.stdout[k].lines().collect());
-                let at = a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
-                fail(format!("command {k} stdout differs at line {} ({} lines against {}):\n--- py\n{}\n--- pmu\n{}", at + 1, a.len(), b.len(),
-                             a.get(at).unwrap_or(&"(the end)"), b.get(at).unwrap_or(&"(the end)")));
-            }
-            if err_text(&rp.stderr[k]) != err_text(&rr.stderr[k]) {
-                fail(format!("command {k} stderr differs:\n--- py\n{}\n--- pmu\n{}", rp.stderr[k], rr.stderr[k]));
-            }
-        }
-        let names: std::collections::BTreeSet<&String> = tp.keys().chain(tr.keys()).collect();
-        for n in names {
-            match (tp.get(n), tr.get(n)) {
-                (Some(a), Some(b)) if a == b => {}
-                (Some(a), Some(b)) => fail(format!("file {n} differs (mode {:o} / {:o}, {} / {} bytes)", a.0, b.0, a.1.len(), b.1.len())),
-                (Some(_), None) => fail(format!("file {n}: the Python's only")),
-                _ => fail(format!("file {n}: pmu's only")),
-            }
-        }
-    }
-    if keep.is_none() {
-        let _ = fs::remove_dir_all(&base);
-    }
-    assert!(failures.is_empty(), "{} difference(s) from the Python:\n{}", failures.len(), failures.join("\n"));
-}
 
 fn golden_text(base: &Path, with_db: bool) -> String {
     let (b, repo) = (base.to_string_lossy().into_owned(), wt().to_string_lossy().into_owned());
     let norm = |s: &str| s.replace(&b, "<BASE>").replace(&repo, "<REPO>");
     let mut out = String::new();
     for case in cases(base, with_db) {
-        let r = run_case(base, &case, None);
+        let r = run_case(base, &case);
         let dst = base.join(case.name).join("rs");
         let _ = fs::remove_dir_all(&dst);
         fs::create_dir_all(dst.parent().unwrap()).unwrap();

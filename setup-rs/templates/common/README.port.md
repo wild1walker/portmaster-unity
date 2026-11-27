@@ -17,15 +17,13 @@ route). Saves and settings are in `ports/@@PORTDIR@@/data/`; the game's options 
 
 ## Compile
 
-The port folder is made by portmaster-unity's `pmunity port new` from the port's settings,
-`port.toml`. On Linux or macOS with git, Docker and Python 3.11 or newer:
+The port folder is made by portmaster-unity's `pmu port new` from the port's settings,
+`port.toml`. On Linux or macOS with git and Docker (pmu runs in Docker: setup-rs/tools/pmu.sh):
 
 ```sh
 git clone --recurse-submodules https://github.com/wild1walker/portmaster-unity.git
 cd portmaster-unity
 @@BUILD_STEPS@@
-python3 -m pip install -r convert/requirements.txt
-cd convert
-python3 -m pmunity port new @@PORTDIR@@ --out <port folder>   # reads <port folder>/port.toml
-DONORS=<donor folder> python3 -m pmunity port package <port folder>   # -> <port folder>/out/@@ZIP@@
+setup-rs/tools/pmu.sh port new @@PORTDIR@@ --out <port folder>   # reads <port folder>/port.toml
+DONORS=<donor folder> setup-rs/tools/pmu.sh port package <port folder>   # -> <port folder>/out/@@ZIP@@
 ```

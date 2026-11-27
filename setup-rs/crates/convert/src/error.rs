@@ -9,7 +9,7 @@ pub enum Error {
     Exit(String),
     /// A status whose reason is already logged (need_space: 3).
     Status(u8),
-    /// A step, option or source not ported: status 2 (run `python -m pmunity convert`).
+    /// A step, option or source not ported: status 2 (pmu does not do it).
     NotPorted(String),
     /// What the Python raises (ValueError, KeyError, ...): its message, status 1.
     Value(String),
@@ -36,7 +36,7 @@ impl fmt::Display for Error {
             Error::Exit(m) | Error::Value(m) => f.write_str(m),
             Error::Status(s) => write!(f, "exit status {s}"),
             Error::NotPorted(m) => {
-                write!(f, "{m}: not ported yet (run `python -m pmunity convert`)")
+                write!(f, "{m}: not ported yet (pmu does not do it)")
             }
             Error::Unity(e) => e.fmt(f),
             Error::Io(e) => e.fmt(f),

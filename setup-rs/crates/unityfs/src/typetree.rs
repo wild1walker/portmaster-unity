@@ -493,6 +493,13 @@ impl CommonStrings {
         self.by_offset.len()
     }
 
+    /// Every (offset, string), by offset.
+    pub fn entries(&self) -> Vec<(u32, &str)> {
+        let mut v: Vec<(u32, &str)> = self.by_offset.iter().map(|(o, s)| (*o, &**s)).collect();
+        v.sort();
+        v
+    }
+
     pub fn is_empty(&self) -> bool {
         self.by_offset.is_empty()
     }

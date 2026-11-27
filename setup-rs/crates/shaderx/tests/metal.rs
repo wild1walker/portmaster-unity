@@ -1,5 +1,5 @@
 //! shaderx::metal against the Python's metal.translate_program on hand-written MSL
-//! (tests/metal_golden.json, from setup-rs/tests/golden/metal_golden.py): the same GL program text
+//! (tests/metal_golden.json, from the retired setup-rs/tests/golden/metal_golden.py (git show 2147a04:setup-rs/tests/golden/metal_golden.py)): the same GL program text
 //! and type, or the same Unsupported message, and the same notes.
 use shaderx::metal::{translate_program, Fault};
 

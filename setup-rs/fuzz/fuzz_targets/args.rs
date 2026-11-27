@@ -13,7 +13,7 @@ use argp::{choice, flag, val, Opt, Parser};
 fn parsers() -> Vec<Parser> {
     vec![
         Parser {
-            prog: "pmunity unpack",
+            prog: "pmu unpack",
             positionals: &["data"],
             opts: vec![val("--out"), flag("--remove")],
         },
@@ -29,7 +29,7 @@ fn parsers() -> Vec<Parser> {
             ],
         },
         Parser {
-            prog: "pmunity test",
+            prog: "pmu test",
             positionals: &["a", "b", "c"],
             opts: vec![
                 choice("--backend", &["mono", "il2cpp"]),

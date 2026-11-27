@@ -50,7 +50,7 @@ const METADATA: &str = "assets/bin/Data/Managed/Metadata/global-metadata.dat";
 /// How a run ends when it does not succeed.
 #[derive(Debug)]
 pub enum Fail {
-    /// A build ua_host cannot run, with the reason (`pmunity apk: refused: ...`, status 1).
+    /// A build ua_host cannot run, with the reason (`pmu apk: refused: ...`, status 1).
     Refused(String),
     /// What the Python raises (its traceback; here the message): status 1.
     Error(String),
@@ -87,7 +87,7 @@ fn refused<T>(msg: impl Into<String>) -> Result<T, Fail> {
     Err(Fail::Refused(msg.into()))
 }
 
-/// The options of `pmunity apk` this port acts on.
+/// The options of `pmu apk` this port acts on.
 #[derive(Debug, Clone, Default)]
 pub struct Opts {
     pub target: String,
@@ -850,7 +850,7 @@ enum DataIn {
     Obb(usize),
 }
 
-/// `pmunity apk`'s run: the build imported into `out` (with dry_run only read); its
+/// `pmu apk`'s run: the build imported into `out` (with dry_run only read); its
 /// android_package.json fields, or the dry run's report.
 pub fn run(
     inputs: &[String],

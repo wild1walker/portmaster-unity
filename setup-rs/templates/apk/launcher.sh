@@ -20,7 +20,7 @@ get_controls
 # @@TITLE@@'s own Android build, run natively by portmaster-unity's ua_host: its 32-bit
 # (armeabi-v7a) player with ua_host where the system has a 32-bit userland, its 64-bit (arm64-v8a)
 # one with ua_host64 elsewhere. On the first launch the setup installs your copy from
-# ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmunity port new` (@@ROUTE@@ route).
+# ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmu port new` (@@ROUTE@@ route).
 
 GAMEDIR="/$directory/ports/@@PORTDIR@@"
 cd "$GAMEDIR" || exit 1

@@ -1,5 +1,5 @@
 //! `pmu convert <data> [<out>] --config <json> [--plugin <py>] [--steps a,b] [--set k=v]...`
-//! (convert::cli): the in-place conversion with its journal, as `python -m pmunity convert`.
+//! (convert::cli): the in-place conversion with its journal, as `pmu convert`.
 use std::process::ExitCode;
 
 pub fn run(args: &[String]) -> ExitCode {

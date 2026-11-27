@@ -1,5 +1,5 @@
 //! The setup's `convert` command (convert/pmunity's __main__.py convert, job.py and the steps a
-//! game's config runs) on unityfs and shaderx: what `python -m pmunity convert` writes, byte for
+//! game's config runs) on unityfs and shaderx: what `pmu convert` writes, byte for
 //! byte, journal included, with its log lines (timings apart) and exit statuses.
 //!
 //! - [`cli`]: the arguments, the config and `--set`, the step order, the run.

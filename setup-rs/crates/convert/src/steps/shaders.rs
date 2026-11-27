@@ -868,3 +868,175 @@ pub fn run(job: &mut Job, _args: &Args) -> Result<()> {
     }
     Ok(())
 }
+
+// ---- shaders-export: the GLES3 programs as files, for compile checks on the device
+
+/// Unity 2019+ programs define their uniform and block layout qualifiers through a macro the
+/// player switches off where the GLSL version lacks them (libunity looks for this line); GLSL ES
+/// 3.00 has no `layout(location)` on uniforms nor `layout(binding)` on blocks.
+const UNIFORM_LOCATION: &str = "#define UNITY_SUPPORTS_UNIFORM_LOCATION 1\n";
+
+/// One stage's source as the player hands it to a GLES 3.0 driver (for compile checks).
+pub fn as_driver_sees(src: &str) -> String {
+    if src.trim_start().starts_with("#version 300 es") && src.contains(UNIFORM_LOCATION) {
+        src.replace(UNIFORM_LOCATION, "#define UNITY_SUPPORTS_UNIFORM_LOCATION 0\n")
+    } else {
+        src.to_string()
+    }
+}
+
+/// export.export (`pmu-dev shaders-export`): <out>/<nnnn>.vert and <nnnn>.frag (each the source
+/// Unity hands the driver for that stage; identical programs once), <nnnn>.comp for each GLES3 compute
+/// kernel (ComputeShader assets) and <out>/index.tsv: number, shader, file, blob index (kernels: the
+/// kernel's name), keywords. The runtime's tools/shadercheck compiles and links every pair and kernel
+/// with the device's own driver. Returns the number of programs.
+pub fn export(job: &Job, out_dir: &Path, bundles: &str) -> Result<usize> {
+    std::fs::create_dir_all(out_dir).map_err(|e| Error::Value(format!("{}: {e}", out_dir.display())))?;
+    let rx = regex::Regex::new(bundles).map_err(|e| Error::Value(format!("--bundles: {e}")))?;
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut rows: Vec<String> = Vec::new();
+    let write = |p: std::path::PathBuf, t: &str| std::fs::write(&p, t).map_err(|e| Error::Value(format!("{}: {e}", p.display())));
+    for rel in shader_files(job, Some(&rx)) {
+        let path = job.path_in(&rel);
+        let o = unityfs::Options { all_serialized: true, ..Default::default() };
+        let mut f = match job.open(&path, o) {
+            Ok(f) => f,
+            Err(Error::Unity(e)) if not_one(&path, &e) => {
+                job.log(&format!("shaders-export: {rel}: no serialized file: left out"));
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        for k in 0..f.file_count() {
+            f.select(k)?;
+            for (pid, class) in objects(&f) {
+                if class == "Shader" {
+                    let t = f.sf.read_typetree(pid)?;
+                    let platforms = ints(field(&t, "platforms")?, "platforms")?;
+                    if !platforms.contains(&shaderx::blob::PLATFORM_GLES3PLUS) {
+                        continue;
+                    }
+                    let shader = shader_of(&t)?;
+                    let blobs = shaderx::blob::ShaderBlobs::read(&shader.blob).map_err(|e| Error::Value(e.to_string()))?;
+                    let entries = shaderx::tree::platform_entries(&t, shaderx::blob::PLATFORM_GLES3PLUS, &blobs).map_err(Error::Value)?;
+                    let name = String::from_utf8_lossy(&super::text(field(&t, "m_ParsedForm")?, "m_Name")?).into_owned();
+                    for (i, code) in convert::gles3_programs(&shader).map_err(|e| Error::Value(e.to_string()))? {
+                        if seen.contains_key(&code) {
+                            continue;
+                        }
+                        let n = seen.len();
+                        seen.insert(code.clone(), n);
+                        let mut stages: Vec<(String, String)> = Vec::new();
+                        for (stage, a, b) in shaderx::glsl::stage_blocks(&code) {
+                            let src = code[a..b].to_string();
+                            match stages.iter_mut().find(|s| s.0 == stage) {
+                                Some(s) => s.1 = src,
+                                None => stages.push((stage, src)),
+                            }
+                        }
+                        for (stage, src) in stages {
+                            let ext = match stage.as_str() {
+                                "VERTEX" => "vert".to_string(),
+                                "FRAGMENT" => "frag".to_string(),
+                                s => s.to_lowercase(),
+                            };
+                            write(out_dir.join(format!("{n:04}.{ext}")), &as_driver_sees(&src))?;
+                        }
+                        let kw = match entries.get(i as usize) {
+                            Some(Some(shaderx::blob::Slot::Program(e))) => e.keywords.join(" "),
+                            _ => String::new(),
+                        };
+                        rows.push(format!("{n:04}\t{name}\t{rel}\t{i}\t{kw}"));
+                    }
+                } else if class == "ComputeShader" {
+                    let t = f.sf.read_typetree(pid)?;
+                    let name = t.get("m_Name").and_then(Value::as_bytes).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+                    for v in t.get("variants").and_then(Value::as_array).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if compute::int_of(v, "targetRenderer")? != compute::RENDERER_GLES3 {
+                            continue;
+                        }
+                        for kern in v.get("kernels").and_then(Value::as_array).map(|v| v.as_slice()).unwrap_or(&[]) {
+                            for kv in compute::kernel_variants(kern)? {
+                                let raw = kv.get("code").and_then(Value::as_bytes).unwrap_or(&[]);
+                                let end = raw.iter().rposition(|&c| c != 0).map_or(0, |p| p + 1);
+                                let code = String::from_utf8_lossy(&raw[..end]).into_owned();
+                                if seen.contains_key(&code) {
+                                    continue;
+                                }
+                                let n = seen.len();
+                                seen.insert(code.clone(), n);
+                                write(out_dir.join(format!("{n:04}.comp")), &code)?;
+                                let words = |key: &str| -> Option<Vec<String>> {
+                                    let a = kern.get(key)?.as_array()?;
+                                    (!a.is_empty()).then(|| {
+                                        a.iter()
+                                            .map(|x| x.as_bytes().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_else(|| format!("{x:?}")))
+                                            .collect()
+                                    })
+                                };
+                                let kw = words("globalKeywords").or_else(|| words("keywords")).unwrap_or_default();
+                                let kname = kern.get("name").and_then(Value::as_bytes).map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+                                rows.push(format!("{n:04}\t{name}\t{rel}\tkernel {kname}\t{}", kw.join(" ")));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    write(out_dir.join("index.tsv"), &(rows.join("\n") + "\n"))?;
+    job.log(&format!("shaders-export: {} distinct GLES3 programs in {}", rows.len(), out_dir.display()));
+    Ok(rows.len())
+}
+
+// ---- the regression run's digests (pmu-dev regress): what the shaders step adds, as bytes to hash
+
+/// A Shader's GLES3 platform blob entries (each program's code and keywords, parameter and raw
+/// entries' bytes, in blob order), or None when it has no GLES3 platform.
+pub fn gles3_entries_digest(t: &Value) -> Option<Vec<u8>> {
+    let platforms = ints(field(t, "platforms").ok()?, "platforms").ok()?;
+    if !platforms.contains(&shaderx::blob::PLATFORM_GLES3PLUS) {
+        return None;
+    }
+    let shader = shader_of(t).ok()?;
+    let blobs = shaderx::blob::ShaderBlobs::read(&shader.blob).ok()?;
+    let entries = shaderx::tree::platform_entries(t, shaderx::blob::PLATFORM_GLES3PLUS, &blobs).ok()?;
+    let mut out = Vec::new();
+    for (i, e) in entries.iter().enumerate() {
+        out.extend(format!("{i}:").as_bytes());
+        match e {
+            None => out.extend(b"-"),
+            Some(shaderx::blob::Slot::Program(p)) => {
+                out.extend(&p.code);
+                out.push(0);
+                out.extend(p.keywords.join(" ").as_bytes());
+            }
+            Some(shaderx::blob::Slot::Params { data, .. }) => out.extend(data),
+            Some(shaderx::blob::Slot::Raw(b)) => out.extend(b),
+        }
+        out.push(b'\n');
+    }
+    Some(out)
+}
+
+/// A ComputeShader's GLES3 variants (each kernel's name and its code), or None when it has none.
+pub fn gles3_kernels_digest(t: &Value) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut any = false;
+    for v in t.get("variants").and_then(Value::as_array).map(|v| v.as_slice()).unwrap_or(&[]) {
+        if compute::int_of(v, "targetRenderer").ok()? != compute::RENDERER_GLES3 {
+            continue;
+        }
+        any = true;
+        for k in v.get("kernels").and_then(Value::as_array).map(|v| v.as_slice()).unwrap_or(&[]) {
+            out.extend(k.get("name").and_then(Value::as_bytes).unwrap_or(&[]));
+            out.push(0);
+            for kv in compute::kernel_variants(k).ok()? {
+                out.extend(kv.get("code").and_then(Value::as_bytes).unwrap_or(&[]));
+                out.push(0);
+            }
+            out.push(b'\n');
+        }
+    }
+    any.then_some(out)
+}

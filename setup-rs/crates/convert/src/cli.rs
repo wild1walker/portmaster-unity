@@ -10,7 +10,7 @@ use crate::steps::{self, Args, StepFn};
 use std::io::Write as _;
 use std::path::Path;
 
-const USAGE: &str = "usage: pmunity convert [-h] --config CONFIG [--steps STEPS] [--plugin PLUGIN]
+const USAGE: &str = "usage: pmu convert [-h] --config CONFIG [--steps STEPS] [--plugin PLUGIN]
                        [--only ONLY] [--set SECTION.KEY=VALUE]
                        [--any-unity-version]
                        data [out]";
@@ -202,7 +202,7 @@ fn order(cli: &Cli, cfg: &Json) -> Vec<String> {
     }
 }
 
-/// Runs a conversion as `python -m pmunity convert` does.
+/// Runs a conversion as `pmu convert` does.
 pub fn run(cli: &Cli) -> Result<()> {
     let data = Path::new(&cli.data);
     let v = crate::version::check_data(data, cli.any_unity_version)?;

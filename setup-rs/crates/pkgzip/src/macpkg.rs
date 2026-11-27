@@ -307,7 +307,7 @@ pub fn makedirs(path: &str) -> Result<()> {
 pub fn main(argv: &[String]) -> Result<()> {
     if argv.len() < 2 {
         return Err(Error::Exit(
-            "usage: python -m pmunity macpkg <root> <installer.pkg>...".into(),
+            "usage: pmu macpkg <root> <installer.pkg>...".into(),
         ));
     }
     let root = &argv[0];

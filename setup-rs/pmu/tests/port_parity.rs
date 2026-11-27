@@ -1,13 +1,8 @@
-//! Parity of `pmu port new` / `pmu port package` with `python -m pmunity port new` / `package`
-//! (convert/pmunity/port.py): each case runs the Python and pmu on the same synthetic inputs, at
-//! the same paths one after the other, and compares the exit status, stdout and stderr, every file
-//! left (bytes and modes), and the release zips entry by entry (names, order, method, times,
-//! modes, CRCs, sizes, contents; donor APKs inside them likewise) and byte for byte.
-//!
-//! Needs a Python 3.11+ with convert/requirements.txt (a scratch venv, never in the repository):
-//!   PMU_PARITY_PYTHON=<venv>/bin/python cargo test -p pmu --test port_parity -- --nocapture
-//! Without PMU_PARITY_PYTHON it says so and passes. PMU_PARITY_DIR: where the cases run (default:
-//! the temp folder; kept when set, to look at the outputs: <dir>/<case>/{py,rs}).
+//! `pmu port new` / `pmu port package` on synthetic inputs (stand-ins for the runtime, pmu, the
+//! donors; no game or Unity data), frozen in tests/golden/port.txt (port_golden below). Until
+//! 2026-11-27 each case also ran `python -m pmunity port new` / `package` at the same paths and every
+//! output was compared byte for byte (the port_parity test, removed with convert/): the golden file
+//! was written from such a run. PMU_PARITY_DIR: where the cases run (kept when set).
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -50,32 +45,6 @@ fn zip(p: &Path, entries: &[(&str, &[u8])], deflate: bool) {
         z.add(i, d).unwrap();
     }
     z.finish().unwrap();
-}
-
-fn tar_gz(p: &Path, files: &[(&str, &[u8])]) {
-    let mut tar = Vec::new();
-    for (n, data) in files {
-        let mut h = [0u8; 512];
-        h[..n.len()].copy_from_slice(n.as_bytes());
-        h[100..107].copy_from_slice(b"0000644");
-        h[108..115].copy_from_slice(b"0000000");
-        h[116..123].copy_from_slice(b"0000000");
-        h[124..135].copy_from_slice(format!("{:011o}", data.len()).as_bytes());
-        h[136..147].copy_from_slice(b"00000000000");
-        h[156] = b'0';
-        h[257..263].copy_from_slice(b"ustar\0");
-        h[263..265].copy_from_slice(b"00");
-        h[148..156].copy_from_slice(b"        ");
-        let sum: u32 = h.iter().map(|b| *b as u32).sum();
-        h[148..155].copy_from_slice(format!("{sum:06o}\0").as_bytes());
-        tar.extend_from_slice(&h);
-        tar.extend_from_slice(data);
-        tar.resize(tar.len().div_ceil(512) * 512, 0);
-    }
-    tar.resize(tar.len() + 1024, 0);
-    let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    e.write_all(&tar).unwrap();
-    put(p, e.finish().unwrap());
 }
 
 fn png(p: &Path, w: u32, h: u32) {
@@ -149,16 +118,6 @@ fn inputs(w: &Path) {
     put(&pmu.join("licenses/LICENSE.musl.txt"), "MIT musl\n");
     put(&pmu.join("licenses/LICENSE.rust-crates.txt"), "MIT / Apache 2.0 crates\n");
     put(&pmu.join("licenses/._LICENSE.musl.txt"), "AppleDouble");
-    tar_gz(
-        &i.join("python.tar.gz"),
-        &[
-            ("python/bin/python3.11", b"#!/bin/sh\n"),
-            ("python/lib/python3.11/LICENSE.txt", b"PSF\n"),
-            ("python/lib/python3.11/site-packages/a-1.dist-info/LICENSE", b"MIT a\n"),
-            ("python/lib/python3.11/site-packages/b-2.dist-info/licenses/COPYING.md", "BSD b \u{e9}\n".as_bytes()),
-            ("python/lib/python3.11/site-packages/c/LICENSE", b"not this\n"),
-        ],
-    );
     let w64 = i.join("mono64");
     for line in ["2019.4", "2017.4"] {
         let br = format!("unity-{line}-mbe");
@@ -312,9 +271,8 @@ fn cases(w: &Path) -> Vec<Case> {
     let rt = s(&i.join("rt"));
     let dn = s(&i.join("donors"));
     let pmu = s(&i.join("pmu-out"));
-    let pyb = s(&i.join("python.tar.gz"));
     let pkg = |port: &str, extra: &[&str]| -> Vec<String> {
-        let mut v = sv(&["port", "package", port, "--out", &format!("{port}-rel"), "--runtime", &rt, "--donors", &dn, "--pmu", &pmu, "--pybundle", &pyb, "--no-build"]);
+        let mut v = sv(&["port", "package", port, "--out", &format!("{port}-rel"), "--runtime", &rt, "--donors", &dn, "--pmu", &pmu, "--no-build"]);
         v.extend(sv(extra));
         v
     };
@@ -385,7 +343,7 @@ fn cases(w: &Path) -> Vec<Case> {
             after_new: vec![],
         },
         Case {
-            name: "vulkan-python",
+            name: "vulkan-own-plugin",
             files: vec![(
                 "cfg.toml",
                 "[port]\ntitle = 'Vk'\n[game]\nunity_versions = ['2021.3.4f1']\nsize_mb = 2000\n[convert.shaders]\nfrom = 'vulkan,gles'\n[files]\nplugins = ['../in/files/mystep.py']\n".to_string(),
@@ -503,7 +461,7 @@ struct Run {
     stderr: Vec<String>,
 }
 
-fn run_case(w: &Path, case: &Case, python: Option<&str>) -> Run {
+fn run_case(w: &Path, case: &Case) -> Run {
     let work = w.join("work");
     let _ = fs::remove_dir_all(&work);
     fs::create_dir_all(&work).unwrap();
@@ -517,27 +475,12 @@ fn run_case(w: &Path, case: &Case, python: Option<&str>) -> Run {
                 put(&work.join(p), data);
             }
         }
-        let mut c = match python {
-            Some(py) => {
-                let mut c = Command::new(py);
-                c.arg("-m").arg("pmunity").env("PYTHONPATH", wt().join("convert")).env("PYTHONDONTWRITEBYTECODE", "1");
-                c
-            }
-            None => {
-                let mut c = Command::new(env!("CARGO_BIN_EXE_pmu"));
-                c.env("PMUNITY_REPO", wt());
-                c
-            }
-        };
+        let mut c = Command::new(env!("CARGO_BIN_EXE_pmu"));
         c.args(cmd).current_dir(&work);
         for k in ["DONORS", "PMU_DIR", "PYBUNDLE", "PMUNITY_MONO64_WORK", "BOX64_OUT", "NUGET_PACKAGES", "PMUNITY_PORT_HOOKS", "PMUNITY_REPO"] {
-            if python.is_some() || k != "PMUNITY_REPO" {
-                c.env_remove(k);
-            }
+            c.env_remove(k);
         }
-        if python.is_none() {
-            c.env("PMUNITY_REPO", wt());
-        }
+        c.env("PMUNITY_REPO", wt());
         for (k, v) in &case.env {
             c.env(k, v);
         }
@@ -602,134 +545,6 @@ fn fnv(d: &[u8]) -> u64 {
     d.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3))
 }
 
-#[test]
-fn port_parity() {
-    let Some(py) = std::env::var("PMU_PARITY_PYTHON").ok().filter(|p| !p.is_empty()) else {
-        eprintln!("port_parity: skipped (PMU_PARITY_PYTHON: a Python 3.11+ with convert/requirements.txt)");
-        return;
-    };
-    let keep = std::env::var("PMU_PARITY_DIR").ok().filter(|p| !p.is_empty());
-    let base = keep.clone().map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("pmu-port-parity-{}", std::process::id())));
-    let _ = fs::remove_dir_all(&base);
-    fs::create_dir_all(&base).unwrap();
-    let base = base.canonicalize().unwrap();
-    inputs(&base);
-    let mut failures: Vec<String> = Vec::new();
-    let mut byte_diffs: Vec<String> = Vec::new();
-    let mut report = Vec::new();
-    for case in cases(&base) {
-        let mut outs = Vec::new();
-        for (impl_, python) in [("py", Some(py.as_str())), ("rs", None)] {
-            let r = run_case(&base, &case, python);
-            let dst = base.join(case.name).join(impl_);
-            let _ = fs::remove_dir_all(&dst);
-            fs::create_dir_all(dst.parent().unwrap()).unwrap();
-            fs::rename(base.join("work"), &dst).unwrap();
-            outs.push((r, tree(&dst)));
-        }
-        let ((rp, tp), (rr, tr)) = (&outs[0], &outs[1]);
-        let mut fail = |m: String| failures.push(format!("{}: {m}", case.name));
-        for k in 0..case.cmds.len() {
-            if rp.statuses[k] != rr.statuses[k] {
-                fail(format!("command {k} exit {} (Python) != {} (pmu): py stderr {:?} / pmu stderr {:?}", rp.statuses[k], rr.statuses[k], rp.stderr[k], rr.stderr[k]));
-            }
-            if rp.stdout[k] != rr.stdout[k] {
-                fail(format!("command {k} stdout differs:\n--- py\n{}\n--- pmu\n{}", rp.stdout[k], rr.stdout[k]));
-            }
-            // (a traceback's text is Python's own: an error's last line only)
-            let last = |s: &str| s.trim_end().lines().last().unwrap_or("").to_string();
-            let (ep, er) = if rp.statuses[k] != 0 && rp.stderr[k].contains("Traceback") {
-                (String::new(), String::new())
-            } else {
-                (last(&rp.stderr[k]), last(&rr.stderr[k]))
-            };
-            if ep != er {
-                fail(format!("command {k} stderr differs: {:?} != {:?}", rp.stderr[k], rr.stderr[k]));
-            }
-        }
-        let names: std::collections::BTreeSet<&String> = tp.keys().chain(tr.keys()).collect();
-        let mut files = 0;
-        let mut zips = 0;
-        for n in names {
-            let (Some((mp, dp)), Some((mr, dr))) = (tp.get(n), tr.get(n)) else {
-                fail(format!("{n}: only in {}", if tp.contains_key(n) { "the Python's output" } else { "pmu's output" }));
-                continue;
-            };
-            files += 1;
-            if mp != mr {
-                fail(format!("{n}: mode {mp:o} (Python) != {mr:o} (pmu)"));
-            }
-            if dp != dr {
-                let zp = zip_entries(dp, &base.join("cmp-py.zip"));
-                let zr = zip_entries(dr, &base.join("cmp-rs.zip"));
-                match (zp, zr) {
-                    (Some(a), Some(b)) if a == b => byte_diffs.push(format!("{}: {n} ({} vs {} bytes)", case.name, dp.len(), dr.len())),
-                    (Some(a), Some(b)) => {
-                        let d: Vec<String> = a.iter().zip(&b).filter(|(x, y)| x != y).take(5).map(|(x, y)| format!("py {x}\n    pmu {y}")).collect();
-                        fail(format!("{n}: zip entries differ ({} vs {}):\n    {}", a.len(), b.len(), d.join("\n    ")));
-                    }
-                    _ => fail(format!(
-                        "{n}: contents differ:\n--- py\n{}\n--- pmu\n{}",
-                        String::from_utf8_lossy(&dp[..dp.len().min(3000)]),
-                        String::from_utf8_lossy(&dr[..dr.len().min(3000)])
-                    )),
-                }
-            }
-            if n.ends_with(".zip") || n.ends_with(".apk") {
-                zips += 1;
-            }
-        }
-        report.push(format!("{}: {} commands, {} files compared ({} zips/APKs), exits {:?}", case.name, case.cmds.len(), files, zips, rp.statuses));
-        for k in 0..case.cmds.len() {
-            if rp.statuses[k] != 0 {
-                let l = rp.stderr[k].trim_end().lines().last().unwrap_or("").to_string();
-                report.push(format!("    command {k} ({}): {}", case.cmds[k][..2].join(" "), &l[..l.len().min(200)]));
-            }
-        }
-    }
-    // dump_toml (what `port new` writes as port.toml for a checked game) on a resolved config
-    let cfg_text = ANDROID.replace("[[questions]]\nid = \"PICTURE\"", "[[questions]]\nid = \"PIC\"");
-    put(&base.join("dump/cfg.toml"), &cfg_text);
-    for route in ["android", "apk", "mono-arm64"] {
-        let o = Command::new(&py)
-            .arg("-c")
-            .arg(
-                "import sys; from pmunity import port as P\n\
-                 cfg = P.build_config('mygame', None, P.load_config(sys.argv[1]))\n\
-                 r = P.routes()[sys.argv[2]]\n\
-                 cfg['player']['donors'] = P.port_donors(cfg, r)\n\
-                 sys.stdout.write(P.dump_toml(cfg, r, drafted=('controls',)))",
-            )
-            .arg(base.join("dump/cfg.toml"))
-            .arg(route)
-            .env("PYTHONPATH", wt().join("convert"))
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .output()
-            .unwrap();
-        let repo = port::Repo::new(wt());
-        let user = port::config::load_config(&base.join("dump/cfg.toml").to_string_lossy()).unwrap();
-        let mut cfg = port::config::build_config("mygame", &user);
-        let r = port::routes::route(&repo, route).unwrap().unwrap();
-        let donors = port::routes::port_donors(&cfg, &r);
-        cfg.table("player").set("donors", port::val::Val::List(donors));
-        let mine = port::config::dump_toml(&cfg, &r, &["controls"]).unwrap();
-        if String::from_utf8_lossy(&o.stdout) != mine {
-            failures.push(format!("dump_toml ({route}) differs:\n--- py\n{}{}\n--- pmu\n{mine}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)));
-        } else {
-            report.push(format!("dump_toml ({route}): the same port.toml"));
-        }
-    }
-    eprintln!("port_parity ({}):\n  {}", base.display(), report.join("\n  "));
-    if byte_diffs.is_empty() {
-        eprintln!("  every file byte for byte the same (zips included)");
-    } else {
-        eprintln!("  the same entries, other bytes (deflate streams):\n    {}", byte_diffs.join("\n    "));
-    }
-    if keep.is_none() {
-        let _ = fs::remove_dir_all(&base);
-    }
-    assert!(failures.is_empty(), "{} differences:\n{}", failures.len(), failures.join("\n\n"));
-}
 
 // ---- The packager's golden outputs (no Python)
 //
@@ -737,7 +552,7 @@ fn port_parity() {
 // command's exit status, stdout and stderr's last line, and every file left (mode, size, a digest of
 // its bytes; a zip's entries, nested zips included, digested too) and the three port.toml texts
 // dump_toml writes. The file was written from a run whose every output was byte for byte the
-// Python packager's (port_parity above, 2026-11-21, the last commit with convert/pmunity): it is
+// Python packager's (the port_parity test, 2026-11-21; it and the Python left with convert/ on 2026-11-27): it is
 // that bar kept without the Python. The inputs are made up here: no game or Unity data.
 // A deliberate change of the templates or the packager changes it: look at the difference
 // (PMU_PARITY_DIR keeps the outputs and writes port.txt.new), then write it again with
@@ -749,7 +564,7 @@ fn golden_text(base: &Path) -> String {
     let norm = |s: &str| s.replace(&b, "<BASE>").replace(&repo, "<REPO>");
     let mut out = String::new();
     for case in cases(base) {
-        let r = run_case(base, &case, None);
+        let r = run_case(base, &case);
         let dst = base.join(case.name).join("rs");
         let _ = fs::remove_dir_all(&dst);
         fs::create_dir_all(dst.parent().unwrap()).unwrap();

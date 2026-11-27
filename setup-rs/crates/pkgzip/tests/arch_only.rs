@@ -80,7 +80,7 @@ fn release(name: &str) -> PathBuf {
         &root,
         "game/setup/setup.env",
         format!(
-            "# Written by `pmunity port new`\nPORT_NAME=game\nPORT_TITLE='A '\"'\"'Game'\nPORT_ROUTE=mono-arm64\n\
+            "# Written by `pmu port new`\nPORT_NAME=game\nPORT_TITLE='A '\"'\"'Game'\nPORT_ROUTE=mono-arm64\n\
              UNITY_VERSIONS={V}\nPLAYER_BACKEND=il2cpp\nPLAYER_ABI=arm64-v8a\n\
              DONORS='donor-{V}-il2cpp-arm64.apk donor-{V}-mono-armv7.apk'\n"
         )

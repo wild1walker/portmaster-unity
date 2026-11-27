@@ -718,13 +718,13 @@ fn android_verdict(f: &Dict, v: Option<&UV::Version>) -> Dict {
                       pmhlslcc for the handheld)".to_string());
         if v.is_some_and(|v| v.line() >= (2021, 2)) {
             caveats.push("Windows build of 2021.2+: its class libraries are the Windows-only unityjit-win32 ones; \
-                          `python -m pmunity.winbcl` fetches the Unix ones for `android-data --managed-file`".to_string());
+                          `pmu winbcl` fetches the Unix ones for `android-data --managed-file`".to_string());
         }
     } else if !plat.is_empty() {
         block.push(format!("{plat} build: not a desktop build"));
     }
     if f.truthy("compressed") {
-        caveats.push("compressed build (data.unity3d): `pmunity unpack` first".to_string());
+        caveats.push("compressed build (data.unity3d): `pmu unpack` first".to_string());
     }
     for p in f.list("plugins").iter().filter_map(Val::as_dict) {
         if matches!(p.str("arch"), "arm64" | "armv7") {

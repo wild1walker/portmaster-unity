@@ -38,7 +38,7 @@ pub enum Error {
     /// `SystemExit(message)` / `sys.exit(message)`: status 1.
     Exit(String),
     /// unity_version.Unsupported (data this route cannot build: the command's status 1 with the
-    /// message; `pmunity apk --il2cpp` refuses the build with it).
+    /// message; `pmu apk --il2cpp` refuses the build with it).
     Unsupported(String),
     /// An exception (the Python's traceback): status 1, the message.
     Fail(String),

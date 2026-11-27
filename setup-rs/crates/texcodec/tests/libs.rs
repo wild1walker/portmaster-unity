@@ -1,6 +1,6 @@
 //! Library-level golden test: texcodec's decoders, resize and ASTC encoders against the Python's
 //! libraries (UnityPy/Pillow decoding, Pillow's resize, astc_encoder, guided_astc) on made-up data
-//! from setup-rs/tests/golden/texcodec_fuzz.py, read from $TEXCODEC_FUZZ (skipped when unset):
+//! from the retired setup-rs/tests/golden/texcodec_fuzz.py (git show 2147a04:setup-rs/tests/golden/texcodec_fuzz.py), read from $TEXCODEC_FUZZ (skipped when unset):
 //! every format, odd sizes, boxes, every preset and tier, several block footprints.
 use std::io::BufRead;
 

@@ -649,9 +649,9 @@ pub fn config_doc(sec: &str) -> Option<&'static str> {
 # it from the port's donors; donors = the donor APKs the release ships in donor/ (written by `port new`\n\
 # from the route and game.unity_versions; names added here are shipped too). The handheld never\n\
 # downloads Unity's player: `port package --donors DIR` takes the donors from DIR (tools/donor)",
-        "convert" => "# pmunity convert's config (each step's DEFAULTS); \"textures\" re-encodes BC/DXT as ASTC\n\
+        "convert" => "# pmu convert's config (each step's DEFAULTS); \"textures\" re-encodes BC/DXT as ASTC\n\
 # (less memory, a longer setup, slightly different pixels: off unless you add it)",
-        "android_data" => "# pmunity android-data: asmpatch = auto (run tools/asmpatch; it changes only what it\n\
+        "android_data" => "# pmu android-data: asmpatch = auto (run tools/asmpatch; it changes only what it\n\
 # finds: Rewired, the Input System package; PlayMaker's exact optimizations) | off |\n\
 # [\"patch\", ...]; streaming_assets = obb |\n\
 # both | loose (code that reads StreamingAssets as files: also/only beside the APK,\n\
@@ -693,7 +693,7 @@ pub const QUESTIONS_DOC: &str = "# Questions PortMaster's patcher asks before th
 # question = \"Texture quality? High is what this port is tested with.\"
 # options = [[\"medium\", \"High (recommended)\"], [\"fast\", \"Low (shorter setup)\"]]
 # default = \"medium\"
-# convert_set = \"textures.quality\"        # the answer -> pmunity convert --set textures.quality=<answer>
+# convert_set = \"textures.quality\"        # the answer -> pmu convert --set textures.quality=<answer>
 # # env = \"UA_POINTER\"                    # or: the answer -> the game's environment
 ";
 
@@ -703,7 +703,7 @@ pub const CONTROLS_DRAFT_DOC: &str = "# (drafted by `port new` from the game's d
 /// dump_toml(cfg, route, drafted): port.toml text for a resolved config.
 pub fn dump_toml(cfg: &Dict, route: &Dict, drafted: &[&str]) -> Result<String> {
     let mut out: Vec<String> = vec![
-        "# port.toml: a PortMaster port made with `python -m pmunity port new` (docs/porting.md).".into(),
+        "# port.toml: a PortMaster port made with `pmu port new` (docs/porting.md).".into(),
         "# Edit, then run `port new <name> --data <game>` again to regenerate the port folder.".into(),
         String::new(),
     ];

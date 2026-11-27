@@ -76,7 +76,7 @@ impl std::fmt::Display for ComputeResult {
     }
 }
 
-fn int_of(v: &Value, name: &str) -> Result<i128> {
+pub(crate) fn int_of(v: &Value, name: &str) -> Result<i128> {
     v.get(name)
         .ok_or_else(|| Error::Value(format!("KeyError: '{name}'")))?
         .as_int()
@@ -151,7 +151,7 @@ fn layout(k: &Value) -> Result<u8> {
 }
 
 /// The values holding a kernel's code, in their list order.
-fn kernel_variants(k: &Value) -> Result<Vec<&Value>> {
+pub(crate) fn kernel_variants(k: &Value) -> Result<Vec<&Value>> {
     Ok(match layout(k)? {
         0 => vec![k],
         1 => k

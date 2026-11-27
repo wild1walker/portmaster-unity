@@ -113,7 +113,7 @@ pub fn of_data(data: &Path) -> Result<Version> {
 pub fn check_data(data: &Path, force: bool) -> Result<Version> {
     if !data.join("globalgamemanagers").is_file() && data.join("data.unity3d").is_file() {
         return Err(Error::Exit(format!(
-            "{d}: a compressed build (data.unity3d): unpack it first with `python -m pmunity unpack {d}`",
+            "{d}: a compressed build (data.unity3d): unpack it first with `pmu unpack {d}`",
             d = data.display()
         )));
     }
