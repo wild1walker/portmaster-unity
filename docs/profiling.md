@@ -1678,6 +1678,141 @@ the workers besides) and the wake-ups between the threads (each worker waits for
 cores half idle: wake latency). `UA_GL_ARENA_WIDESCAN` is the one that pays there: 11.0 -> 12.6 fps. The bench's
 fight (`gurun.sh` replay of the tt_forge record) hardly waits at all (0.1 - 2 ms a second).
 
+## Unity's engine code on UnityMain, by function (2026-11-27)
+
+The 2026-11-26 census named Hollow Knight's engine frames by offset only (its 6000.0.61f1 arm64 symbol table was
+not at hand); named now (the arm64-v8a symbol file of 6000.0.61f1, 2017.4.40f1 and 2017.4.27f1), the same
+recordings (`UA_PROF=500`, 20 s, muOS RG34XX-SP, each port's settings) and a City of Tears one (the lockstep test
+copy with a City of Tears save, the record's input). Self time (the pc in the function), ms a frame of UnityMain:
+
+| scene | UnityMain on a CPU | of it libunity's own code |
+|---|---|---|
+| Hollow Knight, King's Pass (52.8 fps) | 16.2 | 8.0 |
+| Hollow Knight, City of Tears (43.0 fps, the GPU's limit) | 15.6 | 7.8 |
+| Blasphemous, `D06Z01S01` (58.2 fps, display-held) | 14.5 | 7.1 |
+| Enter the Gungeon, the Breach (36.5 fps) | 13.0 | 4.5 |
+
+The 25 largest, ms a frame (King's Pass | City of Tears | Blasphemous):
+
+| # | King's Pass | City of Tears | Blasphemous |
+|---|---|---|---|
+| 1 | 0.40  FMOD::SystemI::UpdateAudibilities | 0.41  FMOD::SystemI::UpdateAudibilities | 0.41  MonoBehaviour::CallUpdateMethod |
+| 2 | 0.24  PreOrderPlayableTraverser::Traverse | 0.20  PreOrderPlayableTraverser::Traverse | 0.33  UI::RectTransform::UpdateAnchorPositionIfTransformChanged |
+| 3 | 0.19  GameObject::QueryComponentByType | 0.20  DoForwardShaderRenderLoop | 0.19  ThreadsafeLinearAllocator::Allocate |
+| 4 | 0.15  Box2D::b2DynamicTree::RayCast | 0.17  GameObject::QueryComponentByType | 0.17  Animator::BuildJobs |
+| 5 | 0.15  DoForwardShaderRenderLoop | 0.17  DoRenderLoop | 0.16  PreOrderPlayableTraverser::Traverse |
+| 6 | 0.13  DoRenderLoop | 0.13  Playable::Handle | 0.16  AnimationPlayable::GetNextCompatibleDescendant |
+| 7 | 0.13  Animator::BuildJobs | 0.13  MonoBehaviour::HandleNotifications | 0.16  GameObject::QueryComponentByType |
+| 8 | 0.13  ProcessCameraIndexListIsNodeVisibleStep1 | 0.11  Animator::BuildJobs | 0.13  Animator::ApplyOnAnimatorMove |
+| 9 | 0.11  Animator::Prepare | 0.11  InputAxis::Update | 0.13  InputAxis::Update |
+| 10 | 0.10  Playable::Handle | 0.11  AllocateAndPrepareSpriteRenderingData | 0.13  UI::Populate |
+| 11 | 0.10  __aarch64_ldadd4_relax | 0.09  Transform::GetTransformAccess | 0.13  AnimationPlayable::GetApplyMotionX |
+| 12 | 0.10  BaseRenderer::FlattenBasicData | 0.09  AnimatorControllerPlayable::GetAnimatorStateInfo | 0.13  Scripting::GetCachedPtrFromScriptingWrapper |
+| 13 | 0.10  MonoBehaviour::HandleNotifications | 0.09  InvertMatrix4x4_Full | 0.12  InputManager::GetAxis |
+| 14 | 0.10  Transform::GetTransformAccess | 0.09  BaseRenderer::FlattenBasicData | 0.10  GameObject::IsActive |
+| 15 | 0.10  Box2D::b2DynamicTree::Query | 0.09  UI::RectTransform::UpdateAnchorPositionIfTransformChanged | 0.10  BaseBehaviourManager::CommonUpdate<BehaviourManager> |
+| 16 | 0.10  InputAxis::Update | 0.09  audio::mixer::UpdateAudioMixerMemory | 0.10  ThreadsafeLinearAllocator::Deallocate |
+| 17 | 0.08  UI::RectTransform::UpdateAnchorPositionIfTransformChanged | 0.09  __aarch64_ldadd4_relax | 0.09  FindGameObjectsWithTag<dynamic_array<GameObject*, 8ul>> |
+| 18 | 0.08  FMOD::DSPI::getCriticalSection | 0.09  ParticleSystem::UpdateManualTransformData | 0.09  Animator::Prepare |
+| 19 | 0.08  MonoBehaviour::CallUpdateMethod | 0.08  SpriteRenderer::ScheduleSpriteTilingJobIfNeeded | 0.09  b2DynamicTree::RayCast |
+| 20 | 0.08  InvertMatrix4x4_Full | 0.08  PlayableTraverser::GetEffectivePlayState | 0.07  MonoBehaviour::HandleNotifications |
+| 21 | 0.06  ParticleSystemRenderer::CalculateWorldMatrixAndBoundsJob | 0.06  DirectorManager::BumpFrameIDs | 0.07  SafeIterator<List<ListNode<Behaviour>>>::Next |
+| 22 | 0.06  GameObject::SendMessageAny | 0.06  Animator::Prepare | 0.07  AnimatorControllerPlayable::UpdateGraph |
+| 23 | 0.06  PlayableTraverser::GetEffectivePlayState | 0.06  MonoBehaviour::CallUpdateMethod | 0.07  MemoryManager::Allocate |
+| 24 | 0.06  Transform::GetPosition | 0.06  Animator::GetAnimatorStateInfo | 0.07  AtomicStack::Pop |
+| 25 | 0.06  ParticleSystem::UpdateManualTransformData | 0.06  PrepareMeshRenderNodes<true> | 0.07  GlobalXToTRS |
+
+By area (the same self time, by function name), King's Pass: animation and Director 1.28 (and 0.4 on the job
+worker), render preparation, sorting and batch building 1.17, FMOD 0.89, Physics2D 0.60, job-system atomics 0.55,
+transforms 0.50, the behaviour loop 0.49, culling 0.42, component lookup and messaging 0.37, particles 0.37,
+allocators 0.29, input 0.18. Blasphemous: animation 2.37, the behaviour loop 0.96, allocators 0.55, render 0.54,
+UI 0.48, physics 0.41, input 0.32.
+
+What the list says: nothing is large. The largest single function is 0.4 ms (FMOD's audibility pass, which
+`UA_FMOD_ASYNC` already takes off UnityMain), the next ones 0.1 - 0.25 ms, and the hot instructions inside them are
+the first loads of each object they visit (on the in-order Cortex-A53 a wait for memory): the work is spread over
+hundreds of functions that each touch many objects once.
+
+### Calls a frame (`UA_ENGINE_COUNT`)
+
+`UA_ENGINE_COUNT=<s>` counts the calls of about 50 of these functions at their entries (a counter stub, nothing else
+changed). King's Pass, a frame: the Director prepares 82 outputs (82 Animators) and traverses 810 playables
+(`Playable::Handle` 1,624, `GetEffectivePlayState` 786); `Animator::Prepare` 164 (two passes); culling tests 8,897
+scene nodes (`IsNodeVisibleFast`: 4 cameras of about 2,200 nodes); `QueryComponentByType` 893 and
+`GetTransformAccess` 847 (mostly a Transform looked up by particles, `AudioSource::CachePositional` and the Animator
+pass); `InputAxis::Update` 223 (every input axis every frame); `CallUpdateMethod` 605, `HandleNotifications` 207
+(Physics2D's contact messages); 123 sprites' `PrepareRenderingDataIfNeeded`; 4 cameras rendered; 32 anchor walks of
+8,632 entries (none with a change bit set). Blasphemous: 74 outputs, 739 playables, 75 Animators'
+`ApplyOnAnimatorMove` with 714 `GetApplyMotionX` and 1,126 `GetNextCompatibleDescendant` (a recursive query over each
+graph, every frame), `InputAxis::Update` 417, `UI::Populate` 1,042, `ThreadsafeLinearAllocator::Allocate` 1,429,
+81 anchor walks of 31,781 entries (none set).
+
+So there is no big redundant pass to cut either: the work is the number of objects, each touched once or twice a
+frame. What can be cut exactly is the overhead around each touch (a call a node, a dependent load chain where the
+data is in order) and the waits for memory (fetched ahead). Frame-to-frame caching would need an "unchanged"
+signal the engine does not give: culling's node array is itself the compact input (checking it costs what testing
+it costs), an input axis's update reads the time and the key states (no cheaper test for "nothing changed"), and an
+Animator's output depends on its time, weights and state machine every frame; the one structural query that could
+be kept (`GetApplyMotionX` in 2017.4, topology only) has no graph version Unity bumps on every change it depends on.
+
+### The rewrites (runtime/host/enginerw.c; runtime.md has the switches)
+
+Each is off by default, keyed by the bytes of the Unity build it was read from (rows), and exact by construction or
+checked against Unity's own code on the live game:
+
+- **`UA_ANCHOR_WALK`** (6000.0.61f1, 2017.4.40f1, 2017.4.27f1). `UI::Canvas::UpdateCanvasRectTransform` sets each
+  root canvas's anchors and pivot twice a frame; each setter calls `RectTransform::UpdateAnchorPositionIfTransformChanged`,
+  which walks the canvas's whole subtree in hierarchy order, one dependent load of the next index at a time, to clear
+  a change bit and call `UpdateAnchorPosition` where it is set. In both games no entry had it set (King's Pass: 32
+  walks of 8,632 entries a frame; Blasphemous: 81 walks of 31,781). Ours takes Unity's step for every entry with the
+  bit set and passes the others by reading the change masks and next indices forward while the entries lie in order
+  (as a hierarchy built at load does), without the store of an unchanged word. `=verify` walks every passed stretch
+  again Unity's way: 18.8 M entries on the handheld, 0 differ; test_anchorwalk runs a model of Unity's walk on 8,000
+  random hierarchies (out-of-order stretches, non-RectTransforms, an `UpdateAnchorPosition` that sets bits further
+  on), both layouts: 0 differ (a broken skip: 33,777 failures).
+- **`UA_CULL_STEP1`** (6000.0.61f1). `ProcessCameraIndexListIsNodeVisibleStep1`, each camera's first pass over the
+  scene's 24-byte nodes (8,897 a frame in King's Pass), called `IsNodeVisibleFast` for every node: the same tests
+  (flags, layer mask, renderer, LOD mask) in one loop. Pure; `=verify` runs Unity's too: 29,916 passes, 19.7 M nodes,
+  0 lists differ; test_cullstep1 3,000 random lists, 0 differ (a dropped test: 2,628 failures).
+- **`UA_DIRECTOR_PREWALK`** (6000.0.61f1, 2017.4.40f1, 2017.4.27f1). The Director's prepare pass traverses each
+  Animator's playable graph depth first, a dependent miss a node (82 graphs, 810 nodes a frame in King's Pass). Before
+  the pass (6000.0: where `ExecutePrepareFrames` calls `RebuildPrepareFrameJobs`; 2017.4: its entry) the same graphs
+  are walked level by level across all graphs at once, each level's lines asked for with `PRFM` before they are read,
+  so the misses overlap and Unity's own traversal finds its nodes in the cache. Loads only, through the pointers
+  Unity's traversal follows and with its checks (handle versions, the skip flag), bounded (4,096 nodes, 32 levels, 64
+  inputs). Stats on the handheld: 82 graphs, 820 nodes, 5 levels a frame.
+- **`UA_PREFETCH=...,anim`** (6000.0.61f1 in unityprefetch.c; 2017.4.40f1 and 2017.4.27f1 in enginerw.c).
+  `Animator::BuildJobs`' loop over the outputs (164 a frame in King's Pass) at its call of the output's target
+  getter: two outputs ahead the output's lines, one ahead its Animator's (read at the getter's offset) and the source
+  handle's. test_unityprefetch runs the 6000.0 stub over outputs at every position of lists of 0 to 5 with every
+  piece at a page's end.
+- **`UA_ENGINE_COUNT`**: the measurement above.
+
+### Measured: no frame-time gain, and why (King's Pass, muOS, 2026-11-27)
+
+A B A in one hold (each run from a cool handheld; UnityMain's and the render thread's CPU time from schedstat
+between frames 1,800 and 3,300; `hwcount -g data` on UnityMain for 25 s from frame 1,800; B = `UA_ANCHOR_WALK=1
+UA_CULL_STEP1=1 UA_PREFETCH=beh,sprite,cull,play,anim UA_DIRECTOR_PREWALK=1`):
+
+| run | UnityMain ms a frame | render thread ms a frame | `ld_dep_stall` / cycles | L1D refills / 1000 instructions |
+|---|---|---|---|---|
+| A1 | 17.12 | 10.19 | 56.8 % | 22.7 |
+| B1 | 17.28 | 10.22 | 57.2 % | 24.5 |
+| A2 | 17.19 | 10.14 | 56.9 % | 23.1 |
+
+Inside the run-to-run spread: nothing gained. Event-sampled profiles say why (`UA_PROF_EVENT=raw:0xe7`, a sample
+each 1,000,000 load-miss stall cycles, 20 s; `l2d_cache_refill` every 2,000): UnityMain stalls about 15.3 M cycles
+a frame on loads (16,195 samples in A, 16,251 in B), and its L2 refills (about 42,000 a frame: 2.7 MB from DRAM a
+frame) account for that at a DRAM miss each. In B the stall samples in the Director's traversal fall from 4.2 % to
+0.8 % of UnityMain's and the culling pass's from 1.0 % to 0, but the same misses reappear in the prewalk's and the
+rewrites' own code (ua_host 0.6 % -> 7.8 % of the stall samples): the in-order Cortex-A53 has few misses in flight,
+so issuing the next level's PRFMs ahead does not overlap them much; the line is still fetched from DRAM, only by
+our code instead of Unity's. The stall samples are as flat as the time profile (libunity 69 %, managed 20 %; no
+function above 4 %: FMOD's audibility pass). What would move them is fewer lines fetched a frame (objects packed so
+a pass reads neighbouring memory, less data per object), not earlier fetches of the same lines.
+
+All the switches stay opt-in (exact, no cost measurable, no gain on Hollow Knight).
+
 ## Shader programs: compiles, links and Unity's binary cache
 
 ```sh
