@@ -1906,6 +1906,40 @@ UnityMain as it was: a default only after the G350 (min-spec, four slower cores)
 Cuphead 64-bit (2017.4.40f1) was not profiled: its APK and a trimmed OBB (~950 MB) did not fit the muOS card
 (347 - 823 MB free during the work); built on the Mac, waiting for space.
 
+### Cuphead 64-bit (2017.4.40f1, Mono route): a run-and-gun level and a boss (2026-11-27)
+
+The census above had only Cuphead's 32-bit player. Its 64-bit build (Unity 2017.4.40f1's IL2CPP player with Unity's Mono
+for aarch64, the RC's route) was packed for the test from an October conversion of the game (`pmu android-data`, the
+RC's codepatch and donors). The muOS card had no room for a whole install, so it ran from a test folder of the APK
+and the libraries, with the 32-bit install's OBB linked in (the same build id; asset bundles are independent of the
+player). A first trimmed OBB missed bundles the title loads (`tex_screen_fx`, an intro's music): the title stalled on a
+black screen. The run used `CUPHEAD_TEST_LEVEL` with godmode and homing, `UA_PROF=500` for 20 s from 95 s, and the
+default thread list. Names come from the 2017.4.40f1 arm64-v8a symbol file. RG34XX-SP, muOS, silent.
+
+| | FlyingGenie (boss, shmup) | Platforming_Level_1_2 (run-and-gun, running right and firing) |
+|---|---|---|
+| fps | 57.1 (60 at most) | **40.0** (270 of 800 frames over 25 ms) |
+| UnityMain on a CPU | 13.0 ms | 22.3 ms (running 97 % of the time: it holds the frame) |
+| render thread | 7.2 ms | 6.6 ms |
+| job workers | 3 x 0.83 ms (+3.0 waiting for a core) | 3 x 1.5 ms (+4.0) |
+| UnityMain by area, the largest | animation 3.0, present wait 2.5, cameras 1.8, Update 1.7, coroutines 1.2, FixedUpdate 1.2, FMOD 0.8 | animation 5.7, FixedUpdate 3.4, Physics2D step 3.3, Update 2.5, coroutines 2.5, cameras 1.4, FMOD 0.9 |
+
+The run-and-gun level is the one below 60. UnityMain's items there, in ms a frame:
+
+| # | what | ms | exact cut? |
+|---|---|---|---|
+| 1 | animation: `Animator::UpdateAvatars`, `DirectorManager` (`PreOrderPlayableTraverser::Traverse` 0.33, `Animator::BuildJobs` / `Prepare` 0.2 each, `PlayableOutput::GetSourcePlayable`) | 5.7 | Unity's own walk of the playable graphs; enginerw's `UA_DIRECTOR_PREWALK` and the `anim` prefetch site target it (2017.4 rows exist; measured on Hollow Knight: no gain) |
+| 2 | `LevelPlayerMotor.HandleRaycasts` -> `Physics2D.BoxCast`, whose `PhysicsQuery2D::BoxCast` first calls `PhysicsManager2D::SyncTransforms` (`autoSyncTransforms`): `FlagContactsForRecreate` 0.40, `Collider2D::WakeAllBodyContacts` 0.36 | 2.1 (1.7 of it the sync) | the sync applies the colliders that scripts moved since the last one; it is real work, not a repeat. A cut would have to batch the moves (game play: not exact by construction). Not built |
+| 3 | Physics2D step (`b2ContactManager::Collide`, `b2Distance` 0.31) | 3.3 | Box2D's own |
+| 4 | job system on UnityMain (`WaitForJobGroup` helping and waiting) | 2.8 | `UA_JOB_WORKERS` (exact, above) changes who runs these jobs: not measured on Cuphead |
+| 5 | memory (`UnityDefaultAllocator::AllocationPage` 0.40, `ThreadsafeLinearAllocator`) | 2.1 | the allocator's page lookup; a whole area, not one call site |
+| 6 | Mono's call path (`mono_conc_hashtable_lookup`, `il2cpp_method_get_param_count`, `runtime_invoke`) | 1.0 | the 2017.4 cached invoke is already on |
+| 7 | behaviour loop (`MonoBehaviour::CallUpdateMethod` 0.25, `GameObject::QueryComponentByType` 0.36, `SendMessageAny` 0.22) | ~0.8 | as the census's item 8 |
+
+No item is both 0.5 ms or more and a small exact cut, so nothing was built. Next steps: `UA_JOB_WORKERS=1` on this level
+(item 4, exact), and a profile of where the Physics2D sync's moved colliders come from (item 2). The boss level is
+near 60 fps; its UnityMain time is the same kinds of work, smaller.
+
 ## Shader programs: compiles, links and Unity's binary cache
 
 ```sh
