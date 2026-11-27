@@ -53,7 +53,7 @@
 // wrapper they came from (libunity offsets). With UA_FMOD_ASYNC=1 the same <s> gives `[fmodasync] async ...` lines:
 // the updates handed over, the worker's time, what joined them and how long it waited.
 //
-// How it is found: tools/re/unityhooks.py prints the rows (FMOD::System::update as a 'replace' row, the validates
+// How it is found: pmu-dev unityhooks prints the rows (FMOD::System::update as a 'replace' row, the validates
 // hooked, SystemI::update and AudioManager::Update as 'call' rows) and the return address of AudioManager::Update's
 // call. A libunity.so without matching rows is left alone (logged).
 #define _GNU_SOURCE
@@ -591,7 +591,7 @@ void fmodasync_on_load(uintptr_t base, size_t size)
     }
     const char *what = g_mode == M_ASYNC ? "UA_FMOD_ASYNC" : "UA_FMOD_COUNT";
     if (!p) {
-        fprintf(stderr, "[fmodasync] %s: this libunity.so is not one whose FMOD update was read (tools/re/unityhooks.py); "
+        fprintf(stderr, "[fmodasync] %s: this libunity.so is not one whose FMOD update was read (pmu-dev unityhooks); "
                         "the update stays on UnityMain\n", what);
         g_mode = M_OFF;
         return;

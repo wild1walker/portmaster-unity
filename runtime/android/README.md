@@ -18,7 +18,7 @@ The files: `log_shim.c` (liblog), `native_window.c`, `asset_manager.c`, `looper_
 clock), `ndk_newer.c` (API 23-35 additions), `opensles.c`, `media_ndk.c`, `egl_glue.c`,
 `shim_tables.c` (the tables and the API level gating).
 
-## What the libraries need (from `readelf`; `tools/re/elfimports.py` lists them for any player)
+## What the libraries need (from `readelf`; `pmu-dev elf-imports` lists them for any player)
 
 The DT_NEEDED entries and undefined dynamic symbols of the 2017.4 player; the Android-only ones are:
 
@@ -33,7 +33,7 @@ The DT_NEEDED entries and undefined dynamic symbols of the 2017.4 player; the An
 
 What the players of 2019.4 and later (and the Android builds of the corpus: their libunity, libil2cpp,
 Burst and plugin libraries) look up beyond that, by dlsym from `libandroid.so` or as weak imports
-(`tools/re/elfimports.py` for the imports, the libraries' strings for dlsym names):
+(`pmu-dev elf-imports` for the imports, the libraries' strings for dlsym names):
 
 | Names | Who | API |
 |---|---|---|
@@ -199,11 +199,11 @@ host never sets a display then).
 ## Frame pacing (Swappy) and the vsync clock
 
 Unity 2019.3+ contains Android Frame Pacing (Swappy, player setting "Optimized Frame Pacing",
-`androidUseSwappy`). Converted desktop data has the setting off (`pmunity android-data`, `--swappy`), as
+`androidUseSwappy`). Converted desktop data has the setting off (`pmu android-data`, `--swappy`), as
 the desktop build ran: Swappy stays off by its own switch, the `swappy.disable` system property
 (`loader/hybris_compat.c`; `SO_PROP_swappy_disable=0` would let it run), and Unity presents with
 `eglSwapBuffers` at its swap interval, which the host's display paces (vsync on Mali fbdev,
-`SDL_GL_SetSwapInterval` on SDL). A game's own Android build (`pmunity apk`, docs/apk.md) keeps its
+`SDL_GL_SetSwapInterval` on SDL). A game's own Android build (`pmu apk`, docs/apk.md) keeps its
 setting, so ua_host clears `swappy.disable` for it and Swappy paces the frames.
 
 What Swappy needs from here:

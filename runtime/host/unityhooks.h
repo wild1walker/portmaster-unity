@@ -10,7 +10,7 @@ int unityhooks_gfx_jobs(void);
 // UnityMain, after each nativeRender: UA_PRESENT_SYNC's setting, once
 void unityhooks_frame(void);
 
-// For the other hook files (unitypool.c): a function as tools/re/unityhooks.py read it in one player
+// For the other hook files (unitypool.c): a function as pmu-dev unityhooks read it in one player
 #include <stddef.h>
 #include <stdint.h>
 struct uh_row {

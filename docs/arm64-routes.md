@@ -913,7 +913,7 @@ the ABI lets a call find them), the unit test, and the runs above reaching King'
 With `UA_RELAYOUT`: a function whose call site is changed differs from the
 library file, so the relayout leaves it in place and its moved callers reach it there; the two work together
 and the patched functions lose only their own move. Other Unity versions need their own rows
-(tools/re/unityhooks.py prints them; the loops' registers read by hand).
+(pmu-dev unityhooks prints them; the loops' registers read by hand).
 
 **City of Tears, a boss, the 32-bit build, a soak (2026-11-21), and the default.** All 64-bit runs with the
 aarch64 defaults (relayout with HK's list, vtables, atomics), A B A B, then the 32-bit build (armeabi-v7a player,

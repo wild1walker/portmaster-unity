@@ -16,10 +16,10 @@ IL2CPP API to the Mono API. This is our own implementation of it.
 ```
 tools/mono64/build-mono.sh <unity version> <work dir>          # Unity's Mono runtime for aarch64 Linux (once per line)
 runtime/mono64/build.sh                                        # the bridge -> runtime/mono64/out/arm64/libil2cpp_mono.so
-python -m pmunity player donor <ver> work/player64 --backend il2cpp --abi arm64-v8a --managed \
+pmu player donor <ver> work/player64 --backend il2cpp --abi arm64-v8a --managed \
   --apk <donors>/donor-<ver>-il2cpp-arm64.apk --apk <donors>/donor-<ver>-mono-armv7.apk   # (porting.md, section 5)
-python -m pmunity convert <Game>_Data work/data --config game.json
-python -m pmunity android-data --src <data view> --pkg work/player64 --mono64 --out work/android --pack all
+pmu convert <Game>_Data work/data --config game.json
+pmu android-data --src <data view> --pkg work/player64 --mono64 --out work/android --pack all
 ```
 
 The device folder is the 64-bit route's ([arm64.md](arm64.md)): `ua_host64`, the APK and
@@ -44,7 +44,7 @@ Cuphead, 2017.4.9f1, on 2017.4.40f1's player and Mono 5.0.1).
 
 What libunity needs from `libil2cpp.so`, from Unity's IL2CPP arm64 players of 2017.4.40f1,
 2019.4.8f1, 2020.3.49f1, 2021.3.16f1, 2022.3.62f3 and 6000.0.61f1 with their symbol files
-(`pmunity player fetch <v> --backend il2cpp --abi arm64-v8a --symbols`):
+(`pmu player fetch <v> --backend il2cpp --abi arm64-v8a --symbols`):
 
 - **The API**: libunity names 175 (2017.4), 222 (2019.4), 225 (2020.3), 228 (2021.3) and 234
   (2022.3, 6000.0) `il2cpp_*` functions and looks each up with `dlsym` into a global function
@@ -178,15 +178,15 @@ APK and OBB, the Managed folder above; the port's test hooks; 2026-10-26):
 
 ## As a port (`--route mono-arm64`)
 
-`pmunity port check` lists the route for a .NET 4.x Mono build of 2017.4 or later (not yet as the
-recommended one); `pmunity port new <name> --data <game> --route mono-arm64` writes it. Its setup is
+`pmu port check` lists the route for a .NET 4.x Mono build of 2017.4 or later (not yet as the
+recommended one); `pmu port new <name> --data <game> --route mono-arm64` writes it. Its setup is
 the android route's, with three changes: the player is the arm64 IL2CPP one with its engine modules
 (`player donor --backend il2cpp --abi arm64-v8a --managed` from the release's IL2CPP and Mono donors:
 nothing downloaded), the packing is
 `android-data --mono64`, and the install takes the IL2CPP player's `libmain.so`/`libunity.so` plus
 the release's `setup/mono64/<line>/` (the bridge as `libil2cpp.so`, `libmonobdwgc-2.0.so`,
 `libMonoPosixHelper.so`, from Unity 2021.2 `libmono-native.so`). Nothing is compiled on the handheld.
-`pmunity port package` builds that folder for each line of `game.unity_versions` (the package part
+`pmu port package` builds that folder for each line of `game.unity_versions` (the package part
 `mono64`: `runtime/mono64/build.sh`, `tools/mono64/build-mono.sh <line> <work>` in Docker;
 `--mono64-work DIR` or `$PMUNITY_MONO64_WORK` for an existing work folder) and adds Mono's, bdwgc's
 and corefx's licences (THIRD_PARTY.md). Tom City (2020.3.49f1) as such a port, rehearsed on a
@@ -245,7 +245,7 @@ time rather than saving any, and its memory is that of the IL2CPP build. What it
 setup: no IL2CPP conversion and compile (48 minutes for this game in Docker on a Mac; on the
 handheld not tried, an hour for Cuphead's smaller build), and none of their downloads.
 
-Where the 1.2 ms go (`UA_PROF=500` in the flat-shader scene, one hold, `profsum.py --syms` with
+Where the 1.2 ms go (`UA_PROF=500` in the flat-shader scene, one hold, `pmu-dev profsum --syms` with
 the 6000.0.61f1 IL2CPP player's libunity symbols and the runtime's own; 44.2 and 47.1 fps with the
 profiler): UnityMain's engine time is the same, 14.4 ms a frame (Mono route) and 14.2 ms (IL2CPP);
 the game's code is not. The Mono route spends 4.9 ms a frame in JIT-compiled code (17.0 % of its
@@ -295,7 +295,7 @@ The G350 then stopped answering during the 64-bit build's profiled run (`UA_PROF
 1 GB handheld without swap at its limit; it needs its power button).
 
 **Where the time goes** (`UA_PROF=500`, the same scene, one hold each; ms a frame of UnityMain's samples
-on a CPU, `profsum.py --syms` with each player's symbols and the runtime's own):
+on a CPU, `pmu-dev profsum --syms` with each player's symbols and the runtime's own):
 
 | UnityMain | 32-bit | 64-bit | difference |
 |---|---|---|---|

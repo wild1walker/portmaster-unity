@@ -28,7 +28,7 @@
 // manager's destructor. A new buffer is always Unity's (its AcquireBuffer, finding none). The GL
 // calls are the same ones: the picture is the same.
 //
-// The functions are found as unityhooks.c finds its own (tools/re/unityhooks.py: offsets and hashes of
+// The functions are found as unityhooks.c finds its own (pmu-dev unityhooks: offsets and hashes of
 // the code that was read); the structure offsets in g_layouts were read from that same code. Logged:
 // "[unitypool]" at the start and every 600 frames (buffers taken, how many from the pool, free,
 // waiting for the GPU, deleted).
@@ -363,5 +363,5 @@ void unitypool_on_load(uintptr_t base, size_t size)
         return;
     }
     fprintf(stderr, "[unitypool] UA_GLES_POOL: this libunity.so is not one whose buffer pool was read "
-                    "(tools/re/unityhooks.py); Unity's own pool is used\n");
+                    "(pmu-dev unityhooks); Unity's own pool is used\n");
 }

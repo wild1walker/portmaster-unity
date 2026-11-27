@@ -7,7 +7,7 @@
 // dlopen/dlsym first for the game's P/Invokes. (One file: the same library under two names would
 // be loaded twice where the file system has no links, as on the handhelds' exFAT cards.)
 //   UA_SCRIPTING=mono  the bridge whatever android_package.json says ("scripting": "mono" there,
-//                      which `pmunity android-data --mono64` writes); il2cpp: never
+//                      which `pmu android-data --mono64` writes); il2cpp: never
 #include "mono64.h"
 #include "../loader/so_loader.h"
 #include "../mono64/il2cpp_mono.h"

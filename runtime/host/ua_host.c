@@ -81,7 +81,7 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 
 static char libdir[512];
 
-// android_package.json beside the APK (pmunity android-data --pack, pmunity apk): "package",
+// android_package.json beside the APK (pmu android-data --pack, pmu apk): "package",
 // "build_id", "apk", and from an imported Android build "version_code", "version_name", "min_sdk",
 // "target_sdk" and the manifest's "meta_data" ({"key": "value", ...}, ApplicationInfo.metaData), and
 // "unity_version"
@@ -179,7 +179,7 @@ static void read_package_json(const char *root)
 // API 21), or the data's min_sdk where android-data wrote one (22 for a game with compute kernels:
 // Unity's Android players create OpenGL ES 3.1+ contexts, and so run compute shaders and GLES 3.1
 // programs, only from Android 5.0, API 21); the loader's ro.build.version.sdk says the same. An
-// imported Android build (pmunity apk): its targetSdkVersion, the Android its makers tested it on,
+// imported Android build (pmu apk): its targetSdkVersion, the Android its makers tested it on,
 // but at most SDK_CAP and at least its minSdkVersion (a phone it installs on has that). UA_SDK_INT
 // overrides.
 #if defined(__aarch64__)
@@ -592,7 +592,7 @@ int main(int argc, char **argv)
     // the data tool next to the APK), else the only .apk in <root>
     read_package_json(root);
     const char *pkg = getenv("UA_PACKAGE") ? getenv("UA_PACKAGE") : pj_package[0] ? pj_package : "com.pmunity.game";
-    // an imported Android build (pmunity apk) keeps its own frame pacing setting: with Optimized Frame
+    // an imported Android build (pmu apk) keeps its own frame pacing setting: with Optimized Frame
     // Pacing on, Unity 2019.3+ needs Swappy running (disabled, it presents nothing or stops after a few
     // frames), so Swappy's off switch (the loader's swappy.disable property) is cleared for it;
     // converted desktop data has the setting off and never starts Swappy (android/README.md)

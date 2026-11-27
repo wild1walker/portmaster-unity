@@ -3,7 +3,7 @@
 ## Real players
 
 Unity's arm64-v8a players exist only with IL2CPP, and a game's own Android build carries them
-(`libmain.so`, `libunity.so`, `libil2cpp.so` in `lib/arm64-v8a/`): `pmunity apk` makes such a
+(`libmain.so`, `libunity.so`, `libil2cpp.so` in `lib/arm64-v8a/`): `pmu apk` makes such a
 build ready for the aarch64 `ua_host` (docs/apk.md). Free IL2CPP Android builds of Unity 2020.3.3,
 2021.3.4 (with Burst) and 2022.3.14 (Burst, FMOD, a 3D scene) reach their title menus in the
 emulated rig (`EMU_ARCH=arm64 tools/emu/emu.sh`: a native aarch64 container on an Apple-silicon
@@ -25,7 +25,7 @@ needed was outside the loader:
   on a phone.
 - **symbols**: IL2CPP builds with engine code stripping (the default) link their own
   `libunity.so` from Unity's static libraries, so its build id differs from the player package's
-  and `pmunity player fetch --symbols-only` symbols do not fit it (only the exported names do);
+  and `pmu player fetch --symbols-only` symbols do not fit it (only the exported names do);
   Mono builds and IL2CPP builds without stripping use the prebuilt library the symbols belong to.
 - 2021.3+ builds list Vulkan first; `libvulkan.so` is mapped to nothing, so the player takes
   GLES3, as on a phone without Vulkan.
@@ -119,7 +119,7 @@ AAPCS64 is the same on Android and Linux: `so_softfp_wrap()` returns the functio
 `ARCH=arm64 runtime/loader/build.sh test` (and `runtime/loader/build.sh test` for armhf) builds
 `test_sem`, `test_sync` and `test_syn`. `test_syn` loads synthetic "Android" libraries
 (`test/syn_lib.c`, `test/syn_dep.c`: freestanding, `-nostdlib`, stack-protected the Android way,
-`DT_NEEDED` libc.so) linked five times and rewritten by `test/pack_relocs.py` into RELR, APS2,
+`DT_NEEDED` libc.so) linked five times and rewritten by `test/pack_relocs.c` into RELR, APS2,
 both, and Android's RELR tags; each must relocate to the same image as the plain one. It also
 checks imports from shims, host and dependency, init order, dlopen/dlsym, IFUNC, setjmp,
 signals, pthread objects at 4 mod 8, `stat`, the guard slot (and that overrunning a buffer

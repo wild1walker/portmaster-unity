@@ -1,10 +1,12 @@
 # The setup's time on a handheld
 
-Where a port's first-launch setup (`setup/patchscript`: unpacking, `pmunity convert`, `pmunity
+Where a port's first-launch setup (`setup/patchscript`: unpacking, `pmu convert`, `pmu
 android-data`, installing) spends its time on a handheld, and what was done about it. Every
 change here leaves the output byte for byte as it was (the same converted files, the same APK and
 OBB), except guided ASTC encoding ([below](#guided-astc-encoding-2026-10-26)), which writes some
-texture blocks itself: a measured, small change of the picture.
+texture blocks itself: a measured, small change of the picture. Much of it was measured on the
+Python converter, retired 2026-11-27 (its tests and tools named here are in git history: `git show
+2147a04:<path>`); pmu keeps the same output.
 
 ## Measured on the handheld
 
@@ -459,7 +461,8 @@ S2's converted files is the same with the changes and without, on both handhelds
 
 ## ASTC guide files (2026-10-28)
 
-`pmunity astc-guide` (astc_guide.py) runs the texture step on a PC with a recorder: each texture
+The retired `pmunity astc-guide` (astc_guide.py, git history; not ported to pmu: the guides shipped
+with ports were recorded with it) ran the texture step on a PC with a recorder: each texture
 level's hard blocks (the ones guided_astc leaves to astc-encoder) are encoded at eleven tiers
 (presets with partition limits, cheapest first) and each block gets the cheapest tier whose error
 is at most the target preset's. The guide holds a tier byte per hard block (zlib), keyed by file,
@@ -699,7 +702,7 @@ network. On a 12-core PC the textures of Cuphead with its add-on take 7.4 min.
 
 ## Measuring
 
-`tools/port/stepstat.py` runs one pmunity command as the setup does and prints its wall and CPU
+The retired `tools/port/stepstat.py` ran one pmunity command as the setup does and prints its wall and CPU
 time, peak memory (VmHWM, and RssAnon sampled every 20 ms) and what it read and wrote; run it in
 the arm64 container with the setup's own Python (unpack a port's `setup/python.tar.gz`):
 

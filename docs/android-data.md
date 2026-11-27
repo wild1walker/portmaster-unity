@@ -1,13 +1,13 @@
 # android-data: a game's converted data as Unity's Android player expects it
 
-`python -m pmunity android-data --src <converted Game_Data> --pkg <Android player> [--pack all]`
+`pmu android-data --src <converted Game_Data> --pkg <Android player> [--pack all]`
 (convert/pmunity/android_data.py) builds the data from the converted desktop data (which it only
 reads) and the Android player package. For Cuphead a run takes about 15 s; big files are clones
 (APFS clonefile, else hard links), so the tree costs about 0.4 GB of real disk (48 rewritten
 bundles, explained below). The output is in `--out` (default `android-out/`).
 
 Sections 1-3 come from libunity.so 2017.4.9f1 armeabi-v7a (sha256 `b7d24200…b604315e`),
-disassembled with the symbols in libunity.sym.so (`tools/re/arm.py`); section 4 is what changes
+disassembled with the symbols in libunity.sym.so (the retired `tools/re/arm.py`; `pmu-dev dis` does it now); section 4 is what changes
 for the other Unity versions (5.6 - 6000.6).
 
 ## 1. How the player finds its data
@@ -168,7 +168,7 @@ built-ins and six free Linux games (one per line):
 
 - **Versions.** The data's Unity version is read from `globalgamemanagers` (or a bundle header);
   outside 5.6 - 6000.6 the run stops unless `--any-unity-version`. The player package's version
-  comes from its `player.json` (`pmunity player donor` or `player fetch`), its `ivy.xml` (5.x - 2018.x), the version
+  comes from its `player.json` (`pmu player donor` or `player fetch`), its `ivy.xml` (5.x - 2018.x), the version
   string in its libunity, or, failing that, from its "unity default resources"
   (which gives only the line: the file is often from an earlier patch). Data and player of
   different lines are refused (main data has no type trees: the player reads its own layouts).
@@ -213,12 +213,12 @@ built-ins and six free Linux games (one per line):
 - **Mono config.** `--mono-etc` default: `Mono/etc` or `MonoBleedingEdge/etc`, in the data folder,
   next to it (Windows) or (macOS) in `Contents/`. A Windows build's native plugins
   (`Plugins/x86_64/*.dll`) are named in the warning; Unity 2021.2+ Windows builds' class libraries
-  are Windows-only (`pmunity winbcl` gives the Unix ones, shipped with `--managed-file`; a port's
+  are Windows-only (`pmu winbcl` gives the Unix ones, shipped with `--managed-file`; a port's
   setup runs it).
 - **Assemblies the engine modules reference.** The Android player's engine modules can reference
   assemblies a desktop build does not ship (Unity 6's reference netstandard 2.1.0.0; a build made
   without `netstandard.dll` lacks it): android-data warns for each (`missing_references`), and
-  `pmunity winbcl <data> <dir> --player <pkg>` writes Unity's own copy of the game's version
+  `pmu winbcl <data> <dir> --player <pkg>` writes Unity's own copy of the game's version
   (the `unityjit-linux` profile's, or `unityjit`'s before 2021.2, from the Windows editor
   installer) for `--managed-file`; what is not Unity's (a package's or the developer's assembly)
   it only names. A port's setup does this by itself (`android_data.winbcl`).
@@ -280,7 +280,7 @@ built-ins and six free Linux games (one per line):
   the emulated rig. The build id comes from `BuildSettings.buildGUID`, which 2022 dropped: then
   `PlayerSettings.productGUID`, else a hash of the settings file.
 - **What is refused or reported.** A compressed build (`data.unity3d` without
-  `globalgamemanagers`): unpack it first with `python -m pmunity unpack <data> [--remove]`
+  `globalgamemanagers`): unpack it first with `pmu unpack <data> [--remove]`
   (stored, LZ4 and LZMA blocks; the files come out as an uncompressed build has them, which is what
   an Android player reads from `assets/bin/Data`). An IL2CPP build (no `Managed/*.dll`;
   `GameAssembly`, `il2cpp_data`): the Mono player cannot run it. Native plugins in `Plugins/`
@@ -367,14 +367,14 @@ folder is made but the code still reads the jar path (a warning says so). FMOD's
 `assets/` beside the APK too, for ua_host's FMOD path mapping (section 5).
 
 With IL2CPP (`--il2cpp`, [il2cpp.md](il2cpp.md)) the game's code is in `libil2cpp.so`, so the
-patch is compiled in: `pmunity il2cpp --asmpatch <command> --streaming-assets both|loose` (and
+patch is compiled in: `pmu il2cpp --asmpatch <command> --streaming-assets both|loose` (and
 `--data-path`) adds it to the asmpatch run whose assemblies IL2CPP compiles, and its `il2cpp.json`
 says which mode it was built for. android-data `--il2cpp` then takes the same `--streaming-assets`
 and `--data-path`: a build whose compiled reads look for a folder or archive this packing would
 leave empty (built `both` or `loose`, packed otherwise; built with the data-path patch, packed
 without `--data-path`) is refused; folders made for a build without the patch get the same warning
 as above. `--asmpatch`, `--managed-file` and `--assembly-patch` are refused with `--il2cpp`: they go
-to `pmunity il2cpp`. With IL2CPP the data is one APK (no OBB) when it fits, so `both` keeps the
+to `pmu il2cpp`. With IL2CPP the data is one APK (no OBB) when it fits, so `both` keeps the
 files in the APK and beside it.
 
 In the emulated rig: a 2018.3 game whose menus take their text from localization XML files that it
@@ -440,8 +440,8 @@ default `com.pmunity.<name>`) names the PlayerPrefs file: a port keeps it from r
 
 To move saves between a PC and the handheld: the files of `persistentDataPath` copy as they are
 (the same names below the folder; a few games tie a save to a machine by encrypting it with a
-device id); PlayerPrefs with `python -m pmunity prefs copy <from> <to>` between the Linux player's
-`prefs` file and the handheld's `.prefs` file (`prefs.py`; `prefs show <file>` lists one). It keeps
+device id); PlayerPrefs with `setup-rs/tools/pmu-dev.sh prefs copy <from> <to>` between the Linux player's
+`prefs` file and the handheld's `.prefs` file (`pmu-dev prefs`, crates/devtools; `prefs show <file>` lists one). It keeps
 the display settings each machine has its own of (`Screenmanager *`) unless `--all`. Windows'
 registry and macOS's plist are not read: there a game's own save files are what copies.
 

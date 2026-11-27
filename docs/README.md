@@ -16,7 +16,7 @@ the five-step quick start. This page lists every document and the repository's l
 | [rust-setup.md](rust-setup.md) | the setup's tools in Rust: `pmu` (setup-rs), the commands a port's setup runs on the handheld, building and testing in the `ua-rust` image, comparing with the Python, bad conditions (a power cut, a full card, low memory) |
 | [setup-speed.md](setup-speed.md) | where a port's first-launch setup spends its time on a handheld (unpacking, each convert step, packing, the card), what was made faster with the same output, what is left |
 | [performance.md](performance.md) | the paths that paid on a 1 GB, 4 x A53 handheld, in the order to take them: measuring in the heaviest places, memory, hitches, sound, GPU- or CPU-bound, native code; what did not pay |
-| [profiling.md](profiling.md) | where a frame goes on the handheld: the sampling profiler (`UA_PROF`, `profsum.py`), the device bench (`tools/device/profbench.sh`, `benchsum.py`), A/B runs and how to read them |
+| [profiling.md](profiling.md) | where a frame goes on the handheld: the sampling profiler (`UA_PROF`, `pmu-dev profsum`), the device bench (`tools/device/profbench.sh`, `pmu-dev benchsum`), A/B runs and how to read them |
 | [lockstep.md](lockstep.md) | the lockstep checker: a session recorded and replayed frame by frame with the clock fixed, the game's state hashed every frame, two runs (one with a speedup) compared down to the object and field; what it can and cannot see |
 | [input.md](input.md) | pads, Rewired, InControl, the Input System package, pointer mode, keys from the pad, the on-screen keyboard |
 | [plugins.md](plugins.md) | native plugins, the plugin map, FMOD, Steam and other service stubs, HTTPS |
@@ -28,11 +28,19 @@ the five-step quick start. This page lists every document and the repository's l
 | [il2cpp.md](il2cpp.md) | Mono desktop games compiled with IL2CPP for the 64-bit ARM player, on a PC or on the handheld (`--on-device`) |
 | [mono-arm64.md](mono-arm64.md) | Mono desktop games on the 64-bit ARM player without IL2CPP: their assemblies on Unity's Mono built for aarch64 Linux, behind a `libil2cpp.so` bridge |
 | [arm64-routes.md](arm64-routes.md) | why the 64-bit build is slower than the armhf one on a Cortex-A53, counted with the CPU's counters (L2 misses, not instructions), and the ranked routes to an aarch64-only release |
-| [apk.md](apk.md) | games owned as Android builds (`pmunity apk`) |
+| [apk.md](apk.md) | games owned as Android builds (`pmu apk`) |
 | [arm64.md](arm64.md) | the 64-bit ARM loader |
 | [box64-route.md](box64-route.md) | the game's own Linux x86-64 build under box64 |
 | [macho-route.md](macho-route.md) | a macOS IL2CPP build's arm64 GameAssembly on ARM Linux: the Mach-O loader, macOS calls, instruction rewrites (in progress) |
 | [design.md](design.md) | the design and the interfaces between the parts |
+
+The tools are Rust: `pmu` (setup-rs, the setup's and the porter's: `setup-rs/tools/pmu.sh <command>`)
+and `pmu-dev` (setup-rs/crates/devtools, the developer's: `setup-rs/tools/pmu-dev.sh <tool>`, or its
+aarch64 build on a handheld: `pmu-dev.sh --build <dir>`): profsum, benchsum, hitchsum, sym, memlog,
+rigstats, uatest-sum, montage, pcmwav, png, imgdiff, flatshaders, deadfrags, shaders-export,
+typetrees, unityhooks, glrec-gen, fontgen, il2cpp-lock; on the handheld stacks, profcpu, memprof. The
+Python scripts they replace, and the Python converter, were retired on 2026-11-27 (their last commit:
+2147a04; `git show 2147a04:<path>`).
 
 Component notes: [runtime/android](../runtime/android/README.md),
 [runtime/jni](../runtime/jni/README.md), [runtime/media](../runtime/media/README.md),
@@ -54,7 +62,7 @@ Component notes: [runtime/android](../runtime/android/README.md),
 
 ## Shaders in short
 
-`pmunity shaders` gives every OpenGL Core program a GLSL ES 3.00 twin with the same numbers:
+`pmu convert --steps shaders` gives every OpenGL Core program a GLSL ES 3.00 twin with the same numbers:
 32-bit floats and full-precision samplers as on a desktop GPU, plus two rewrites that keep every
 operation (constant tables as `const` arrays, fixed-count loops unrolled). A Windows build's
 Direct3D 11 programs are translated with Unity's HLSLcc (`--from d3d11`). `runtime/host/shadercheck`

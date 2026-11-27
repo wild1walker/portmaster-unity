@@ -8,7 +8,7 @@
 //                or Wwise's sound engine built from the game's own entry points (wwise.c: the map's
 //                fn and const lines)
 //   none         dlopen fails: DllNotFoundException, as on a PC without the library
-// from plugins.map (pmunity android-data writes it beside the APK). Glibc libraries found in lib/
+// from plugins.map (pmu android-data writes it beside the APK). Glibc libraries found in lib/
 // are mapped even without a map line.
 //
 // 32-bit ARM: Mono (armeabi-v7a) passes float and double arguments in core registers (softfp), a

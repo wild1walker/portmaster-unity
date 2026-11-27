@@ -10,7 +10,7 @@ by default, the way such a build would, and leaves the game play as it is. Since
 the profile on every handheld, not only those with 1 GB of RAM, and no setup question offers the PC
 picture (the ports' rule: [porting.md](porting.md#the-games-own-options-lowest-and-the-games-rules-kept)).
 
-    python -m pmunity convert <data> --config game.json        # with "steps": [..., "quality"]
+    pmu convert <data> --config game.json        # with "steps": [..., "quality"]
     "quality": {"profile": "auto"}                             # auto (default) | handheld | full
 
 The rule it follows (the user's, 2026-10-24, the lowest picture on every handheld since 2026-11-08):

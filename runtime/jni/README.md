@@ -237,7 +237,7 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   buffers and boxing, and runs 4 threads.
 - `test/test_unityplayer.c` + `test/fake_unity.c` (softfp on ARM): a fake libmain/libunity that
   registers the natives of one of 8 Unity versions (2017.4.9, 2017.4.40, 2018.4, 2019.4, 2020.3,
-  2021.3, 2022.3, 6000.6: names and signatures as `tools/re/jnitables.py` lists them for each
+  2021.3, 2022.3, 6000.6: names and signatures as `pmu-dev jni-tables` lists them for each
   player; 6000.6's per-instance natives on `UnityPlayerForActivityOrService`) and
   uses the Java side as that version does. Each version runs in its own process
   (`test_unityplayer [n]` runs one). It checks the full startup order (with
@@ -336,7 +336,7 @@ is defined as a subclass of Activity for that; before, a placeholder gave it a 0
 `Build.DISPLAY` for its device list. For converted data it then stays off by the `swappy.disable` system property
 (android/README.md, "Frame pacing"); imported builds run it. Unity itself must not use Swappy then: with
 `PlayerSettings.androidUseSwappy` on, 2019.4 presents nothing and 2021.3+ stop after their first
-frames, which `pmunity android-data` avoids by turning the setting off (its default); runtime/jni
+frames, which `pmu android-data` avoids by turning the setting off (its default); runtime/jni
 logs a line when Swappy starts.
 
 **IL2CPP players** find `libil2cpp.so` with `ClassLoader.findLibrary("il2cpp")`
@@ -411,7 +411,7 @@ quits; Play Asset Delivery has no asset packs and split APKs are not listed
 
 Reproduce: build jnicover as its header says, then for each player
 `jnicover < notes/bindings.tsv` and `jnicover < notes/javacalls.tsv` (notes from
-`tools/re/survey_player.sh` and `tools/re/javacalls.py`).
+`tools/re/survey_player.sh`; javacalls.tsv from the retired `tools/re/javacalls.py`, git history).
 
 ### Unity 2023.1 - 6000.6 (`up_unity6.c`; docs/compat/unity-6000.md)
 - `UnityPlayer` is abstract; the Activity uses `UnityPlayerForActivityOrService`, on which libunity
@@ -470,7 +470,7 @@ as Android's for what libunity calls (the call sequence: `../media/README.md`):
 Tests: `../media/test/test_media_jni.c` (`../media/build.sh test`).
 
 ## What Unity may still call that is missing or shallow
-The authoritative list of what libunity can bind comes from `tools/re/strrefs.py` + `tools/re/jnibindings.py` run on your own copy of the player. Run the real
+The authoritative list of what libunity can bind comes from `pmu-dev strrefs` + `pmu-dev jni-bindings` (tools/re/survey_player.sh) run on your own copy of the player. Run the real
 thing with `FJ_DUMP=1` (or `FJ_TRACE=1`) and look for `UNKNOWN`/`UNIMPLEMENTED`. Known gaps:
 - `UnityPlayer.showVideoPlayer` (`Handheld.PlayFullScreenMovie`, Unity's full-screen Java video
   activity) returns false: the movie is skipped. Unity's VideoPlayer component is implemented (Video below).

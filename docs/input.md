@@ -86,7 +86,7 @@ own assemblies. On the Android player:
 | `Input.GetKey` (keyboard) | only from keyboard KeyEvents | `UA_KEYMAP` (below): pad buttons press keys |
 | mouse (`GetMouseButton*`, `mousePosition`, `OnMouse*`, UI pointer events) | Android mouse MotionEvents | pointer mode, `UA_POINTER=1` (below) |
 | touch (`Input.touches`) | Android touch MotionEvents | `UA_POINTER=touch` |
-| [Rewired](https://guavaman.com/projects/rewired/) | decides its platform from the desktop build's compile-time symbols, so it looks for the desktop's input APIs (Linux: libudev) and leaves the Android pad unused | `asmpatch` `rewired-android` (via `pmunity android-data --asmpatch`): Rewired runs as on Android, reading pads through Unity's input. android-data always adds the `Joy<j>Axis<a>` axes it reads (`--rewired-joysticks`). Its UI input module (`RewiredStandaloneInputModule`) needs nothing: it reads Unity's mouse and touches as Unity's own module does (below) |
+| [Rewired](https://guavaman.com/projects/rewired/) | decides its platform from the desktop build's compile-time symbols, so it looks for the desktop's input APIs (Linux: libudev) and leaves the Android pad unused | `asmpatch` `rewired-android` (via `pmu android-data --asmpatch`): Rewired runs as on Android, reading pads through Unity's input. android-data always adds the `Joy<j>Axis<a>` axes it reads (`--rewired-joysticks`). Its UI input module (`RewiredStandaloneInputModule`) needs nothing: it reads Unity's mouse and touches as Unity's own module does (below) |
 | InControl | chooses device profiles at run time from the running platform: Android profiles, matched by the pad's name (below) | `UA_PAD_NAME` that one of its Android profiles knows (`asmpatch --survey` lists them), e.g. `Microsoft X-Box 360 pad` |
 | Input System package (`Unity.InputSystem.dll`) | the engine's Android backend reports keyboards, mice and touchscreens in the package's common formats (they work as they are) and pads as Android game controllers, for which the package has layouts only in Android builds: a desktop build's copy has its own platform's (Linux: SDL) | `asmpatch` `inputsystem-android` (below): the pad is a `Gamepad`. The player setting "Active Input Handling" decides whether the legacy stack runs too |
 | soft keyboard (`TouchScreenKeyboard`, UI `InputField` / `TMP_InputField` on Android) | Unity opens its input dialog (`UnityPlayer.showSoftInput`) | nothing: ua_host's on-screen keyboard (below) |
@@ -120,7 +120,7 @@ InputDeviceMatcher?)` is missing). Not covered: pads without `SOURCE_GAMEPAD` (A
 joysticks) and sensors, which ua_host does not present.
 
 ```sh
-python -m pmunity android-data ... --asmpatch "/path/to/asmpatch --only=inputsystem-android"
+pmu android-data ... --asmpatch "/path/to/asmpatch --only=inputsystem-android"
 ```
 
 ## InControl
@@ -199,7 +199,7 @@ GLES 3 context it is rendered on the CPU when it changes, uploaded to a texture 
 copied with one `glBlitFramebuffer` (an sRGB window gets an sRGB texture, so colours stay
 right); on GLES 2 or a multisampled window it is drawn with scissored clears. The GL state used
 is restored. It is in `<root>/shot.req` screenshots (`UA_OSK_SHOTS=0`: not). The font is the
-public-domain misc-fixed 6x13 (runtime/host/osk_font.h, made by fontgen.py).
+public-domain misc-fixed 6x13 (runtime/host/osk_font.h, made by pmu-dev fontgen).
 
 Switches: `UA_OSK=0` (no on-screen keyboard: the field stays open for a hardware keyboard),
 `UA_OSK=done` / `UA_OSK=cancel` (answer every keyboard at once, as OK or Back would: for ports
@@ -306,7 +306,7 @@ mode presents an Android mouse, which the Input System takes as its `Mouse`. `as
 --survey` counts the reads of `Mouse.current` / `Pointer.current` and names the methods that use
 the value without testing it (no branch on it, no `?.`, no comparison with null of the local it
 is kept in): "used with no null check in <n> methods (...)", and the verdict "needs a mouse".
-`pmunity port check` then suggests `UA_POINTER=1` even where the game also selects UI elements
+`pmu port check` then suggests `UA_POINTER=1` even where the game also selects UI elements
 for pad navigation; a game that hides the system cursor and draws its own also wants
 `UA_POINTER_CURSOR=0`.
 
@@ -443,7 +443,7 @@ fewest actions (the swap button no longer reaches the game):
   -> UA_DPAD_SWAP=l1 (L1: the game binds every button a handheld without sticks has; L1 only GameActions.DodgeRoll, which other buttons also do. ...)
 ```
 
-`pmunity port check` then suggests `UA_DPAD_STICK = "auto"` (or `"auto,both"` when every d-pad
+`pmu port check` then suggests `UA_DPAD_STICK = "auto"` (or `"auto,both"` when every d-pad
 binding is also a left stick one) and the `UA_DPAD_SWAP` button when it costs the game nothing
 (else it names it and leaves the choice to the porter), notes the right-stick-only actions, and
 `port new` drafts `[controls]` from the bindings, as the handheld labels its buttons (the game's

@@ -7,14 +7,14 @@ whole measured session:
 |---|---|
 | how fast, how steady | `UA_FPS=<s>` (on by default every 5 s): fps, average / p99 / worst frame, frames over 25 (`UA_FPS_LATE_MS` moves that line, e.g. 33) and 50 ms, Mono collections ([runtime.md](runtime.md)) |
 | whether a long frame is Mono compiling, and how much compiling a run does | `UA_JIT_LOG=1\|2`: compiles per long frame, named slow compiles, totals (Unity 2017.x's Mono 2.6 through its legacy profiler API) ([runtime.md](runtime.md)); Mono's ahead-of-time images take most of it away: `UA_MONO_AOT` |
-| what one slow frame did | `UA_HITCH_TRACE=<ms>` + `tools/analysis/hitchsum.py`: samples inside frames longer than `<ms>` |
-| whether a long frame is the driver making shader programs, and whether Unity's program binary cache is used | `UA_GL_PROGLOG=1` + `tools/analysis/hitchsum.py --glprog`: [below](#shader-programs-compiles-links-and-unitys-binary-cache) |
-| where the steady frame goes | `UA_PROF=<hz>` + `tools/analysis/profsum.py`: a sampling profile of UnityMain and the render thread (below) |
-| the same, measured and compared across settings | `tools/device/profbench.sh` + `tools/analysis/benchsum.py`: one run per setting with frame rate, clocks, CPU, memory and the profile (below) |
-| what a thread waits in right now | `python3 tools/device/stacks.py <pid> [thread]` on the device, or `kill -s RTMIN+7 <pid>` (every thread's stack into the log) |
-| CPU per thread, clocks, temperatures while playing | `python3 tools/device/profcpu.py <pid>` on the device |
+| what one slow frame did | `UA_HITCH_TRACE=<ms>` + `pmu-dev hitchsum`: samples inside frames longer than `<ms>` |
+| whether a long frame is the driver making shader programs, and whether Unity's program binary cache is used | `UA_GL_PROGLOG=1` + `pmu-dev hitchsum --glprog`: [below](#shader-programs-compiles-links-and-unitys-binary-cache) |
+| where the steady frame goes | `UA_PROF=<hz>` + `pmu-dev profsum`: a sampling profile of UnityMain and the render thread (below) |
+| the same, measured and compared across settings | `tools/device/profbench.sh` + `pmu-dev benchsum`: one run per setting with frame rate, clocks, CPU, memory and the profile (below) |
+| what a thread waits in right now | `pmu-dev stacks <pid> [thread]` on the device, or `kill -s RTMIN+7 <pid>` (every thread's stack into the log) |
+| CPU per thread, clocks, temperatures while playing | `pmu-dev profcpu <pid>` on the device |
 | what the GPU does, pass by pass, and what each pass costs | `UA_GL_TRACE=<s>` (+ `UA_GL_TRACE_DRAWS`, `UA_SHADER_DUMP`): below, [GPU, pass by pass](#gpu-pass-by-pass) |
-| how many of the sprites' fragments sample only transparent texels | `tools/device/deadfrags.py` + `UA_SHADER_OVERRIDE`: [below](#sprites-transparent-texels-kings-pass-2026-10-23) |
+| how many of the sprites' fragments sample only transparent texels | `pmu-dev deadfrags` + `UA_SHADER_OVERRIDE`: [below](#sprites-transparent-texels-kings-pass-2026-10-23) |
 | which of the GPU's units a frame or a shader keeps busy (arithmetic, texturing, varyings, tile writes, memory) | `runtime/host/gpucnt` (the Mali's hardware counters; `GPUCNT=1` in a bench run): [below](#gpu-counters-gpucnt) |
 | why a thread's code is slow on the CPU (IPC, cache and TLB refills, L2 misses, the A53's load-miss and i-cache stall cycles) | `runtime/host/out/arm64/hwcount` (the CPU's PMU counters on the game's threads; `HWCOUNT=1` in a bench run, `HWCOUNT_ARGS` its options; `hwcount -L` the cache latencies): [arm64-routes.md](arm64-routes.md) |
 | what a pass's loads and stores cost the GPU itself | `runtime/host/passbench` on the device: [below](#what-a-pass-costs-on-the-mali-g31-passbench) |
@@ -82,7 +82,7 @@ on the sampler's own core. `runtime/host/test/prof_test.sh` measures what a samp
 before reading small differences. Nothing runs, and nothing is allocated, while no recording is on.
 
 Limits. The managed frames are a scan, so a stale return address can appear among them, and a
-wrong re-start of the unwind is possible ("on the stack" is an upper bound; `profsum.py --exact`
+wrong re-start of the unwind is possible ("on the stack" is an upper bound; `pmu-dev profsum --exact`
 counts only unwound callers, the profile marks scanned ones `~`, and the summary says how many
 samples were unwound and how deep). ua_host and the fake JNI are built with `-funwind-tables`, so
 the unwind goes on below Unity's `nativeRender` to the thread's start. A sample taken in a
@@ -104,13 +104,13 @@ scan), once with glibc's heap check failing after the recording (fixed: the writ
 counted pc, lr and the callers but also copied the scanned-frame bitmap, and overran its buffer;
 it showed with vsync on too, in the 64-bit build).
 
-## profsum.py
+## pmu-dev profsum
 
 ```sh
-python3 tools/analysis/profsum.py prof-1.txt --syms <Unity player>/Variations/mono/Release/Symbols/armeabi-v7a
+pmu-dev profsum prof-1.txt --syms <Unity player>/Variations/mono/Release/Symbols/armeabi-v7a
 ```
 
-(`pmunity player fetch <version> --symbols` downloads Unity's symbol files; `--lib runtime/host/out/ua_host`
+(`pmu player fetch <version> --symbols` downloads Unity's symbol files; `--lib runtime/host/out/ua_host`
 names ua_host's own functions: the build strips ua_host, as ports ship it, and keeps the file as
 linked beside it as `ua_host.debug`, which the tools read when it is there. The recording itself
 names what `dladdr` knows, the exported symbols, which a stripped file keeps. A tool that finds one of
@@ -142,7 +142,7 @@ scripts by callback (Update, FixedUpdate, LateUpdate, coroutines, OnGUI), physic
 particles, audio, UI; the waits (for the previous frame's present, i.e. the render thread or the
 GPU, and for the job threads); and, across those areas, the futex and clock system calls, managed
 code, Mono's runtime, memory management, the job system and Physics2D queries. A sample's area is
-the first rule one of its unwound frames matches (`AREAS` in profsum.py; the scanned frames when
+the first rule one of its unwound frames matches (`AREAS` in pmu-dev profsum; the scanned frames when
 none does).
 
 ## The device bench
@@ -174,12 +174,12 @@ saves in data/); only `<game folder>/bench/` is written: this checkout's ua_host
    cpufreq `time_in_state`, devfreq `trans_stat` (the GPU's clock residency, and the memory
    controller's where it has one), governors, temperatures, cooling states, every process's CPU
    time); each core's and the GPU's clock, every thermal zone's temperature and each cooling
-   device's state every second (`freq.log`; benchsum.py's `per second:` line: each zone's range and
+   device's state every second (`freq.log`; pmu-dev benchsum's `per second:` line: each zone's range and
    average, the seconds at each GPU clock); with `UA_PROF=<hz>` a profile of the same seconds;
 4. stops the game, starts EmulationStation again and writes `result` (`ok`, or where it stopped).
 
 Clocks, governors and thermal settings are read, never written. The results come back to
-`$OUT/<name>/` (default `./profbench`), and `tools/analysis/benchsum.py` sums each run up and, with
+`$OUT/<name>/` (default `./profbench`), and `pmu-dev benchsum` sums each run up and, with
 several, compares them with the first. A list file holds one run per line, `<name> [VAR=value ...]`
 in shell quoting, `#` for comments; `PLAN` and `MEASURE` can be set for all runs in the environment.
 
@@ -254,7 +254,7 @@ What each answers:
 | run | reading |
 |---|---|
 | `base`, `base-end` | the frame rate before and after; their difference is the drift to allow for |
-| `prof` | the profile (`benchsum.py --syms ...` prints it); fps against `base` is the profiler's cost |
+| `prof` | the profile (`pmu-dev benchsum --syms ...` prints it); fps against `base` is the profiler's cost |
 | `prof-all` | whether the job threads have work (the engine's culling, sorting, sprite and particle jobs) or idle while UnityMain works alone |
 | `novsync` | the real frame cost: 40 fps unpaced means 25 ms of work, short of 16.7 by 8 ms; 55 means a little work away from 60 |
 | `novsync-prof` | the same with the profile, and `--frames`: UnityMain's time per frame |
@@ -288,7 +288,7 @@ With today's runtime (`UA_GL_DSCLEAR`, host flips) King's Pass runs 36.6 fps on 
   of the grab passes' copies and the first draws after a framebuffer change.
 - **Without the GPU's work the main thread makes 49 fps.** A measurement, not a setting: every
   fragment shader the scene compiles replaced by one that writes a constant colour (a run with
-  `UA_SHADER_DUMP=<dir>`, then `tools/device/flatshaders.py <dir> <flat dir>` and runs with
+  `UA_SHADER_DUMP=<dir>`, then `pmu-dev flatshaders <dir> <flat dir>` and runs with
   `UA_SHADER_OVERRIDE=<flat dir>`, a folder outside `bench/`: profrun.sh empties `bench/<run name>`;
   the picture is grey, the draws, passes, blending and every CPU-side step stay). The GPU then idles at 240 MHz and the
   same scene runs **49.1 - 49.6 fps** with UnityMain 95 % on a CPU, 19.3 ms of CPU a frame (24 - 25.5
@@ -296,7 +296,7 @@ With today's runtime (`UA_GL_DSCLEAR`, host flips) King's Pass runs 36.6 fps on 
   the GPU keeps busy and the warmer CPU). This is the way to measure a main-thread change on this
   scene: with the GPU in the loop its clock decides the result.
 
-UnityMain's frame by area (`profsum.py --areas`, 500 Hz; the profiler costs about 4 %), normal and
+UnityMain's frame by area (`pmu-dev profsum --areas`, 500 Hz; the profiler costs about 4 %), normal and
 with the GPU's work left out:
 
 | ms a frame | normal (33.3 fps, GPU 600 MHz) | without the GPU's work (47.4 fps) |
@@ -589,7 +589,7 @@ The 64-bit build on its Mono route ([mono-arm64.md](mono-arm64.md); the hk64 fol
 port's assemblies from `UA_MONO64_MANAGED`, with and without the patched PlayMaker.dll), flat
 shaders, A B A B in one hold: **46.3 / 46.3 -> 48.3 / 47.9 fps (+3.9 %)**, UnityMain 95 - 96 % on a CPU
 in every run (its frame 20.6 -> 19.8 ms), frames over 25 ms 140 / 158 -> 105 / 115. The IL2CPP build
-compiles the patched IL into its code when it is built (`pmunity il2cpp --asmpatch`, as the
+compiles the patched IL into its code when it is built (`pmu il2cpp --asmpatch`, as the
 il2cpp-arm64 route's setup runs asmpatch); Hollow Knight's IL2CPP build was not rebuilt with them
 here (about 2 GB of build space and an hour), so the IL2CPP figure is not measured.
 
@@ -625,9 +625,9 @@ against without 5000 of 5000 frames the same, as without against itself.
 
 ## Reverse engineering libunity, and what an exact in-memory change can reach
 
-Unity publishes symbol files for its Android players (`pmunity player fetch <version> --symbols`:
+Unity publishes symbol files for its Android players (`pmu player fetch <version> --symbols`:
 `Variations/<backend>/Release/Symbols/<abi>/libunity.sym.so`), which name libunity's functions by
-`module+offset` in a profile ([profsum.py](#profsumpy)). With them the hot frames above were read
+`module+offset` in a profile ([pmu-dev profsum](#pmu-dev-profsum)). With them the hot frames above were read
 back to the engine code that spends the time, to look for work this platform makes Unity do that a
 newer Android device would not and for an exact faster replacement. The finding: the pieces an
 in-memory hook can replace *without changing a pixel* are small (about 1 % of UnityMain each), and
@@ -641,7 +641,7 @@ their symbol and described in our own words.
 
 Read with the flat-shader method ([What limits King's Pass](#what-limits-kings-pass-32-bit-2026-10-23)),
 so the GPU clock does not hide a main-thread change, the 32-bit King's Pass frame (47 fps, UnityMain
-95 % on a CPU) breaks down inside the engine as (`profsum.py --exact`, as a call tree from
+95 % on a CPU) breaks down inside the engine as (`pmu-dev profsum --exact`, as a call tree from
 `PlayerRender` / `ExecutePlayerLoop`, running samples as a share of UnityMain's on-a-CPU time):
 
 - **the job system's scheduling and wake-ups, ~1.3 ms a frame.** `JobQueue::ScheduleGroups` ->
@@ -1248,7 +1248,7 @@ renderers that draw nothing (alpha 0, empty meshes) can only be found per draw.
 ### UnityMain inside the engine, by caller chain (Enter the Gungeon, 2026-11-13)
 
 The split above by the sample's own symbol, now read by caller chain: `UA_PROF` recordings with only the unwound
-(exact) frames (`profsum.py --exact`, `--callers`, `--within`) and Unity 2017.4.27's symbols, each hot function read
+(exact) frames (`pmu-dev profsum --exact`, `--callers`, `--within`) and Unity 2017.4.27's symbols, each hot function read
 back in the player's libunity.so. Bullet Hell's busiest room, ms a frame (the G350's from gungeon-g350's profile at
 the port's settings, scaled to the plain run's 37.6 ms frame):
 
@@ -1391,7 +1391,7 @@ that is a lot: the threads are runnable for 3.7 cores' worth and run for 3.07):
 With Mali's own threads and the kernel the four cores are full: every thread waits for a core part
 of the time, so a frame is as long as the work, not as long as its slowest thread.
 
-UnityMain's 25.6 ms by area (`profsum.py --areas`, ms a frame of the 29.6 ms frame):
+UnityMain's 25.6 ms by area (`pmu-dev profsum --areas`, ms a frame of the 29.6 ms frame):
 
 | area | ms | area | ms |
 |---|---|---|---|
@@ -1616,21 +1616,21 @@ layers, and both showed in one game only. The next census steps: a Gungeon fight
 Cuphead run-and-gun level with 2017.4.9f1's symbols (the job queue's wakes are 0.84 ms of its UnityMain), the
 G350 (four slower cores: `UA_JOB_WORKERS` matters most where cores are short), and `Worker*` and `ua_glthread` in
 the thread list. Tools: the runner `crun.sh` in /mnt/mmc/uatest/census (each game in its own folder of links to the
-set-up copies), profsum.py `--exact --areas`.
+set-up copies), pmu-dev profsum `--exact --areas`.
 
 ## Shader programs: compiles, links and Unity's binary cache
 
 ```sh
 tools/device/profbench.sh <game folder> cold UA_GL_PROGLOG=1     # after emptying <game folder>/data/cache/UnityShaderCache
 tools/device/profbench.sh <game folder> warm UA_GL_PROGLOG=1     # the next launch, with the cache the first one filled
-python3 tools/analysis/hitchsum.py <run>/run.log --glprog
+pmu-dev hitchsum <run>/run.log --glprog
 ```
 
 `UA_GL_PROGLOG=1` (runtime/host/glhooks.c) times each `glCompileShader`, `glLinkProgram`,
 `glProgramBinary` (with the link status the driver gives the loaded binary) and `glGetProgramBinary`
 on the thread that makes it, with the time since the first frame (the clock of the `[hitch]` lines),
 and at the first frame logs the driver's program binary formats and whether its EGL has
-`EGL_ANDROID_blob_cache`. Nothing else changes. `hitchsum.py --glprog` puts the calls into the
+`EGL_ANDROID_blob_cache`. Nothing else changes. `pmu-dev hitchsum --glprog` puts the calls into the
 frames of over 100 ms they ended in.
 
 Unity's GLES backend keeps a program binary cache: a program it links is read back with
@@ -1886,14 +1886,14 @@ depth or stencil (the stencil operations keep). (Not every shader: the darkness 
 the texel.) A mesh cut down to the texels that can show would skip those fragments. How many are
 there?
 
-**Counted on the handheld.** `tools/device/deadfrags.py shaders <dump> <trace run.log> <dir>` turns
+**Counted on the handheld.** `pmu-dev deadfrags shaders <dump> <trace run.log> <dir>` turns
 every fragment shader of a `UA_GL_TRACE_DRAWS` frame that samples `_MainTex` at a varying into a
 counter: each fragment adds one code to red when the sample (the same texture, sampler and UV as
 the game's, so the GPU's own bilinear footprint decides) has alpha exactly 0, to green otherwise;
 the blend state each is drawn with makes that an exact sum (`1,1-sa` adds; `sa,1-sa` with alpha
 1/255 adds one code and keeps the others below 127; `sa,1` adds). The post effects become copies
 (`--copy`), the background copy and the darkness overlay add to blue (`--mark`), the HUD's own
-shaders write nothing (`--hide`); `deadfrags.py sum` adds a run's screenshots up. Four shots of the
+shaders write nothing (`--hide`); `pmu-dev deadfrags sum` adds a run's screenshots up. Four shots of the
 scene, 64-bit build, the whole 720x450 picture (leaving the HUD's box out, 4 % of it, moves the
 shares by 0.1 point):
 
@@ -2067,7 +2067,7 @@ Looked for in these traces, with what was found:
 #### What limits them
 
 Measured per pass (`UA_GL_TRACE=3 UA_GL_MEMO=0`) with two kinds of fragment shaders put in through
-`UA_SHADER_OVERRIDE`, made from the run's `UA_SHADER_DUMP` by `tools/device/flatshaders.py` (measurements, never
+`UA_SHADER_OVERRIDE`, made from the run's `UA_SHADER_DUMP` by `pmu-dev flatshaders` (measurements, never
 settings: the pictures are wrong): **flat**, every fragment shader writing a constant (what is left is vertex work,
 rasterization, blending, the tile loads and stores), and **notex** (`--notex`), every texture lookup replaced by an
 expression of its coordinate (the arithmetic stays, the fetches go; Bifrost runs the two side by side, so a pass
@@ -2264,7 +2264,7 @@ cycles and those issues; tiles written and eliminated (transaction elimination, 
 skips a tile write whose contents did not change) and the bytes per written tile; external bus
 traffic (beats of the bus width `L2_FEATURES` gives: 128 bits here). In a bench run `GPUCNT=1`
 samples the measurement (`profbench.sh` sends `runtime/host/out/gpucnt`, `GPUCNT_BIN` another
-build; `<run>/gpucnt.txt`, and `benchsum.py` prints the derived lines).
+build; `<run>/gpucnt.txt`, and `pmu-dev benchsum` prints the derived lines).
 
 Reading the G31's counters (checked with programs of known code, below): `EXEC_INSTR_COUNT` counts
 one issue per two tuples of a warp's code (a program of 110 tuples: 54.9 per warp, and 54.9 core
@@ -2913,7 +2913,7 @@ What it took, in order:
   `PlayMakerFSM.OnAfterDeserialize`: two threads had loaded FSMs into PlayMaker's unlocked static
   lookups at once. asmpatch's `playmaker-loadlock` (tools/asmpatch/README.md, "Fixes"): 6 of 6.
 - **Memory at the Keep's load:** MemAvailable 43 MB at 120 s and falling (RSS 781 MB), the memory
-  watchdog's stop. `/proc/<pid>/smaps` (tools/device/memprof.py) showed ~490 MB anonymous (Mono's heap
+  watchdog's stop. `/proc/<pid>/smaps` (`pmu-dev memprof`) showed ~490 MB anonymous (Mono's heap
   grows 64 -> 216 MB over the load; `GC_FREE_SPACE_DIVISOR` changes nothing in Unity 2017.4's Boehm)
   and ~270 MB outside smaps (the GBM driver's buffers: VmRSS minus smaps). The game's 157 readable
   textures (180 MB of RGBA32, the textures step leaves readable ones as they are) were held twice:
@@ -2942,7 +2942,7 @@ What it took, in order:
   38.88 / 39.72, p99 33 - 35 ms in the fight, lowest MemAvailable 107 - 109 MB**.
 
 Hitches left (the same runs): the room entry has 12 - 18 frames over 50 ms (p99 80 - 118 ms). In
-them (`UA_PROF=200` over the entry, `profsum.py --slow 50`: 20 frames) UnityMain is on a CPU 66 % of
+them (`UA_PROF=200` over the entry, `pmu-dev profsum --slow 50`: 20 frames) UnityMain is on a CPU 66 % of
 the time, 46 % of that in Mono's runtime: the JIT compiling the enemies' code at its first use
 (`BehaviorSpeculator.Update`, `UpdateBehaviors`, `get_LocalDeltaTime`, dfGUI's `get_IsVisible`); the
 other 34 % it waits for the render thread, which links 3 GPU programs there (317 ms; `UA_GL_PROGLOG`).
@@ -3141,7 +3141,7 @@ about 0.5 ms a frame. Not done; the G350's budget may make it worth an opt-in la
 The release install (rh6: every port optimization, the game's own settings), ES stopped, perfmax, silent, walking
 right through D17Z01S01 into D17Z01S02: 57.6 - 59.2 fps, the frame 17.4 ms on average, 16.4 median, 24 - 25 p99;
 about 110 of each 5 seconds' 295 frames take longer than 17 ms. 100 Hz `UA_PROF` of 25 s (Unity 2017.4.40f1's
-symbols, `profsum.py --areas`):
+symbols, `pmu-dev profsum --areas`):
 
 | thread | CPU a frame | |
 |---|---|---|

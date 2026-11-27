@@ -10,7 +10,7 @@
 // (IsNodeVisibleFast tests `cullingMask & (1 << node.layer)` first). The answer is 1 when a node with a renderer
 // has its layer in the mask, or when the scene holds renderers waiting to be added (adds made during a culling job
 // wait in a list: they count as present), or when anything here is not as read: a libunity whose functions do not
-// have the bytes they were read with (tools/re/unityhooks.py's rows below) never answers 0. So 0 means: the camera
+// have the bytes they were read with (pmu-dev unityhooks's rows below) never answers 0. So 0 means: the camera
 // would cull nothing on those layers, as Unity's own culling would find. Read in 2017.4.27f1 armeabi-v7a:
 // GetRendererScene() returns the scene; RendererScene::AddRendererInternal stores nodes in the array at +0x40
 // (count +0x48), 32 bytes each, the renderer + 32 at +8 and the layer (its argument) at +12;

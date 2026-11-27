@@ -55,7 +55,7 @@
 //           +0x10}; x25 the system's number): three ahead the ParticleSystem, two ahead its GameObject and the objects
 //           the loop reads from it (+0x30, +0x38, +0x40), one ahead the GameObject's component array.
 //
-// Found as unityhooks.c finds its hooks: tools/re/unityhooks.py rows (offset, size, FNV-1a of the bytes) for each
+// Found as unityhooks.c finds its hooks: pmu-dev unityhooks rows (offset, size, FNV-1a of the bytes) for each
 // function whose call is changed or whose reads the offsets come from; any other build matches no row and is
 // left alone. A function whose call site is changed differs from the file, so UA_RELAYOUT (relayout.c, run
 // after the hooks) leaves it where it is, and the copies that call it reach it there.
@@ -451,6 +451,6 @@ void unityprefetch_on_load(uintptr_t base, size_t size)
                 p->unity, n, done[STUB_BEH], done[STUB_SPRITE], done[STUB_CULL], done[STUB_PLAY], done[STUB_PS], v);
         return;
     }
-    if (asked) fprintf(stderr, "[unityprefetch] this libunity.so is not one whose loops were read (tools/re/unityhooks.py); no prefetch\n");
+    if (asked) fprintf(stderr, "[unityprefetch] this libunity.so is not one whose loops were read (pmu-dev unityhooks); no prefetch\n");
 #endif
 }

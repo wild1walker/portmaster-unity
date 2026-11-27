@@ -6,7 +6,7 @@ and Mono players of 6000.1.17f1, 6000.2.15f1, 6000.3.26f1, 6000.4.12f1, 6000.5.1
 6000.6.3f1 and 6000.6.6f1. Run in the emulated rig: free Linux games of 6000.0.58f2, 6000.3.11f1,
 6000.5.7f1, 6000.6.2f1 and 6000.6.3f1 (README, "Players run"). 6000.7 (betas) is not covered.
 
-## Installers and `pmunity player fetch`
+## Installers and `pmu player fetch`
 Every Unity 6 Android support installer still carries the Mono armeabi-v7a player
 (`Variations/mono/Release/Libs/armeabi-v7a`, `MonoLibs/armeabi-v7a`, `Symbols/armeabi-v7a`, with
 `libunity.dbg.so` from 6000.6). The installers are built with an NSIS of 2025 (first-header flag

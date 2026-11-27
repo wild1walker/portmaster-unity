@@ -35,7 +35,7 @@ through AAssetManager; the strings sit with `predictRealtime` among the GL/Vulka
 and are not in 6000.0's libunity). A desktop build has none: the player logged "TuningForkUtils:
 Can't find realtime_features.json in APK" and aborted (`std::length_error: basic_string`); with an
 empty JSON it crashed on the missing model. The installer has them in `Apk/MemoryAdvice/`
-(`available`, `oom`, `realtime` models and their feature lists, about 20 KB): `pmunity player
+(`available`, `oom`, `realtime` models and their feature lists, about 20 KB): `pmu player
 fetch` takes them and android-data ships them (loose beside the APK, where ua_host's
 AAssetManager looks) to players whose libunity names them. The game then starts ("Initialized
 TensorFlow Lite runtime") and draws its loading screen.

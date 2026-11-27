@@ -43,7 +43,7 @@ loading, startup, input or data conversion) · "-" not applicable.
 | shader serializer (converter) | 201708220 ✅ | 201708220 ✅ | 201802150 ✅ | 201806140 ✅ segments | 201806140 ✅ | 202012090 ✅ param entries | 202012090 ✅ |
 | GLCore41/43 programs (converter) | - (output as before) | ⚠️ off by default (`shaders.glcore4x`) | ✅ GLES3 / GLES 3.1 | ✅ | ✅ | ✅ + stripped shaders' empty blobs | ✅ |
 | D3D11 programs (Windows builds) | ✅ | ✅ | ✅ | ✅ GL binding info (Unity's 2019 layout) | ✅ + common params | ✅ + param entries | ✅ merged `$Globals` |
-| class libraries (Windows builds) | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ unityjit-win32: `pmunity winbcl` (2021.2+; a port's setup runs it) | ⚠️ same; also a missing `netstandard.dll` facade (winbcl `--player`) |
+| class libraries (Windows builds) | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ unityjit-win32: `pmu winbcl` (2021.2+; a port's setup runs it) | ⚠️ same; also a missing `netstandard.dll` facade (winbcl `--player`) |
 | assembly list (converter) | fixed 48 slots ✅ | fixed 48 ✅ | flags (`m_AssemblyTypes`) ✅ | flags ✅ | `ScriptingAssemblies.json` ✅ (2020.2+) | json ✅ | json ✅ |
 | texture formats (converter) | ASTC RGB/RGBA ✅ | ✅ | ✅ | `ASTC_nxn` ✅ | ✅ | ✅ | ✅ |
 | Android engine modules | 45 | 45 | 59 | 58 | 63 | 64 | 64 |
@@ -55,8 +55,8 @@ loading, startup, input or data conversion) · "-" not applicable.
 Notes on the rows:
 - "imports nobody provides": undefined dynamic symbols of `libmain`, `libunity` (Mono v7a, IL2CPP
   v7a and arm64) and the Mono libraries that are neither in the runtime's shim tables nor in glibc
-  (calls land in the loader's abort stub), counted with `tools/re/shimnames.py` as `playerdiff.py
-  --all-missing` does (weak ones left out). Before the bionic additions: 2019.4/2020.3:
+  (calls land in the loader's abort stub), counted with the retired `tools/re/shimnames.py` as `playerdiff.py
+  --all-missing` did (git history) (weak ones left out). Before the bionic additions: 2019.4/2020.3:
   `__FD_SET_chk`, `__FD_ISSET_chk`, `android_set_abort_message`, `__mmap2`; 2021.3 added
   `__strlen_chk`, `__strchr_chk`, `__strrchr_chk`, `__strlcpy_chk`, `sys_signame` (and the FD ones
   on v7a too); 2022.3 the same 9 plus 41 strong `libmediandk` imports (31 functions, 10
@@ -98,7 +98,7 @@ Notes on the rows:
   line, the GL programs' own binding info (2019.1+) written as Unity's GL compiler does
   (docs/shaders.md, "Windows builds"); a 2021.2+ Windows build's class libraries are the Windows
   profile's (`unityjit-win32`, kernel32 P/Invokes) and are replaced by the Unix profile's from
-  Unity's editor installer (`pmunity winbcl`, run by a port's setup). Six free Windows-only games (2018.3 -
+  Unity's editor installer (`pmu winbcl`, run by a port's setup). Six free Windows-only games (2018.3 -
   2022.3) reach their first screens in the emulated rig ("Players run" below).
 - IL2CPP metadata: the header's integer version (`global-metadata.dat` starts with 0xFAB11BAF
   and the version). These values come from public reverse-engineering tools, not from these
@@ -116,8 +116,8 @@ name: [games.md](games.md)). Every game reached its title or first screen and dr
 | 32-bit (armhf `ua_host`, desktop data converted) | Cuphead 2017.4.9 | title 59.6 fps; eight boss fights 59.0 - 59.5 fps average (the 2026-10-18 baseline: 58.5 - 59.5), fewer long frames |
 | | 2017.4.40 (its intro video plays), 2018.4, 2019.4, 2020.3, 2021.3 URP | title 59.6 fps |
 | | 2022.3 URP | title 59.6 fps with ua_host's desktop pacing (`UA_FRAME_RATE`, docs/runtime.md); before it a steady 30 fps: from 2021.1 Unity's Android players ignore vSyncCount and render at a fixed 30 fps unless the game sets `targetFrameRate` |
-| 64-bit (arm64 `ua_host`, no 32-bit userland used) | 2018.4, 2019.4, 2020.3 desktop Mono games compiled with `pmunity il2cpp` | title 59.4 - 59.6 fps, `Scripting Backend 'il2cpp', CPU 'arm64-v8a'` |
-| | Android IL2CPP builds (`pmunity apk`) of 2020.3, 2021.3, 2022.3 | title; 59.6 fps, and 30 fps for the two that leave Unity's Android default frame rate |
+| 64-bit (arm64 `ua_host`, no 32-bit userland used) | 2018.4, 2019.4, 2020.3 desktop Mono games compiled with `pmu il2cpp` | title 59.4 - 59.6 fps, `Scripting Backend 'il2cpp', CPU 'arm64-v8a'` |
+| | Android IL2CPP builds (`pmu apk`) of 2020.3, 2021.3, 2022.3 | title; 59.6 fps, and 30 fps for the two that leave Unity's Android default frame rate |
 
 What only the handheld showed:
 - **32-bit players on a 64-bit kernel** read the AArch64 format of `/proc/cpuinfo` unless the process
@@ -127,7 +127,7 @@ What only the handheld showed:
   showed it: QEMU supplies its own cpuinfo.
 - **BC/DXT textures**: the Mali cannot sample them, so Unity decodes them to RGBA at load. A game's
   57 MB of crunched DXT grew to 830 MB resident in 12 s and the 1 GB handheld froze in swap; with
-  the textures step (ASTC) it ran at 60 fps in 385 MB. `pmunity port check` now estimates the decoded
+  the textures step (ASTC) it ran at 60 fps in 385 MB. `pmu port check` now estimates the decoded
   size and suggests the textures step above 128 MB. The rig's llvmpipe samples BC, so it never showed
   this either.
 - Writing hundreds of MB to the SD card during a run makes the game stutter (seen while copying test
@@ -135,9 +135,9 @@ What only the handheld showed:
 
 ## Players run (emulated rig)
 
-One free Linux (Mono) game per LTS line, converted with `pmunity convert` + `android-data --pack
+One free Linux (Mono) game per LTS line, converted with `pmu convert` + `android-data --pack
 all` and run on the runtime in the emulated rig (`tools/emu`: QEMU armv7, Mesa llvmpipe), with
-that version's player from `pmunity player fetch`. Frame times there mean nothing; startup, the
+that version's player from `pmu player fetch`. Frame times there mean nothing; startup, the
 Java side, data loading and the picture do.
 
 | player | game | result |
@@ -154,7 +154,7 @@ Windows builds (Direct3D 11 shaders translated with HLSLcc, `--set shaders.from=
 Windows-only Mono games, docs/shaders.md "Windows builds"): a 2018.3.7f1 3D game starts in its
 first level; 2019.2.5f1: title screen; 2019.3.14f1 (URP): Unity splash, title menu; 2020.3.44f1:
 splash, first screen; 2021.3.28f1: title menu once its class libraries are the Unix ones
-(`pmunity winbcl`; with the Windows ones Mono asserts in the Input System's start, then SIGSEGV);
+(`pmu winbcl`; with the Windows ones Mono asserts in the Input System's start, then SIGSEGV);
 2022.3.62f3 (URP): title menu (its Windows class libraries had failed only System.Console).
 
 What these runs still show: Unity's optional Java classes (`GoogleARCoreApi`, `Camera2Wrapper`,
@@ -197,7 +197,7 @@ one still works.
 
 ## Android builds run (emulated rig)
 
-Free itch.io Android builds, each made ready with `pmunity apk` (docs/apk.md) and run as they
+Free itch.io Android builds, each made ready with `pmu apk` (docs/apk.md) and run as they
 are: the game's own player libraries and data, nothing converted, told their own `targetSdkVersion`
 as the API level (docs/apk.md). The 64-bit route runs in an aarch64 container (`EMU_ARCH=arm64`,
 native on an Apple-silicon Mac, Mesa llvmpipe), the 32-bit one under QEMU armv7.
@@ -297,7 +297,7 @@ runtime would also look for (Bogodroid builds one from the system's zoneinfo).
 
 Games the Android-player route cannot take (Unity before 5.6 or after 6000.6, IL2CPP builds
 the IL2CPP route does not take, x86-only plugins) run as their own Linux x86_64 build under box64: [box64-route.md](../box64-route.md).
-`pmunity route <game>` says which route fits. In the box64 rig (`tools/box64/rig.sh`: arm64
+`pmu route <game>` says which route fits. In the box64 rig (`tools/box64/rig.sh`: arm64
 container, Mesa), with box64 0.4.4:
 
 | Linux player | build | desktop GL | GLES mode (`-force-gles`, converted shaders, glxes; no desktop GL) |
@@ -314,7 +314,7 @@ container, Mesa), with box64 0.4.4:
 
 The Linux players' own GLES device: `-force-gles` works when OpenGL ES 3 (11) is in the build's
 graphics API list (otherwise ignored; the player logs `Unknown renderer 11` and goes on), and it
-uses only GLES 3 shader programs (platform 9; `pmunity convert` adds them, `tools/box64/gles.json`).
+uses only GLES 3 shader programs (platform 9; `pmu convert` adds them, `tools/box64/gles.json`).
 Its context comes through GLX with the ES profile, after a desktop core-profile probe whose version
 sets the ES device level.
 
@@ -370,7 +370,7 @@ sets the ES device level.
    (`runtime/android/README.md`, "Frame pacing").
 8. **EGL** (done): `eglSurfaceAttrib` (2020.3+) on the SDL display path goes to the real surface
    (and is set again on a surface KMSDRM puts in its place); on fbdev it is the driver's own.
-9. **Packaging of Android builds** (games owned as APK/AAB; `pmunity apk`, docs/apk.md: APKs,
+9. **Packaging of Android builds** (games owned as APK/AAB; `pmu apk`, docs/apk.md: APKs,
    splits, XAPK/APKS, AAB and OBBs handled, asset-pack splits merged into the one APK the player
    reads; run as above): split APKs
    (`ApplicationInfo.splitPublicSourceDirs`, 2017.4.40+), Play Asset Delivery
@@ -399,29 +399,28 @@ jobs and `nativeRender`).
 Downloads: the Windows "Android Build Support" installer of each version from Unity's archive
 (Unity's release API gives each version's changeset and URL). The installers are non-solid NSIS
 (from 2020.3 a large-installer variant: 36-byte first header, 64-bit file offsets),
-so `tools/re/nsisrange.py` fetches only the needed files with HTTP range requests (20-30 MB per
-version); the installers were never stored. Per version:
+so a range-reading NSIS lister fetched only the needed files with HTTP range requests (20-30 MB per
+version; pmu's own `crates/pkgzip/src/nsis.rs` reads them the same way for `pmu winbcl`); the
+installers were never stored. Per version:
 
 ```
-python3 tools/re/nsisrange.py list    <installer URL>
-python3 tools/re/nsisrange.py extract <installer URL> pkg '$_OUTDIR/Variations/mono/Release/*' ...
-tools/re/survey_player.sh pkg/_OUTDIR notes      # docker: ua-spec (pyelftools, capstone), ua-jni-build (javap)
-python3 tools/re/unitydata.py "pkg/_OUTDIR/Data/unity default resources"   # UnityPy + lz4
-python3 tools/re/javacalls.py notes/javap_s.txt <libunity.so> > notes/javacalls.tsv
+tools/re/survey_player.sh pkg/_OUTDIR notes      # docker: ua-rust (pmu-dev), ua-jni-build (javap)
 gcc ... tools/re/jnicover.c runtime/jni/*.c && jnicover < notes/bindings.tsv   # see its header
-python3 tools/re/playerdiff.py <base notes> notes runtime --all-missing
 ```
 
 | tool | does |
 |---|---|
-| `nsisrange.py` | list/extract NSIS installers over HTTP ranges (both NSIS layouts Unity uses) |
-| `elfimage.py` | relocations of every format (REL/RELA, APS2, RELR), relocated pointer reads, ELF facts (NDK note, alignment, TLS, IFUNC) for both ABIs |
-| `elfimports.py` | undefined symbols with provider and ABI notes (now both ABIs, packed relocations) |
-| `strrefs.py`, `jnibindings.py` | Java members libunity binds (now also Thumb-2 code and literal-pool strings) |
-| `jnitables.py` | RegisterNatives tables |
-| `dis.py` | disassemble functions by name, or find functions by the strings they reference (AArch64) |
-| `javacalls.py` | player Java methods/fields libunity can reach by name |
+| `pmu-dev elf-facts` | relocations of every format (REL/RELA, APS2, RELR), relocated pointer reads, ELF facts (NDK note, alignment, TLS, IFUNC) for both ABIs |
+| `pmu-dev elf-imports` | undefined symbols with provider and ABI notes (both ABIs, packed relocations) |
+| `pmu-dev strrefs`, `jni-bindings` | Java members libunity binds (also Thumb-2 code and literal-pool strings) |
+| `pmu-dev jni-tables` | RegisterNatives tables |
+| `pmu-dev dis` | disassemble functions by name, or find functions by the strings they reference (AArch64) |
 | `jnicover.c` | which bound classes/members runtime/jni defines |
-| `shimnames.py` | names the runtime provides (loader, libhybris hooks, Android shims) |
-| `unitydata.py` | SerializedFile header, shader blob layout and serializer versions of the built-in resources |
-| `playerdiff.py` | the comparisons above between two players, against the runtime |
+
+(`pmu-dev` is setup-rs/crates/devtools, run by setup-rs/tools/pmu-dev.sh; these were Python scripts
+until 2026-11-27. The survey's other Python helpers, retired with them and not ported, are in git
+history (`git show 2147a04:tools/re/<name>.py`): `nsisrange.py` (the installer lister above),
+`unitydata.py` (SerializedFile header, shader blob layout and serializer versions of the built-in
+resources: `pmu unpack` and pmu's readers do that work now), `javacalls.py` (player Java methods and
+fields libunity can reach by name), `shimnames.py` (names the runtime provides) and `playerdiff.py`
+(the comparisons above between two players, against the runtime).)

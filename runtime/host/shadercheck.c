@@ -16,7 +16,7 @@
 //                                                 triangles each, (C+1)(R+1) vertices) instead of two
 //                                                 triangles: the vertex shader's and the tiler's cost
 //
-// <dir> is what `python -m pmunity shaders-export` writes (index.tsv names the shaders). Prints one
+// <dir> is what `pmu shaders-export` writes (index.tsv names the shaders). Prints one
 // line per failure with the driver's log, then a summary; exit status 1 if any program failed.
 // Timing binds every sampler to a texture of its type on a unit of its own (2D, 3D, cube and 2D
 // array: RGBA8 noise; shadow samplers: a depth texture compared; integer samplers: no texture, they

@@ -12,8 +12,11 @@ Thanks for helping! The most useful contributions, in order:
 ```sh
 git clone --recurse-submodules https://github.com/wild1walker/portmaster-unity
 cd portmaster-unity
-pip install -r convert/requirements.txt     # Python 3.11+ (port.toml is read with tomllib)
 ```
+
+The tools are Rust (setup-rs: `pmu`, the setup's tool and the porter's; crates/devtools: `pmu-dev`, the
+developer's), run in Docker through `setup-rs/tools/pmu.sh` and `setup-rs/tools/pmu-dev.sh`; nothing
+here needs Python (the converter that was Python, convert/, was retired on 2026-11-27).
 
 Docker builds the runtime (`runtime/build.sh`) and runs the native tests. The .NET 8 SDK is
 needed for `tools/asmpatch`. See [docs/building.md](docs/building.md).
@@ -22,18 +25,17 @@ needed for `tools/asmpatch`. See [docs/building.md](docs/building.md).
 
 | What | Command | Notes |
 |---|---|---|
-| converter (Python) | `cd convert && python3 -m unittest discover -s tests` | synthetic data only, no Unity or game files needed. Tests that read real files are skipped unless you point their variables at your own copies (`PMUNITY_GAMES`, `PMUNITY_GLCORE_CORPUS`, `PMUNITY_D3D11_CORPUS`, `PMUNITY_APK`, ...: see each test's header) |
-| the setup's tools (Rust: `pmu`, setup-rs) | `RS_ROOT=<a folder> setup-rs/tools/rs.sh . cargo test --locked` | in Docker, in the `ua-rust` image (its recipe: `setup-rs/docker/`, [docs/rust-setup.md](docs/rust-setup.md#building-and-testing)); its unit tests use made-up data (a test that reads a game skips without `PMU_TEST_DATA`); the golden tests (`setup-rs/tests/golden/`) run on your own copies |
+| the setup's tools (Rust: `pmu`, setup-rs) | `RS_ROOT=<a folder> setup-rs/tools/rs.sh . cargo test --locked` | in Docker, in the `ua-rust` image (its recipe: `setup-rs/docker/`, [docs/rust-setup.md](docs/rust-setup.md#building-and-testing)); its unit tests use made-up data (a test that reads a game skips without `PMU_TEST_DATA`); the golden files of `pmu/tests/golden/` freeze the packager's, the check's and the converter's outputs |
 | loader | `runtime/loader/build.sh test` (and `ARCH=arm64 runtime/loader/build.sh test`) | synthetic Android libraries, in Docker |
 | Android shims | `runtime/android/build.sh test` | in Docker, no GPU |
 | fake JNI and UnityPlayer | `TESTS=1 runtime/build.sh` (or `runtime/jni/build.sh`) | armhf under QEMU; some QEMU builds crash on their threads: the test binaries also run on a handheld |
 | video core | `runtime/media/build.sh test` | |
-| ua_host parts | `runtime/host/test/pointer_test.sh` (pointer mode, on-screen keyboard, the 2017.x MSAA present fix), `display_test.sh`, `fbdev_test.sh` (the fbdev path's flips against a fake Mali driver and display), `plugins_test.sh`, `prof_test.sh` (the sampling profiler, then `profsum.py` on its output), `threads_test.sh` (`UA_AFFINITY`/`UA_NICE`), `unityhooks_test.sh` (the jump into a libunity function and its trampoline, `UA_GFX_JOBS`); `runtime/jni/test/tls_test.sh` | `ARCH=arm64` where the script supports it |
-| profiling tools | `python3 -m unittest discover -s tools/analysis` (and `-s tools/device/test`: flatshaders.py, deadfrags.py; `-s tools/re -p 'test_*.py'`: unityhooks.py's checks); `tools/device/test/profbench_test.sh` (the device bench against a fake handheld: ssh and the game are stand-ins) | synthetic profiles and bench snapshots |
+| ua_host parts | `runtime/host/test/pointer_test.sh` (pointer mode, on-screen keyboard, the 2017.x MSAA present fix), `display_test.sh`, `fbdev_test.sh` (the fbdev path's flips against a fake Mali driver and display), `plugins_test.sh`, `prof_test.sh` (the sampling profiler, then `pmu-dev profsum` on its output), `threads_test.sh` (`UA_AFFINITY`/`UA_NICE`), `unityhooks_test.sh` (the jump into a libunity function and its trampoline, `UA_GFX_JOBS`); `runtime/jni/test/tls_test.sh` | `ARCH=arm64` where the script supports it |
+| profiling and developer tools (`pmu-dev`) | `RS_ROOT=<a folder> setup-rs/tools/rs.sh . cargo test -p devtools`; `tools/device/test/profbench_test.sh` (the device bench against a fake handheld: ssh and the game are stand-ins) | synthetic profiles, bench snapshots, shaders and instructions |
 | asmpatch | `tools/asmpatch/build.sh test` | fake assemblies built with Mono.Cecil, and C# stand-ins (`test/fakes/`) for the optimizations and reductions |
 | box64 route | `tools/box64/test/launcher_test.sh`, `tools/box64/test/port_test.sh` | need a Linux build of a game you own |
 | a whole port | `tools/port/rehearse.sh` ([docs/porting.md](docs/porting.md#7-rehearsal)) | the first launch in a handheld-like container, then the game in the emulator |
-| the games (regression) | `tools/regress/regress.py fast` (convert, pack and checks), `regress.py rig` (the games in the emulator) | **before merging a branch that touches `convert/` or `runtime/`**: a list of games per Unity line and route, compared with the recorded baseline ([tools/regress/README.md](tools/regress/README.md)); needs your own game corpus |
+| the games (regression) | `tools/regress/regress.sh fast` (convert, pack and checks), `regress.sh rig` (the games in the emulator) | **before merging a branch that touches setup-rs's converter or `runtime/`**: a list of games per Unity line and route, compared with the recorded baseline ([tools/regress/README.md](tools/regress/README.md)); needs your own game corpus |
 
 If your change touches what a game sees, say in the pull request how you checked it: unit tests,
 the emulator (`tools/emu`), or a handheld (model and firmware).

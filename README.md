@@ -83,7 +83,7 @@ Saves and settings are in `ports/mygame/data/`. The log of the last run is `port
   were tested up to their title or first screen ([what has been tested](#what-it-can-port-today);
   every game by name: [docs/compat/games.md](docs/compat/games.md)).
 - **1 GB of RAM is tight** for games with many large textures; ports of such games convert their
-  textures (`pmunity port check` tells the porter when).
+  textures (`pmu port check` tells the porter when).
 - **Online services** (Steam, Discord, Epic) answer as if they were not running. Games whose sound
   uses FMOD are silent unless the porter supplies FMOD's ARM library of the game's version. A Wwise
   game's sound plays through ua_host's own Wwise player (wwplay) from banks the setup converts
@@ -109,11 +109,11 @@ Each column is one kind of game build and the way it runs on the handheld (a *ro
 
 | Column | The build you have | How it runs on the handheld | Made with |
 |---|---|---|---|
-| **A** | Mono build for Linux or macOS | Unity's 32-bit ARM Android player, on the handheld's 32-bit userland; the game's data is converted on the handheld | `pmunity port new` (route `android`) |
-| **B** | Mono build for Windows only | the same; its Direct3D 11 shaders are translated to OpenGL ES on the handheld, and a 2021.2+ build's class libraries are swapped for Unity's Unix ones | `pmunity port new` (route `android`; the release ships HLSLcc for the setup: `ARCH=arm64 tools/hlslcc/build.sh`) |
-| **C** | Mono build (tested with Linux builds) | Unity's 64-bit ARM Android player, for handhelds without 32-bit libraries; the game's code is compiled with IL2CPP on the porter's computer, or by the port's setup on the handheld (`--on-device`) | `pmunity port new --route il2cpp-arm64`; by hand: `pmunity il2cpp` ([docs/il2cpp.md](docs/il2cpp.md)) |
-| **D** | The game's own Android build (APK, XAPK, AAB) | as it is, on the 32-bit or 64-bit runtime; nothing converted | `pmunity port new --route apk`; by hand: `pmunity apk` ([docs/apk.md](docs/apk.md)) |
-| **E** | Linux x86-64 build, Mono or IL2CPP | the game's own Linux player, translated by box64; about half the frame rate of A | `pmunity port new --route box64` ([docs/box64-route.md](docs/box64-route.md)) |
+| **A** | Mono build for Linux or macOS | Unity's 32-bit ARM Android player, on the handheld's 32-bit userland; the game's data is converted on the handheld | `pmu port new` (route `android`) |
+| **B** | Mono build for Windows only | the same; its Direct3D 11 shaders are translated to OpenGL ES on the handheld, and a 2021.2+ build's class libraries are swapped for Unity's Unix ones | `pmu port new` (route `android`; the release ships HLSLcc for the setup: `ARCH=arm64 tools/hlslcc/build.sh`) |
+| **C** | Mono build (tested with Linux builds) | Unity's 64-bit ARM Android player, for handhelds without 32-bit libraries; the game's code is compiled with IL2CPP on the porter's computer, or by the port's setup on the handheld (`--on-device`) | `pmu port new --route il2cpp-arm64`; by hand: `pmu il2cpp` ([docs/il2cpp.md](docs/il2cpp.md)) |
+| **D** | The game's own Android build (APK, XAPK, AAB) | as it is, on the 32-bit or 64-bit runtime; nothing converted | `pmu port new --route apk`; by hand: `pmu apk` ([docs/apk.md](docs/apk.md)) |
+| **E** | Linux x86-64 build, Mono or IL2CPP | the game's own Linux player, translated by box64; about half the frame rate of A | `pmu port new --route box64` ([docs/box64-route.md](docs/box64-route.md)) |
 
 What has run, by Unity version (the version numbers in the cells are the builds that were tried):
 
@@ -125,7 +125,7 @@ What has run, by Unity version (the version numbers in the cells are the builds 
 | 2018 | **Handheld**: 2018.4 title, 59.6 fps | Emulator: 2018.3.7 starts its first level | **Handheld**: 2018.4 title, 59.4 - 59.6 fps | Not yet | Emulator: 2018.4.36 title menu |
 | 2019 | **Handheld**: 2019.4 title, 59.6 fps | Emulator: 2019.2.5 title; 2019.3.14 (URP) title menu | **Handheld**: 2019.4 title, 59.4 - 59.6 fps | Emulator: 2019.4.18 Mono, 32-bit: title | Emulator: 2019.4.8 title |
 | 2020 | **Handheld**: 2020.3 title, 59.6 fps | Emulator: 2020.3.44 first screen | **Handheld**: 2020.3 title, 59.4 - 59.6 fps | **Handheld**: 2020.3 IL2CPP, 64-bit: title | Emulator: 2020.3.49 Mono title menu; 2020.3.28 IL2CPP main menu (desktop GL only) |
-| 2021 | **Handheld**: 2021.3 (URP) title, 59.6 fps | Emulator: 2021.3.28 title menu (with the class library swap, `pmunity winbcl`), also as a port (its setup rehearsed) | Not yet | **Handheld**: 2021.3 IL2CPP, 64-bit: title (its 32-bit libraries: emulator) | Emulator: 2021.3.16 (URP) main menu |
+| 2021 | **Handheld**: 2021.3 (URP) title, 59.6 fps | Emulator: 2021.3.28 title menu (with the class library swap, `pmu winbcl`), also as a port (its setup rehearsed) | Not yet | **Handheld**: 2021.3 IL2CPP, 64-bit: title (its 32-bit libraries: emulator) | Emulator: 2021.3.16 (URP) main menu |
 | 2022 | **Handheld**: 2022.3 (URP) title, 59.6 fps (with the desktop's frame pacing: Unity's 2021.1+ Android players default to 30) | Emulator: 2022.3.62 (URP) and 2022.2.17 title menus, both also as ports (their setups rehearsed) | Not yet | **Handheld**: 2022.3 IL2CPP, 64-bit: title. 2022.3.23 Mono, 32-bit: emulator | Emulator: 2022.3.36 (URP) title menu; 2022.3.4 IL2CPP opening scene |
 | 2023.1 - 2023.2 | Emulator: 2023.2.20 main menu (2023.1 not tried) | Not yet | Not yet | Not yet | Not yet |
 | 6000.0 - 6000.6 (Unity 6) | **Handheld**: Hollow Knight (6000.0.61) from first launch to gameplay (King's Pass, 32 - 34 fps; the 1 GB is tight). Emulator: Hollow Knight from first launch to gameplay; 6000.0.58, 6000.3.11, 6000.5.7 and 6000.6.2 reach their menus or first scenes; 6000.6.3 gets as far as generating its world | Not yet | Not yet | Not yet | Emulator, desktop GL only: 6000.5.9 IL2CPP sign-in screen, 6000.6.4 Mono in game. GLES mode, which most handhelds need: not yet |
@@ -187,7 +187,7 @@ Most impact for the most games first:
    yet), and precompiling a game's code (Mono AOT) against first-use hitches is not part of the
    tools.
 5. **Ports from Android builds.** `port check` and `port new` take an APK (the `apk` route: its
-   setup lays the build out as it is, `pmunity apk`). No 2017.4 - 2019.4 IL2CPP 64-bit build has
+   setup lays the build out as it is, `pmu apk`). No 2017.4 - 2019.4 IL2CPP 64-bit build has
    been tried. The games' own Java parts (Google Play services, ads, billing) do not run; most
    games carry on without them. Touch-only games need pointer mode.
 6. **Video.** Intro videos (Unity's VideoPlayer) have played in a 2017.4.40 game. The same code
@@ -215,9 +215,8 @@ The plan behind these: [docs/roadmap.md](docs/roadmap.md). The detailed gap list
 
 ### Port a game in five steps
 
-You need a computer with Docker, Python 3.11 or newer (macOS or Linux; the commands below are
-for a shell; write `python3` where `python` is missing; with Homebrew's Python make a virtual
-environment first: `python3 -m venv .venv && . .venv/bin/activate`) and the
+You need a computer with Docker (macOS or Linux; the commands below are for a shell; the tools
+are one Rust program, `pmu`, which `setup-rs/tools/pmu.sh` runs in Docker: no Python), the
 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) (`dotnet`, or `DOTNET=<its dotnet>`:
 `port check` builds asmpatch with it, whose survey of the game's code finds its pad bindings, the
 d-pad and stick settings a handheld needs and the files it reads; without it the check warns and
@@ -229,7 +228,7 @@ and the game you own.
 script with a zip appended: never run it; unpack it with `7zz x -tzip <installer>.sh -o<dir>` (or
 `unzip -q <installer>.sh -d <dir>`, which warns of "extra bytes at beginning" and exits with 1:
 harmless, but it stops a script under `set -e`), and the game is `<dir>/data/noarch/game`. GOG's macOS installer (`.pkg`):
-`python -m pmunity macpkg <dir> <installer>.pkg`. Keep the installer as it is for the handheld:
+`pmu macpkg <dir> <installer>.pkg`. Keep the installer as it is for the handheld:
 the port's setup takes it.
 
 Once:
@@ -237,10 +236,9 @@ Once:
 ```sh
 git clone --recurse-submodules https://github.com/wild1walker/portmaster-unity
 cd portmaster-unity
-pip install -r convert/requirements.txt
 runtime/build.sh                # builds ua_host in Docker (port package also does it when needed)
 tools/asmpatch/build.sh         # asmpatch, with the .NET 8 SDK (port check also builds it when missing)
-cd convert
+alias pmu="$PWD/setup-rs/tools/pmu.sh"   # pmu in Docker (built the first time: a few minutes)
 ```
 
 1. **Check the game.** `port check` says what the game is (Unity version, Mono or IL2CPP, Linux,
@@ -249,14 +247,14 @@ cd convert
    measure the game's heaviest scene on a handheld ([docs/porting.md](docs/porting.md), "Choose the
    route for speed first").
    ```sh
-   python -m pmunity version "<Game>_Data"          # Unity version, supported or not
-   python -m pmunity port check "<game folder>"
+   pmu version "<Game>_Data"          # Unity version, supported or not
+   pmu port check "<game folder>"
    ```
 2. **Make the port.** `port new` writes `mygame/` with a short settings file, `port.toml` (title,
    pointer mode, keys, setup questions, ...). Edit it, then run `port new` again to regenerate the
    rest.
    ```sh
-   python -m pmunity port new mygame --data "<game folder>"
+   pmu port new mygame --data "<game folder>"
    ```
 3. **Build the donors.** The handheld never downloads Unity's player: the port ships it as one or
    two donors, small games (a one-scene pong, `tools/donor/`) built with exactly the game's Unity
@@ -265,8 +263,8 @@ cd convert
    missing. On a Mac, with a Unity Personal licence file in `/Library/Application Support/Unity`
    (made once by the Unity Hub; the tools never sign in):
    ```sh
-   ../tools/donor/get-editor.sh 2017.4.27f1 editors/2017.4.27f1   # that editor + Android Build Support, unpacked
-   SDK=<Android SDK> JDK=<JDK 8 home> ../tools/donor/build.sh editors/2017.4.27f1/Unity.app MonoArmv7 donors
+   tools/donor/get-editor.sh 2017.4.27f1 editors/2017.4.27f1   # that editor + Android Build Support, unpacked
+   SDK=<Android SDK> JDK=<JDK 8 home> tools/donor/build.sh editors/2017.4.27f1/Unity.app MonoArmv7 donors
    ```
    The `mono-arm64` route also needs `Il2cppArm64` (with `NDK=`). Details:
    [docs/porting.md](docs/porting.md), section 5. Never commit donors.
@@ -274,7 +272,7 @@ cd convert
    `ua_host`, the setup's tool (`pmu`: one static program, no Python on the handheld), the donors
    and the licences. No game files, and from Unity only the donors.
    ```sh
-   python -m pmunity port package mygame --donors donors   # or: DONORS=donors mygame/package.sh
+   pmu port package mygame --donors donors   # or: DONORS=donors mygame/package.sh
    ```
    It also lists what a PortMaster submission still needs (a screenshot, the controls, the
    game's developer, ...); `--submission` lays the port out for PortMaster's repository
@@ -289,11 +287,11 @@ cd convert
    look for the game's community performance mods and fixes ([docs/porting.md](docs/porting.md),
    "Community performance mods and fixes"), then profile ([docs/profiling.md](docs/profiling.md)).
    ```sh
-   PM_7ZZ=<path to 7zzs.aarch64> ../tools/port/rehearse.sh mygame/out/mygame.zip "<game folder>" work/mygame 300
+   PM_7ZZ=<path to 7zzs.aarch64> tools/port/rehearse.sh mygame/out/mygame.zip "<game folder>" work/mygame 300
    ```
 6. **Tell us how it went.** Open a
    [Game porting report](https://github.com/wild1walker/portmaster-unity/issues/new/choose) with the
-   output of `pmunity version` and `port check`, what worked and where it failed, your handheld and
+   output of `pmu version` and `port check`, what worked and where it failed, your handheld and
    firmware, and `patchlog.txt` and `log.txt`. Remove personal folder names from the output if
    you like, and never attach game files. Reports of games that work are as useful as failures.
 

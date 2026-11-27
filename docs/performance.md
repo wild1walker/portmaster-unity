@@ -28,7 +28,7 @@ measurements and tools behind each line are in [profiling.md](profiling.md), [ru
 - **Name everything.** `pmu player fetch <version> <dir> --backend mono --abi armeabi-v7a
   --installer <Android support .exe> --symbols-only` takes Unity's own symbol files from the
   installer (the Windows one is the smaller: 501 MB for 6000.0.61f1);
-  `tools/analysis/profsum.py prof-1.txt --syms <dir>/Variations/mono/Release/Symbols/armeabi-v7a`
+  `pmu-dev profsum prof-1.txt --syms <dir>/Variations/mono/Release/Symbols/armeabi-v7a`
   then names every libunity frame of a `UA_PROF` recording, Mono names the managed ones.
 
 ## 2. Memory first on 1 GB
@@ -100,7 +100,7 @@ pixels.
 - **CPU-bound means the render thread.** Greenpath: Unity's render thread ~21 ms of a 26 ms frame
   (the Mali driver 40 % of it, Unity's GLES device 33 %), the main thread ~17 ms and waiting, the
   four cores only ~65 % busy. No Vulkan driver on these firmwares (Knulli has only an ICD file).
-  Find the driver's share by GL entry point (`profsum.py --callers 'libmali.so:<function>'`) and
+  Find the driver's share by GL entry point (`pmu-dev profsum --callers 'libmali.so:<function>'`) and
   count the calls a frame (`UA_GL_REC=census`) before writing a layer.
 - **Paid on the render thread:** Unity's dynamic geometry in persistently mapped buffers
   (`UA_GL_PERSIST=1`; Unity maps, flushes and unmaps a pooled buffer for every sprite chunk, ~320 a
@@ -175,7 +175,7 @@ which neither native script code nor 64-bit mode speeds up, while the 64-bit bui
 more, which a 1 GB handheld cannot spare. Compiling ahead (`UA_JIT_WARM`) takes the one thing
 IL2CPP fixes that mattered (first-use compiling) without either cost. A game whose frames are spent
 in its own scripts (a main thread busy with managed code, not waiting) is where IL2CPP would pay:
-check `profsum.py`'s module split first.
+check `pmu-dev profsum`'s module split first.
 
 Also did not pay: raising the render thread above FMOD's mixer (`UA_NICE='UnityGfxDeviceW:-19'`:
 Greenpath 36.4 -> 32.9: the main thread and the mixer then wait).

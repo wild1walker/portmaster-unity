@@ -16,13 +16,13 @@ system libraries the game opens (GL, X11, audio) as the handheld's own ARM64 lib
 
 ## When to use it
 
-`pmunity route <game folder>` reads the build (ELF/PE/Mach-O headers, the data's serialized-file
+`pmu route <game folder>` reads the build (ELF/PE/Mach-O headers, the data's serialized-file
 headers, strings in the player; nothing is run) and says which route fits and why:
 
 ```
-python -m pmunity route "<Game folder>"          # report
-python -m pmunity route "<Game folder>" --json   # all facts (for tools such as port.py)
-python -m pmunity route "<Game folder>" --launcher "Game.sh" --port game   # box64 launcher (below)
+pmu route "<Game folder>"          # report
+pmu route "<Game folder>" --json   # all facts (for tools such as port.py)
+pmu route "<Game folder>" --launcher "Game.sh" --port game   # box64 launcher (below)
 ```
 
 The box64 route is the one for:
@@ -73,12 +73,12 @@ blob drivers on muOS, Knulli, dArkOS, AmberELEC, ArkOS). The launcher picks one 
 
 Unity's Linux player has an OpenGL ES device built in, used with **`-force-gles`** (the
 `-force-gles30/31/32` forms are not recognized; the switch is not in the player's strings, so
-`pmunity route` recognizes the mode by `GLX_EXT_create_context_es2_profile`). Found in the test
+`pmu route` recognizes the mode by `GLX_EXT_create_context_es2_profile`). Found in the test
 rig, and it worked on every player it was tried with: 5.5 and 2017.4 - 2022.3 (results below). It
 needs three things:
 
 1. **OpenGL ES 3 in the build's graphics API list**: without it `-force-gles` is ignored. The player
-   logs `Unknown renderer 11` for that entry and goes on. `pmunity convert`'s `settings` step does
+   logs `Unknown renderer 11` for that entry and goes on. `pmu convert`'s `settings` step does
    it (`graphics_apis: [11, 17]`: GLES 3, then OpenGL Core as before).
 2. **GLES 3 shader programs** (shader platform 9): the ES device looks only for those ("Desired
    shader compiler platform 9 is not available in shader blob" and magenta otherwise). `pmunity
@@ -86,7 +86,7 @@ needs three things:
    Android route's (same numbers, GLSL ES 3.00). The player's own built-in shaders (`unity default
    resources`) already carry GLES 3 programs. One config does both steps:
    ```
-   python -m pmunity convert "<Game>_Data" --config tools/box64/gles.json        # in place, resumable
+   pmu convert "<Game>_Data" --config tools/box64/gles.json        # in place, resumable
    ```
 3. **A GLX that gives OpenGL ES contexts.** The player makes its ES context through GLX
    (`GLX_EXT_create_context_es2_profile`) and first opens a desktop core-profile context to learn
@@ -111,7 +111,7 @@ Mesa for Mali-G31/G52, which Unity refuses; `MESA_GL_VERSION_OVERRIDE=3.3` is un
 or a handheld with a full desktop GL this needs nothing from the port.
 
 `gl4es`: gl4es gives OpenGL 2.1 on GLES 2. That is enough for Unity's legacy OpenGL 2 renderer
-(Unity 4.x and 5.0 - 5.4; `pmunity route` lists `opengl2` among the player's renderers), not for
+(Unity 4.x and 5.0 - 5.4; `pmu route` lists `opengl2` among the player's renderers), not for
 OpenGL Core: Unity reads its 2.1 version and refuses, or, with the version string faked, calls GL 3
 functions gl4es does not have. gl4es is also what Westonpack's `crusty_glx_gl4es` mode bundles.
 
@@ -177,7 +177,7 @@ by an x86 glibc. The handheld needs:
 - an X server: none of the handheld firmwares runs one, so the launcher uses Westonpack
   (`weston_pkg_0.2`, Xwayland), as PortMaster's other X11 ports do.
 
-What the players ask for, as read by `pmunity route` from the test corpus:
+What the players ask for, as read by `pmu route` from the test corpus:
 
 | Unity | x86_64 glibc asked for (met by box64) | libstdc++ | libraries opened at run time |
 |---|---|---|---|
@@ -219,15 +219,15 @@ problem. Two ways:
 
 ## Making a port
 
-`pmunity port` (docs/porting.md) makes box64 ports like Android-route ones: its `box64` route is
+`pmu port` (docs/porting.md) makes box64 ports like Android-route ones: its `box64` route is
 `setup-rs/templates/box64/` (launcher, setup, READMEs; `route.json`) plus this route's
 hooks in `convert/pmunity/route.py` (`port_check`, `port_new`, `port_package`).
 
 ```
-python -m pmunity port check "<Game folder>"                      # the routes; box64 for IL2CPP etc.
-python -m pmunity port new <port> --data "<Game folder>" [--route box64] [--title "<Title>"]
+pmu port check "<Game folder>"                      # the routes; box64 for IL2CPP etc.
+pmu port new <port> --data "<Game folder>" [--route box64] [--title "<Title>"]
 tools/box64/build.sh                                               # -> tools/box64/out (once)
-python -m pmunity port package <port>                              # -> <port>/out/<port>.zip
+pmu port package <port>                              # -> <port>/out/<port>.zip
 tools/box64/test/port_test.sh <port>/out/<port>.zip "<Game folder>" <work dir>   # the zip, as on a handheld
 ```
 
@@ -238,7 +238,7 @@ the converter and its Python: removed by the setup when it is done), `port.env` 
 files, nothing of Unity.
 
 - **The setup** (first launch, PortMaster's patcher): finds the Linux x86-64 build in
-  `gamedata/` (the folder, or the archive it came in, unpacked in place) with `pmunity route --env`,
+  `gamedata/` (the folder, or the archive it came in, unpacked in place) with `pmu route --env`,
   which writes `game.env` (`GAME_DIR`, `EXE`, `DATA`, `UNITY`, `BACKEND`, `GL_MODE`); in GLES mode
   converts the data in place with `gles.json` (resumable); removes its tools. The game's code is
   not changed.
@@ -258,7 +258,7 @@ files, nothing of Unity.
   games that want them, and the exit hotkey (its kill switch gets the first 15 characters of the
   executable's name: the kernel keeps no more of a process name).
 
-Without `pmunity port`: `python -m pmunity route "<Game folder>" --launcher "<Title>.sh" --port <port>`
+Without `pmu port`: `pmu route "<Game folder>" --launcher "<Title>.sh" --port <port>`
 writes the same launcher; `tools/box64/test/launcher_test.sh <launcher> <game folder> <out>` runs a
 launcher with a prepared port folder (stand-in PortMaster: `test/mockpm/`, the names a launcher
 uses and a `westonwrap.sh` that only applies the `VAR=value`s).
@@ -270,7 +270,7 @@ container (native on an Apple-silicon Mac): Xvfb, Mesa (llvmpipe),
 4 CPUs, no network, the game folder read-only; no sound device (a sound server would double the
 image). It writes screenshots, the player and box64 logs, frames per second (Mesa's HUD, written to
 a file, not drawn; in GLES mode glxes's own swap count, `GLXES_FPS`) and CPU time per thread per
-frame (`rigstats.py`, on the host). `GL=mesa` (desktop GL 4.5), `GL=gles` (no desktop GL library at all, EGL + GLES 3.2
+frame (`pmu-dev rigstats`, on the host). `GL=mesa` (desktop GL 4.5), `GL=gles` (no desktop GL library at all, EGL + GLES 3.2
 only, as a Mali driver: for `-force-gles` with glxes), `GL=noop` (nothing rasterized: the CPU
 side alone), `GL=gl4es`; `OVERLAY=<converted files>`, `KEYS`, `CLICKS`, `PROFILE`, `ARGS`
 (header of the script).
@@ -314,9 +314,9 @@ at 60: the CPU side only; a Mali-G31 adds its own limit for 3D scenes.
   newer an "OpenGL ES 3.2" one.
 - With nothing rasterized (`GL=noop`) the menus' main threads need 0.5-1.9 ms a frame here, so
   menus are not CPU-bound on an A53; gameplay is (Cuphead: ~30 fps in heavy levels).
-- A whole port (`pmunity port new --route box64`, `port package`, `test/port_test.sh`): the 2022.3
+- A whole port (`pmu port new --route box64`, `port package`, `test/port_test.sh`): the 2022.3
   IL2CPP game's release zip unzipped into a ports folder with the game copied into `gamedata/`;
-  the first launch ran the setup (the zip's own aarch64 Python, `pmunity route --env`, the GLES
+  the first launch ran the setup (the zip's own aarch64 Python, `pmu route --env`, the GLES
   conversion in place: 15 s on the Mac) and then the game, in GLES mode with no desktop GL library,
   at 640x480 full screen. `test/launcher_test.sh` with the 2020.3 game: title menu, prefs written.
   Xvfb has no window manager: without the input focus that game hides its menu, so the tests give

@@ -1,5 +1,5 @@
 name: Bug report
-description: A tool (pmunity, ua_host, the build scripts, a port's setup) fails or does the wrong thing.
+description: A tool (pmu, pmu-dev, ua_host, the build scripts, a port's setup) fails or does the wrong thing.
 title: "[Bug] "
 labels: ["bug"]
 body:
@@ -19,7 +19,7 @@ body:
       label: The command you ran
       description: The full command line, and which folder you ran it in. Replace personal folder names if you like.
       render: shell
-      placeholder: python -m pmunity port check "<game folder>"
+      placeholder: pmu port check "<game folder>"
     validations:
       required: true
 
@@ -45,8 +45,8 @@ body:
     id: os
     attributes:
       label: Computer OS
-      description: For problems on your computer. With Python and Docker versions if they matter.
-      placeholder: e.g. macOS 15 (Apple silicon), Python 3.12, Docker 28 / Ubuntu 24.04 x86-64
+      description: For problems on your computer. With the Docker version if it matters.
+      placeholder: e.g. macOS 15 (Apple silicon), Docker 28 / Ubuntu 24.04 x86-64
 
   - type: input
     id: commit
@@ -60,7 +60,7 @@ body:
     id: unity
     attributes:
       label: Unity version of the game
-      description: "`python -m pmunity version \"<Game>_Data\"` prints it."
+      description: "`pmu version \"<Game>_Data\"` prints it."
       placeholder: e.g. 2021.3.16f1 (supported)
 
   - type: input

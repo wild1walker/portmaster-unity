@@ -1,6 +1,6 @@
 # Building, and converting a game by hand
 
-Most porters only need `pmunity port` ([porting.md](porting.md), and the five steps in the
+Most porters only need `pmu port` ([porting.md](porting.md), and the five steps in the
 [README](../README.md#port-a-game-in-five-steps)). This page lists what building needs and the
 same steps by hand.
 
@@ -11,7 +11,8 @@ same steps by hand.
   64-bit `ua_host` (`ARCH=arm64 runtime/build.sh`) runs the 64-bit routes on a 64-bit userland
   ([arm64.md](arm64.md), [apk.md](apk.md), [il2cpp.md](il2cpp.md)).
 - **To build:** Docker (the Dockerfiles hold Debian bookworm armhf cross toolchains and the arm64
-  build image), Python 3.11+ with `convert/requirements.txt`, 7-Zip (to unpack Unity's installer
+  build image, and `ua-rust`, where `pmu` builds and runs: `setup-rs/tools/pmu.sh <command>`, e.g. as
+  `alias pmu="$PWD/setup-rs/tools/pmu.sh"`), 7-Zip (to unpack Unity's installer
   by hand), and the .NET 8 SDK for asmpatch (`tools/asmpatch/build.sh`; `port check` runs it when
   asmpatch is missing). The SDK is installed on the computer itself, not in Docker: Microsoft's
   installer or `dotnet-install.sh --channel 8.0` (it goes to `~/.dotnet`; `DOTNET=<dir>/dotnet` names
@@ -20,16 +21,16 @@ same steps by hand.
   elsewhere).
 - **Unity's Android player for the game's exact Unity version**, from a donor: a small game built
   with that Unity version (`tools/donor/build.sh`; the editor from `tools/donor/get-editor.sh`:
-  [porting.md](porting.md#5-donors-build-unitys-player-for-the-port)), unpacked with `python -m
-  pmunity player donor <version> <dir> --apk <donor.apk>`. A port's setup does exactly this with the
-  donors its release ships: the handheld never downloads Unity's player. (On the computer, `python -m
-  pmunity player fetch <version> <dir>` also reads the files from Unity's installer, about 10 MB.) The
+  [porting.md](porting.md#5-donors-build-unitys-player-for-the-port)), unpacked with `pmu player
+  donor <version> <dir> --apk <donor.apk>`. A port's setup does exactly this with the
+  donors its release ships: the handheld never downloads Unity's player. (On the computer, `pmu player
+  fetch <version> <dir>` also reads the files from Unity's installer, about 10 MB.) The
   folder with `Variations/` and `Data/` is the "player package" below. Unity's licence terms apply
   to it; it is never redistributed here.
 - **The game:** a build you own. A Mono desktop build of Unity 5.6 - 6000.6 for the main route
   ([compat/README.md](compat/README.md): what each line needs and what has run). The macOS or
   Linux build is the usual choice (its OpenGL Core shaders convert to GLES 3); a Windows build
-  carries only Direct3D 11 shaders, which `pmunity shaders --from d3d11` translates with Unity's
+  carries only Direct3D 11 shaders, which `pmu convert --steps shaders --set shaders.from=d3d11` translates with Unity's
   HLSLcc (`tools/hlslcc/build.sh`; for a port's setup on the handheld `ARCH=arm64
   tools/hlslcc/build.sh`; [shaders.md](shaders.md)). Other builds: the routes in
   [porting.md](porting.md#2-routes).
@@ -62,11 +63,10 @@ starts from scratch).
 ## Converting and running a game by hand
 
 ```sh
-pip install -r convert/requirements.txt
-cd convert
-python -m pmunity convert "<Game>.app/Contents/Resources/Data" work/data --config game.json
-python -m pmunity player donor <version> work/player --apk <donors>/donor-<version>-mono-armv7.apk
-python -m pmunity android-data --src work/data --pkg work/player --out work/android --pack all
+alias pmu="$PWD/setup-rs/tools/pmu.sh"     # pmu in Docker
+pmu convert "<Game>.app/Contents/Resources/Data" work/data --config game.json
+pmu player donor <version> work/player --apk <donors>/donor-<version>-mono-armv7.apk
+pmu android-data --src work/data --pkg work/player --out work/android --pack all
 ```
 
 Then copy to the handheld, into one folder: `ua_host`, the player's three libraries into `lib/`,

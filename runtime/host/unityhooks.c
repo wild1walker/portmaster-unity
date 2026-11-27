@@ -33,8 +33,8 @@
 //                        cores less one: 3 on the four-core handhelds); 2017.x has no -job-worker-count switch
 //   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS, UA_GLES_POOL or UA_FAST_VERTS)
 //
-// How a function is found. Unity publishes symbol files for its Android players (`pmunity player
-// fetch <version> --symbols`); tools/re/unityhooks.py reads a player's libunity.so with its
+// How a function is found. Unity publishes symbol files for its Android players (`pmu player
+// fetch <version> --symbols`); pmu-dev unityhooks reads a player's libunity.so with its
 // symbol file and prints a row for each function below: its offset, size, instruction set, and an
 // FNV-1a hash of all of its bytes. At load the hook is installed only where a row's hash matches the
 // loaded library's bytes at that offset: the code is the very code that was read and checked (the
@@ -324,7 +324,7 @@ static void present_sync_on_load(uintptr_t base, size_t size)
             return;
         }
     fprintf(stderr, "[unityhooks] UA_PRESENT_SYNC: this libunity.so is not one whose present sync point was read "
-                    "(tools/re/unityhooks.py); left as the game has it\n");
+                    "(pmu-dev unityhooks); left as the game has it\n");
 }
 
 // --- UA_JOB_WORKERS
@@ -354,7 +354,7 @@ static void job_workers_on_load(uintptr_t base, size_t size)
     const struct row *r = find_row(g_jobq, sizeof g_jobq / sizeof *g_jobq, base, size);
     if (!r) {
         fprintf(stderr, "[unityhooks] UA_JOB_WORKERS: this libunity.so is not one whose CreateJobQueue was read "
-                        "(tools/re/unityhooks.py; Unity 2018 and later: -job-worker-count); left as Unity sets it\n");
+                        "(pmu-dev unityhooks; Unity 2018 and later: -job-worker-count); left as Unity sets it\n");
         return;
     }
     g_jobq_workers = n;
@@ -395,7 +395,7 @@ void unityhooks_on_load(so_module *m)
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);
     if (!r) {
         fprintf(stderr, "[unityhooks] UA_GFX_JOBS: this libunity.so is not one whose AdjustThreadingModeForAPI was read "
-                        "(tools/re/unityhooks.py); graphics jobs stay as Unity sets them\n");
+                        "(pmu-dev unityhooks); graphics jobs stay as Unity sets them\n");
         return;
     }
     if (unityhooks_hook(base + r->off, r->isa, (void *)adjust_hook, (void **)&g_adjust_orig) != 0) {

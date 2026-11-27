@@ -20,7 +20,7 @@ body:
     id: unity
     attributes:
       label: Unity version
-      description: "`python -m pmunity version \"<Game>_Data\"` prints it."
+      description: "`pmu version \"<Game>_Data\"` prints it."
       placeholder: e.g. 2020.3.49f1 (supported)
     validations:
       required: true
@@ -46,8 +46,8 @@ body:
       label: Route you used
       options:
         - android (32-bit Android player, data converted)
-        - il2cpp-arm64 (64-bit, code compiled with pmunity il2cpp)
-        - apk (the game's own Android build, pmunity apk)
+        - il2cpp-arm64 (64-bit, code compiled with pmu il2cpp)
+        - apk (the game's own Android build, pmu apk)
         - box64 (the game's Linux x86-64 build)
         - None yet (port check only)
         - Not sure
@@ -58,7 +58,7 @@ body:
     id: check
     attributes:
       label: "`port check` output"
-      description: The output of `python -m pmunity port check "<game folder>"`. Replace personal folder names if you like.
+      description: The output of `pmu port check "<game folder>"`. Replace personal folder names if you like.
       render: text
     validations:
       required: true

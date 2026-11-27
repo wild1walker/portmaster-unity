@@ -3,7 +3,7 @@
 #pragma once
 #include "../loader/so_loader.h"
 
-// Reads <root>/plugins.map (or $UA_PLUGIN_MAP; written by pmunity android-data), maps glibc builds of
+// Reads <root>/plugins.map (or $UA_PLUGIN_MAP; written by pmu android-data), maps glibc builds of
 // plugins in <libdir> to host libraries (with softfp thunks for their float-argument calls on 32-bit
 // ARM), registers the built-in stubs and refusals the map asks for. Without a map: only the scan of
 // <libdir>. Logs one "[plugins]" line per decision.

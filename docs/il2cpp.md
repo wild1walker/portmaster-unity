@@ -5,10 +5,15 @@ players (arm64-v8a) exist only for IL2CPP. A handheld without a 32-bit userland 
 other 64-bit-only firmwares) can therefore run a Mono desktop game only after its managed code is
 compiled ahead of time with Unity's IL2CPP, as a Unity IL2CPP Android build would have done:
 
+Since 2026-11-27 the build runs on the handheld only: `pmu il2cpp ... --on-device` (the
+il2cpp-arm64 route's setup runs it; below, "On the handheld"). The build on the porter's computer
+(in Docker) was the Python converter's (convert/pmunity/il2cpp.py) and went with it: what this page
+says of the container is that build's record (`git show 2147a04:convert/pmunity/il2cpp.py`).
+
 ```
-python -m pmunity il2cpp <Game>_Data out/il2cpp --abi arm64-v8a       # the game's code -> libil2cpp.so
-python -m pmunity convert <Game>_Data work/data --config game.json    # shaders, textures, settings (as for Mono)
-python -m pmunity android-data --src work/data --pkg <IL2CPP player package> --il2cpp out/il2cpp \
+pmu il2cpp <Game>_Data out/il2cpp --abi arm64-v8a --on-device --home <dir>   # the game's code -> libil2cpp.so
+pmu convert <Game>_Data work/data --config game.json    # shaders, textures, settings (as for Mono)
+pmu android-data --src work/data --pkg <IL2CPP player package> --il2cpp out/il2cpp \
     --out work/android --pack all                                     # APK + OBB with IL2CPP's metadata
 ```
 
@@ -24,12 +29,12 @@ COMMAND` runs tools/asmpatch on the game's `Managed` and compiles what it change
 --asmpatch`: e.g. `--asmpatch "dotnet asmpatch.dll --only=rewired-android"`), and with it
 `--streaming-assets both|loose` and `--data-path` add asmpatch's opt-in patches for StreamingAssets
 and the data folder read with System.IO (below, "Files the game reads"). With IL2CPP the
-assemblies are compiled into `libil2cpp.so`, so these go to `pmunity il2cpp`, not to android-data
+assemblies are compiled into `libil2cpp.so`, so these go to `pmu il2cpp`, not to android-data
 (which refuses `--asmpatch`, `--managed-file` and `--assembly-patch` with `--il2cpp`).
 **Unity versions**: 2017.4 - 6000.2. Up to 2022.3 il2cpp is a .NET program the container's (or, with
 `--on-device`, the handheld's) .NET runs; from 2021.2 the class libraries are per platform and the
 build takes `unityaot-linux`, as Unity's Android builds do, and il2cpp builds the C++ with Bee,
-whose native backend pmunity stands in for (below, "Unity 2021.2+: Bee"). From 2023.1 (Unity 6
+whose native backend pmu stands in for (below, "Unity 2021.2+: Bee"). From 2023.1 (Unity 6
 included) il2cpp is a natively compiled program for the editor's own system (the Windows
 installer's `il2cpp.exe` is Windows x86-64 code, with no `il2cpp.dll`): 2023.1 - 6000.2 are built
 with Unity 2022.3's .NET il2cpp for the data version's own libil2cpp and player, a "mixed" build
@@ -70,7 +75,7 @@ or of what is built from them, is in this repository.
 |---|---|---|---|
 | `Editor/Data/il2cpp` (il2cpp, UnityLinker, libil2cpp and Boehm GC sources), `MonoBleedingEdge/etc` and the class libraries IL2CPP builds of the game's kind use (below: `MonoBleedingEdge/lib/mono/unityaot`; .NET 3.5 games `Mono/lib/mono/unity` or `2.0` and `Mono/etc`; .NET 4.x of 2017.x `MonoBleedingEdge/lib/mono/4.5`) | the Windows editor installer `UnitySetup64-<ver>.exe` (Unity's release API names it): a non-solid NSIS installer like the Android support ones, so `nsis.py` reads only these files' blocks (neighbouring blocks in one request) | 10-13 MB of 1.6-2.4 GB | 45-50 MB |
 | the Android NDK's target files: unified sysroot (headers, per-API libraries), libc++, libgcc | Google's `android-ndk-<rev>-linux-x86_64.zip`: its central directory, then only those members | 34 MB (arm64-v8a), +24 MB (armeabi-v7a) of 820 MB | 145 MB / 200 MB both |
-| the IL2CPP Android player: `libmain.so`, `libunity.so`, `unity default resources` (`pmunity player fetch --backend il2cpp`), the IL2CPP UnityEngine assemblies (`Variations/il2cpp/Managed`), `baselib.a` (2020.1+) | the Android Build Support installer | 9 MB | 30 MB per ABI |
+| the IL2CPP Android player: `libmain.so`, `libunity.so`, `unity default resources` (`pmu player fetch --backend il2cpp`), the IL2CPP UnityEngine assemblies (`Variations/il2cpp/Managed`), `baselib.a` (2020.1+) | the Android Build Support installer | 9 MB | 30 MB per ABI |
 | Unity 2023.1+ only: a 2022.3 release's `il2cpp/build` (`il2cpp.dll`, Bee) and libil2cpp's headers (below, "Unity 2023.1+"); NDK r23b's API 23 libraries for Unity 6 | that release's Windows editor installer; the NDK's zip | 3.8 MB; 3.8 MB | 12 MB; 17 MB, + the mixed folder (33 MB, hard links where possible) |
 | `<home>/root/usr`, `root/etc` (tools/il2cpp/root.sh): .NET 8, Mono 6.8, clang/lld 14, unpacked with `dpkg-deb -x` over a copy of the stock image's own `/usr` and `/etc`, then mounted over them | Ubuntu 24.04's archive | 180 MB | 0.85 GB |
 
@@ -141,7 +146,7 @@ newer compiler's code generation.
    `--baselib-directory` (2020.1+). il2cpp's own builder compiles the generated C++ and libil2cpp
    and links `libil2cpp.so` against the NDK (API 21 for arm64; for armv7 19, 16 with NDK r13b and
    r16b; 22 for both from 2021.x; libc++ static, GNU libstdc++ with r13b and r16b), then strips it
-   (from 2021.2 il2cpp only writes that build as a graph, which pmunity runs: below). The .NET Framework
+   (from 2021.2 il2cpp only writes that build as a graph, which pmu runs: below). The .NET Framework
    builds of the tools (2017.4 - 2019.4) run on Mono, as in Unity's
    Linux and macOS editors (UnityLinker uses .NET Framework-only types); the .NET Core / .NET
    builds (2020.1+) on .NET 8 with roll-forward.
@@ -161,7 +166,7 @@ From 2021.2 il2cpp's C++ build is Bee, Unity's build system: il2cpp's build prog
 il2cpp.dll) writes the build as a graph, `<cache>/buildstate/bee.dag.json`, and `bee_backend`
 runs it. That backend is a native program, and the editor installers carry it only for their own
 system (the Windows one: `il2cpp/build/deploy/bee_backend/win-x64/bee_backend.exe`); il2cpp on
-Linux runs `bee_backend/linux-x64/bee_backend`. As for the NDK's compilers, pmunity puts a
+Linux runs `bee_backend/linux-x64/bee_backend`. As for the NDK's compilers, pmu puts a
 stand-in there (convert/pmunity/il2cpp_bee.py, a POSIX sh script, written into the fetched
 `Editor/Data` like ndk-clang.sh into the NDK):
 
@@ -169,7 +174,7 @@ stand-in there (convert/pmunity/il2cpp_bee.py, a POSIX sh script, written into t
   Bee runs it, which writes the graph, and calls the backend again with `--dagfilejson`;
 - then it notes its arguments (the target, `FinalProgram`) and exits 0: il2cpp ends with "Build
   succeeded with 0 successful nodes";
-- pmunity runs the graph: the nodes the target needs (both of Bee's dependency kinds,
+- pmu runs the graph: the nodes the target needs (both of Bee's dependency kinds,
   `ToBuildDependencies` before a node and the `ToUseDependencies` of those), the commands
   (`RunShellCommand`: `/bin/sh -c` in the graph's folder with the node's environment) at most
   `--jobs` at a time, in one container kept running for them (`docker exec`), or natively with
@@ -183,7 +188,7 @@ stand-in there (convert/pmunity/il2cpp_bee.py, a POSIX sh script, written into t
 
 il2cpp also hands the build program the way to start il2cpp itself: `deploy/il2cpp` (the editor's
 apphost) when it exists, else the .NET in the editor's `il2cpp-deps`, which the installers do not
-have ("Run build.pl to populate il2cpp-deps"): pmunity writes a `deploy/il2cpp` that runs
+have ("Run build.pl to populate il2cpp-deps"): pmu writes a `deploy/il2cpp` that runs
 il2cpp.dll on the .NET in `PATH` (in this build mode nothing runs it).
 
 What the graph does is what Unity's Android build does with that NDK: about 600 compiles (the
@@ -195,7 +200,7 @@ generated C++, libil2cpp in lumps of a few files, the Boehm GC), one link with a
 `android-data --il2cpp <out>` then packs the data as for Mono, but with IL2CPP's `Managed/`
 (Metadata, Resources, etc) instead of the assemblies and Mono's dllmap config, checks the
 assembly list against what IL2CPP compiled, and writes the build's `abi` into
-`android_package.json` (as `pmunity apk` does; the rehearsal picks the arm64 rig by it). The player package (`--pkg`) is the IL2CPP one
+`android_package.json` (as `pmu apk` does; the rehearsal picks the arm64 rig by it). The player package (`--pkg`) is the IL2CPP one
 (`<home>/<ver>/player-<abi>`). `libil2cpp.so` goes into the runtime's `lib/` next to
 `libmain.so` and `libunity.so` of the IL2CPP player; libunity loads it, copies
 `assets/bin/Data/Managed` out of the APK into `<external files>/il2cpp` (`data/external/il2cpp`
@@ -216,7 +221,7 @@ installers' `il2cpp.exe` is Windows x86-64 (or, in the Windows ARM64 editor, ARM
 with no `il2cpp.dll`, and no editor exists for Linux on ARM. The other tools next to it are still
 .NET programs (UnityLinker.dll, il2cpp-compile.dll, Bee). What il2cpp writes, though, is C++ for
 libil2cpp and a `global-metadata.dat` for it, and 2022.3's .NET il2cpp writes the same thing for
-the libil2cpp of these lines as far as the build depends on it. So `pmunity il2cpp` converts with
+the libil2cpp of these lines as far as the build depends on it. So `pmu il2cpp` converts with
 a 2022.3 release's `il2cpp.dll` (convert/pmunity/il2cpp_mix.py) and takes everything else from the
 data's own version:
 
@@ -256,7 +261,7 @@ Compared on each line's Windows editor installer (libil2cpp's headers only, 1 - 
 | 6000.5.7f1, 6000.6.3f1 | 107, 108 | - | refused: as 6000.3, and the code registration structures changed too |
 
 (2022.3 itself moved from metadata 29 to 31 between 2022.3.23f1 and 2022.3.36f1: an element more in
-each method definition, `returnParameterToken`.) `port check` and `pmunity apk --il2cpp` refuse
+each method definition, `returnParameterToken`.) `port check` and `pmu apk --il2cpp` refuse
 6000.3+ with the metadata version before fetching anything.
 
 **API level**: 2022.3's build program compiles and links for Android API 22; Unity 6's players are
@@ -342,8 +347,8 @@ files) needs them beside the APK and its reads pointed there (android-data.md, s
 `Application.dataPath`. Under IL2CPP the patch must be in the code IL2CPP compiles:
 
 ```
-python -m pmunity il2cpp <Game>_Data out/il2cpp --asmpatch "dotnet asmpatch.dll --only=" --streaming-assets both
-python -m pmunity android-data --src work/data --pkg <IL2CPP player> --il2cpp out/il2cpp --streaming-assets both \
+pmu il2cpp <Game>_Data out/il2cpp --asmpatch "dotnet asmpatch.dll --only=" --streaming-assets both
+pmu android-data --src work/data --pkg <IL2CPP player> --il2cpp out/il2cpp --streaming-assets both \
     --out work/android --pack all
 ```
 
@@ -353,7 +358,7 @@ to pack a build whose compiled reads look for files its options leave out (built
 `loose`, packed with another mode; built with `--data-path`, packed without it). The il2cpp-arm64
 port route does both from port.toml's `android_data.streaming_assets` and `data_path`.
 
-## Android builds with Mono (`pmunity apk --il2cpp`)
+## Android builds with Mono (`pmu apk --il2cpp`)
 
 A game owned as an Android build made with Mono has only Unity's armeabi-v7a player, which a
 64-bit-only firmware cannot run. Its `assets/bin/Data/Managed/*.dll` are the assemblies IL2CPP
@@ -361,13 +366,13 @@ compiles (already the Android ones, with the game's Android code paths), and its
 Android data, so the same build applies without a conversion:
 
 ```
-python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp [--home DIR] [--jobs N]   # PC: Docker
-python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp --on-device --home DIR    # on the handheld
+pmu apk <game>.apk out/ --target arm64 --il2cpp [--home DIR] [--jobs N]   # PC: Docker
+pmu apk <game>.apk out/ --target arm64 --il2cpp --on-device --home DIR    # on the handheld
 ```
 
 `--il2cpp` acts only when the target needs arm64-v8a and the build is Mono with only armeabi-v7a
 (`--target armhf,arm64 --il2cpp` on a system with a 32-bit userland keeps the build's own player).
-It runs `pmunity il2cpp` on the APK's assemblies and `boot.config` (the version from its data:
+It runs `pmu il2cpp` on the APK's assemblies and `boot.config` (the version from its data:
 `globalgamemanagers` or `data.unity3d`) into `out/.il2cpp`, which a rerun continues, then writes the
 arm64 layout:
 
@@ -397,7 +402,7 @@ Run so far (PC route, then the native arm64 rig), two free itch.io Mono APKs who
 | 2D, portrait, Vulkan + GLES3 | 2019.4.18f1 | 89 (8 of the game) | 15 min | 30.0 MiB, 24 | 18.3 MiB (from 28.4) | title (~140 fps in the rig); `UA_POINTER=touch` taps PLAY and a run starts |
 
 Neither logged an exception. The card battler's apk port (`player.il2cpp = true`) ran its setup on a
-64-bit-only stand-in (1 GB + 1 GB swap): `pmunity apk --il2cpp --on-device` in 38 minutes with
+64-bit-only stand-in (1 GB + 1 GB swap): `pmu apk --il2cpp --on-device` in 38 minutes with
 the downloads (UnityLinker 0.4 min, peak 549 MB; the conversion 8.6 min, 474 MiB of C++, peak 989
 MB; 607 graph commands with 2 jobs in 11.6 min, peak 573 MB), and the install reached the same
 battle. Not tried yet: a Mono APK whose data is in an OBB (with an OBB mounted
@@ -410,8 +415,8 @@ A port cannot ship `libil2cpp.so` (above), so on a 64-bit-only firmware the port
 setup builds it on the handheld itself, with the same tools as the PC route but without Docker:
 
 ```
-python -m pmunity il2cpp fetch <version> --on-device --home <dir>        # downloads only (Wi-Fi)
-python -m pmunity il2cpp <Game>_Data <out> --on-device --home <dir>      # the build (resumable)
+pmu il2cpp fetch <version> --on-device --home <dir>        # downloads only (Wi-Fi)
+pmu il2cpp <Game>_Data <out> --on-device --home <dir>      # the build (resumable)
 ```
 
 `--on-device` runs everything natively on the aarch64 Linux machine it is started on (convert/
@@ -431,7 +436,7 @@ the same steps, files and commands, no Python; docs/rust-setup.md, "`pmu il2cpp`
 | Unity's il2cpp parts, the NDK's target files, the IL2CPP player | as on the PC (above, range reads) | 55-60 MB | 150-370 MB |
 
 Every Debian and .NET file is pinned by sha256 in `convert/pmunity/il2cpp_device_lock.py`
-(`tools/il2cpp/device_lock.py` writes it from Debian's index and Microsoft's release metadata).
+(`pmu-dev il2cpp-lock` writes it from Debian's index and Microsoft's release metadata).
 The packages come from `deb.debian.org`, else from `snapshot.debian.org` (which keeps every
 version Debian has published, so old pins keep working after Debian replaces a package). Only the
 groups a build needs are fetched: a 2018.4 game takes base + LLVM + Mono + .NET, 100 MB (68 MB
@@ -454,7 +459,7 @@ its prefix from that path), .NET a copy named `dotnet/dotnet` (the muxer insists
 finds `host/fxr` next to itself; the real one is `dotnet/dotnet-muxer`). `bin/` holds `clang`, `clang++`, `ld.lld`, `llvm-objcopy`, `llvm-strip`, `llvm-ar`,
 `llvm-ranlib`, `llvm-nm`, `mono`, `dotnet`; tools/il2cpp/ndk-clang.sh runs them as on the PC
 (`PMUNITY_LLVM=<toolchain>/bin`), so a port that ships the Python ships `setup/tools/il2cpp/ndk-clang.sh`
-next to `setup/pmunity` (`pmunity port package` does); pmu has a copy built in
+next to `setup/pmunity` (`pmu port package` does); pmu has a copy built in
 (`setup-rs/crates/il2cpp/src/ndk-clang.sh`, a test checks it is the same file).
 
 ### Fitting a 1 GB, 4 x Cortex-A53 handheld
@@ -641,7 +646,7 @@ IL2CPP compiles everything ahead of time; what Mono does at run time instead fai
 
 ## Tested
 
-Free Linux (Mono, .NET 4.x) builds of the test corpus, one per line; `pmunity convert` (shaders,
+Free Linux (Mono, .NET 4.x) builds of the test corpus, one per line; `pmu convert` (shaders,
 settings) and `android-data --il2cpp --pack all`, then the emulated rigs (`tools/emu`:
 `EMU_ARCH=arm64` runs the aarch64 `ua_host` natively on an Apple-silicon Mac, armhf is QEMU
 armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
@@ -727,7 +732,7 @@ What the runs showed:
   fps with the arm64 `ua_host` on an RG34XX-SP's 64-bit userland; compat/README.md, "On a handheld".)
 - `--strip none` end to end (it built 1 GB of C++ for the 2019.4 game; stopped there).
 - Mixed builds (Unity 2023.1+): 2023.1, 6000.1 and 6000.2 (compared, not built), `--on-device`
-  (the same steps with the mixed folder; not run), `pmunity apk --il2cpp` with a Unity 6 Mono APK,
+  (the same steps with the mixed folder; not run), `pmu apk --il2cpp` with a Unity 6 Mono APK,
   the il2cpp-arm64 port route with a Unity 6 game, armv7, and any of it on a handheld.
 - armv7 for 2018.4 and 2020.3.
 
@@ -742,7 +747,7 @@ What the runs showed:
   which the NDK's GNU ld accepted in a shared library and lld does not, so ndk-clang.sh drops a
   `-fPIE` that comes with `-fPIC`. It links with a map file and then runs MapFileParser on it for
   `Data/SymbolMap-<arch>` (the editor passes its prebuilt one; without `--map-file-parser` il2cpp
-  builds it from source with the host's GCC): `--map-file-parser=/bin/true`, and `pmunity il2cpp`
+  builds it from source with the host's GCC): `--map-file-parser=/bin/true`, and `pmu il2cpp`
   writes `Data/Managed/SymbolMap-ARM64` / `-ARMv7` itself from the unstripped library's symbol
   table (the same records: each code symbol's offset and length). libil2cpp names the methods of
   managed stack frames with it; without it, it falls back to the method pointer table, which

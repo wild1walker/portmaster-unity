@@ -17,7 +17,7 @@ failures a PC without the service gives (Wwise's: a sound engine that plays noth
 
 ## The survey and the plugin map
 
-`python -m pmunity plugins <Game>_Data [--map plugins.map] [--json report.json] [--plugin-map port.json]`
+`pmu plugins <Game>_Data [--map plugins.map] [--json report.json] [--plugin-map port.json]`
 (convert/pmunity/plugins.py) reads the game's assemblies (convert/pmunity/clrmeta.py: the ImplMap,
 ModuleRef, method signature and constant tables of every assembly that is not Unity's or the .NET
 runtime's) and the files in its Plugins folders, and reports for every library the managed code
@@ -130,7 +130,7 @@ port's `lib/`:
 | files | `libfmod.so` and `libfmodstudio.so` (FMOD 2.02+: both; the core is reached through `libfmodstudio.so`'s dependency), and the DSP plugins the game's FMOD settings load (e.g. `libresonanceaudio.so`) |
 | ABI | `armeabi-v7a` for the armv7 Mono player (`arm64-v8a` for an arm64 player) |
 | from | FMOD Engine `<version>` for Android (`fmodstudioapi<XXYYZZ>android.tar.gz`: `api/core/lib/<abi>/`, `api/studio/lib/<abi>/`), or FMOD for Unity `<version>` (the Android libraries in the `.unitypackage`) |
-| version | exactly the game's (`pmunity plugins` prints it); FMOD keeps the API within a major line (2.02.x), and the integration passes its header version to `System_Create` |
+| version | exactly the game's (`pmu plugins` prints it); FMOD keeps the API within a major line (2.02.x), and the integration passes its header version to `System_Create` |
 
 Why this route: these libraries are armeabi-v7a code like Unity's player, so Mono's calls need no
 ABI conversion; they need only what the runtime already gives Unity's own built-in FMOD (bionic
@@ -160,7 +160,7 @@ What the runtime adds for FMOD:
 - The version, from the game: the integration's `FMOD.VERSION.number` (the header version its
   `System_Create` calls pass), its DllImport names and `dllSuffix`, and the desktop libraries' Linux
   SONAME line (`libfmodstudio.so.13` = 2.02), Windows version resource or macOS bundle version;
-  `pmunity plugins` says which files of which release to supply (the `fmod.supply` part of the report).
+  `pmu plugins` says which files of which release to supply (the `fmod.supply` part of the report).
 
 **Test double.** runtime/host/test/fmod_double.c implements the ~200 FMOD Studio and core calls
 the integration makes, from FMOD's public API names and documented signatures (no FMOD code or
@@ -189,7 +189,7 @@ the emulated rig it replaces `libfmodstudio.so` for a corpus game (results below
 | Unity's Linux launcher | (`ScreenSelector.so`) | - | the desktop player's own dialog; never used |
 | Windows / macOS system libraries | `kernel32`, `user32`, `/System/Library/...` | - | fail as on a Linux PC |
 
-Survey: the ten corpus games (free itch.io Linux Mono builds, 2017.4 - 2022.3; `pmunity plugins`
+Survey: the ten corpus games (free itch.io Linux Mono builds, 2017.4 - 2022.3; `pmu plugins`
 reads every one: `PMUNITY_GAMES=... python -m unittest tests.test_plugins`) and the Plugins folders
 of 68 free Linux Mono builds from itch.io's listings (their zip directories, read with range
 requests): Burst in 17 of them, Steamworks 11, Discord Game SDK 3, FMOD Studio with Resonance
@@ -239,7 +239,7 @@ Callbacks reach integrations that read their queue through SWIG's accessors (Wwi
 `AkSerializedCallbackHeader_pNext_get`); an older one, which reads the records itself, gets none (the
 table's log line says so). A real ARM `libAkSoundEngine.so` in `lib/` is used instead of the stub.
 
-**Finding the version.** `pmunity plugins` and `port check` read it from the desktop library's code
+**Finding the version.** `pmu plugins` and `port check` read it from the desktop library's code
 (the constants `CSharp_GetMajorMinorVersion` / `CSharp_GetSubminorBuildVersion` return, in an x86 or
 x86-64 ELF build; else a version string in the library) and the soundbanks' format (each `.bnk`'s
 BKHD header under `StreamingAssets/`, and `SoundbanksInfo.xml`'s `SoundbankVersion`: 120 = 2016.2,
@@ -472,7 +472,7 @@ See the compat table (docs/compat/README.md, "Plugins and services").
 
 ## Converter plugins (a port's own conversion steps)
 
-Not the game's native libraries: a port's own steps for `pmunity convert` (`files.plugins` in
+Not the game's native libraries: a port's own steps for `pmu convert` (`files.plugins` in
 port.toml; the setup passes each as `--plugin`). Three kinds:
 
 | kind | file | runs on | the release ships |
@@ -483,13 +483,12 @@ port.toml; the setup passes each as `--plugin`). Three kinds:
 
 Most of what a port changes in the data is a field of an object (a quality level, a camera's
 MSAA, a light, an audio setting, a material's keyword): a JSON plugin says which, without code.
-pmu and the Python run it the same way and write the same bytes (checked:
-`setup-rs/tests/golden/convert_madeup.sh`, its `edits` cases; `tools/regress/pmu_pair.py
---plugin <file>` on a game's data), and a JSON plugin never runs anything, so it is the kind to
-use where it does the job. A Python plugin still works as before; it makes the release ship the
-Python (a bigger release, a slower setup), so port it into a JSON plugin, or into pmu (as
-animclips was: its step in `setup-rs/crates/convert/src/steps/<name>.rs`, checked against the
-plugin with `pmu_pair.py --plugin`), where it can be.
+pmu runs it (`setup-rs/crates/convert/src/steps/edits.rs`; checked against the retired Python
+converter on made-up data and three corpus games, docs/rust-setup.md), and a JSON plugin never runs
+anything, so it is the kind to use where it does the job. A Python plugin no longer runs: the
+setup's Python is retired (2026-11-27) and `pmu port package` refuses a port whose convert needs
+one. Port it into a JSON plugin, or into pmu (as animclips was: its step in
+`setup-rs/crates/convert/src/steps/<name>.rs`, its output checked on the game's data).
 
 ### A JSON plugin
 
@@ -516,7 +515,7 @@ port.toml: `files.plugins = ["tweaks.json"]` and the step in the convert section
   object's `m_Name`; `set`, field paths and their new values.
 - A field path: field names joined with `.`; a decimal number indexes a list (0 / 1 the key /
   value of a map entry, such as a material's `m_Floats`). Field names are the type tree's (as
-  UnityPy's `read_typetree` gives them; `python -m pmunity` has no dump of its own: UnityPy's
+  UnityPy's `read_typetree` gives them; `pmu` has no dump of its own: UnityPy's
   `o.read_typetree()` in a Python shell shows them).
 - A value: `true` / `false` for a bool, an integer for an integer field (its width is the field's:
   a value past it is an error), a number for a float, a string for a string. Structs, lists and

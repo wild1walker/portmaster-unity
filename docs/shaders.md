@@ -2,7 +2,7 @@
 
 Unity's Android player only runs GPU programs of the GLES types. A desktop build has OpenGL Core
 programs (written by Unity's HLSLcc from the game's HLSL: GLSL 1.50 for most shaders, GLSL 4.x
-for `#pragma target 4.5` and up), Metal on macOS, and maybe Vulkan. `python -m pmunity shaders`
+for `#pragma target 4.5` and up), Metal on macOS, and maybe Vulkan. `pmu convert --steps shaders`
 (convert/pmunity/shaders/) gives every OpenGL Core program a GLSL ES 3.00 (or 3.10) twin in the
 same Shader asset, so the Android player finds a GLES3 program for every variant the game uses. A
 Windows build has only Direct3D 11 programs (DXBC bytecode): `--from d3d11` translates those with
@@ -107,7 +107,7 @@ build does on OpenGL 4.3+ and on 3.2 (the fallback does with plain fetches what 
 with `textureGather`, in URP's depth of field).
 
 **On by default, for every Unity version.** `"shaders": {"glcore4x": false}` in a port's config
-(or `pmunity convert ... --set shaders.glcore4x=false`) keeps the converter's earlier output,
+(or `pmu convert ... --set shaders.glcore4x=false`) keeps the converter's earlier output,
 GLCore32 programs only. Cuphead's port sets it: its output was checked on the device that way and
 stays byte for byte the same (`BlitToDepth`, `BlitToDepth_MSAA` and the `#pragma target 4.5+`
 SubShaders of its post-processing keep no GLES programs; the 2017.4 player logs "Desired shader
@@ -332,7 +332,7 @@ There is no Python reference for the bundle itself, so `setup-rs/tests/golden/sc
 makes one: each serialized file taken out of the bundle as a plain `.assets` file and converted by
 the Python's step; pmu's bundle must hold those bytes. On Gungeon (the port's config) the 8
 serialized files of its 4 scene bundles (3 changed, 10 shaders) are the Python's byte for byte, and
-every other file of the converted data is the Python's (`tools/regress/pmu_pair.py`); on made-up
+every other file of the converted data is the Python's (the retired `tools/regress/pmu_pair.py`); on made-up
 data, the same (`tests/golden/convert_madeup.sh`'s `scenes`) and the same bytes as the one-file
 bundle with the same shader (`cargo test -p convert --test scenes`, which also covers a scene with
 shaders of its own, edits, and textures with a sprite in the scene that points into its shared
@@ -348,7 +348,7 @@ converter translates from.
 
 ## Unity versions
 
-The converter reads the data's Unity version from the data (`python -m pmunity version <data>`)
+The converter reads the data's Unity version from the data (`pmu version <data>`)
 and handles 5.6 - 6000.6; other versions are refused unless `--any-unity-version` is given
 (then the layouts are guessed and checked by round trip). What changes between the LTS lines:
 
@@ -444,7 +444,7 @@ later players are assumed to (the selection code is shared with the desktop play
 
 ```sh
 tools/hlslcc/build.sh                                   # once: HLSLcc (pinned commit) + pmhlslcc
-python -m pmunity shaders <Game>_Data <out> --from d3d11    # or --from glcore,d3d11; config: "from": ["d3d11"]
+pmu convert <Game>_Data <out> --steps shaders --set shaders.from=d3d11    # or --from glcore,d3d11; config: "from": ["d3d11"]
 ```
 
 A Windows build's Shader assets carry Direct3D 11 programs only (platform blob 4). Unity makes
@@ -457,7 +457,7 @@ clang, Linux gcc (aarch64 in `ua-build-arm64`, armhf with `ua-host-armhf`'s cros
 byte-identical output. Ship the binary with `pmhlslcc.LICENSE.txt` (HLSLcc MIT, bstrlib BSD).
 A port's setup translates on the handheld: `ARCH=arm64 tools/hlslcc/build.sh` builds the aarch64
 binary in that image (into `tools/hlslcc/out/linux-arm64/`; libstdc++ and libgcc linked in, so it
-needs only glibc 2.17's symbols), `pmunity port package` ships it as `setup/pmhlslcc` with its
+needs only glibc 2.17's symbols), `pmu port package` ships it as `setup/pmhlslcc` with its
 licence for a port with `shaders.from = ["d3d11"]`, and the setup sets `PMHLSLCC` (docs/porting.md,
 "Routes"). In the rehearsal container (aarch64, tools/port/rehearse.sh) Tacticsweeper's 45 shaders
 (177 programs) translate in 4 s.
@@ -644,7 +644,7 @@ cd convert && PMUNITY_D3D11_CORPUS="<path>/unity default resources" PMUNITY_D3D1
 ```
 
 **Six free Windows-only Mono games** (not in the repository), each converted with
-`pmunity convert --set shaders.from=d3d11`, every distinct GLES3 program exported and compiled
+`pmu convert --set shaders.from=d3d11`, every distinct GLES3 program exported and compiled
 and linked on Mesa (llvmpipe, ES 3.2, Mesa 21.2 in `ua-build-arm64`), then packed and run on
 the runtime in the emulated rig with the game's exact Android player:
 
@@ -654,7 +654,7 @@ the runtime in the emulated rig with the game's exact Android player:
 | 2019.2.5f1, 2D, SF 20, one block, 201806140 (two keyword lists) | 42 of 44 | 205 | `BlitToDepth_MSAA`, VR blit (`gl_Layer`), UIElements' `Internal-UIRDefault` SubShader 0 (structured buffer; SubShader 1 kept) | 180 / 180 | title screen |
 | 2019.3.14f1 (URP 7), SF 21, segments | 60 of 62 | 918 (3) | `BlitToDepth_MSAA`, VR blit (2 SubShaders) | 504 / 504 | Unity splash, title menu (URP post-processing on) |
 | 2020.3.44f1, SF 22, `m_CommonParameters` | 50 of 52 | 212 | `BlitToDepth_MSAA`, VR blit | 192 / 192 | splash, then its first (click to start) screen |
-| 2021.3.28f1, compressed build (`pmunity unpack`), 202012090 | 49 of 51 | 270 | `BlitToDepth_MSAA`, VR blit | 240 / 240 | title menu (with `pmunity.winbcl`; before: Mono asserted in the Input System's start on the Windows class libraries, then SIGSEGV) |
+| 2021.3.28f1, compressed build (`pmu unpack`), 202012090 | 49 of 51 | 270 | `BlitToDepth_MSAA`, VR blit | 240 / 240 | title menu (with `pmunity.winbcl`; before: Mono asserted in the Input System's start on the Windows class libraries, then SIGSEGV) |
 | 2022.3.62f3 (URP 14), Burst plugin | 82 of 85 (6 stripped: empty GLES3 blobs) | 569 (55) | URP `HDRDebugView` (UAV), `BlitToDepth_MSAA`, VR blit; 8 particle procedural-instancing variants | 440 / 440 | title menu |
 
 Every converted program declares the same uniforms, inputs and outputs in its GLES3 form as in
@@ -662,7 +662,7 @@ its GL one, and HLSLcc's translation of each variant is checked as above only wh
 program is at hand (built-ins). Textures of these games (RGBA32, RGB24, Alpha8, DXT1/5, crunched
 DXT, BC6H cube maps) go through the textures step as before (BC6H left as it is); the rig's Mesa
 samples BC textures itself, so the runs use the unconverted ones. The 2021.2+ games need Unix
-class libraries in place of their Windows ones (`pmunity winbcl`, which a port's setup runs;
+class libraries in place of their Windows ones (`pmu winbcl`, which a port's setup runs;
 docs/porting.md).
 Not checked: a run on the handheld, pictures against the Windows build, and any game with BC7,
 BC4 or BC5 textures (the step's decoding of those is tested on hand-made blocks,
@@ -675,7 +675,7 @@ the HLSLcc part runs when pmhlslcc is built).
 
 ```sh
 tools/spirvcross/build.sh                                  # once: SPIRV-Cross + SMOL-V (pinned commits) + pmspirvcross
-python -m pmunity shaders <Game>_Data <out> --from vulkan     # config: "shaders": {"from": ["vulkan"]}
+pmu convert <Game>_Data <out> --steps shaders --set shaders.from=vulkan     # config: "shaders": {"from": ["vulkan"]}
 ```
 
 Unity compiles its Vulkan programs as it does its GL ones: HLSLcc turns the HLSL's DXBC into
@@ -685,7 +685,7 @@ SPIRV-Cross (Apache 2.0) writes GLSL ES from it. `tools/spirvcross/build.sh` fet
 and Aras Pranckevicius' SMOL-V decoder at pinned commits and builds `pmspirvcross`, a small front
 end (one-shot, or a server the converter keeps open); `ARCH=arm64` builds the aarch64 binary for
 the handheld in `ua-build-arm64` (libstdc++ and libgcc linked in; it writes the same GLSL as a
-macOS clang build, byte for byte, on the 61 modules of a URP game compared), which `pmunity port package`
+macOS clang build, byte for byte, on the 61 modules of a URP game compared), which `pmu port package`
 ships as `setup/pmspirvcross` for a port with `shaders.from = ["vulkan"]` (the setup sets
 `PMSPIRVCROSS`), with its licences (THIRD_PARTY.md).
 
@@ -794,7 +794,7 @@ info reads back, and every distinct translated program compiles and links on Mes
 out.) The 6000.6 games gave no program before the path read 6000.6's parameter entries (the 2021.2
 reader took the string `PGlobals...` for a count: "binding info does not match the known layout");
 the games of 2017.4 - 6000.5 are unchanged by it (every converted Shader the same, checked in
-memory), and so is the Direct3D 11, Metal and GL paths' output. **Suvalf** (6000.3.5f1, HDRP, Vulkan only, compressed: `pmunity unpack` first): 116 of 142
+memory), and so is the Direct3D 11, Metal and GL paths' output. **Suvalf** (6000.3.5f1, HDRP, Vulkan only, compressed: `pmu unpack` first): 116 of 142
 shaders given GLES3 programs (16 of them empty), 718 programs (345 GLES 3.1), 553 distinct, all
 linking on Mesa; 26 left out (HDRP's lit and volumetric passes: structured buffers, 13 of them in
 the shared parameters; XR's 2D multisampled arrays; cube map arrays; framebuffer fetch); its 118
@@ -805,7 +805,7 @@ frame, the screen black. `port check` blocks the Android route for an HDRP build
 ## macOS builds: Metal programs (MSL)
 
 ```sh
-python -m pmunity shaders <Game>.app/Contents/Resources/Data <out> --from metal    # config: "shaders": {"from": ["metal"]}
+pmu convert <Game>.app/Contents/Resources/Data <out> --steps shaders --set shaders.from=metal    # config: "shaders": {"from": ["metal"]}
 ```
 
 macOS builds of Unity 2020.3 and later have Metal programs only (17 of 18 free macOS builds
@@ -876,7 +876,7 @@ before, the step stopped on the first such bundle, whatever the source).
 ## Checking a conversion
 
 ```sh
-python -m pmunity shaders-export <converted data> glsl/       # every distinct program as .vert/.frag
+pmu shaders-export <converted data> glsl/       # every distinct program as .vert/.frag
 runtime/host/out/shadercheck glsl/                            # on the handheld: compile + link each
 ```
 
@@ -890,7 +890,7 @@ the RG34XX-SP's Mali-G31 (driver r20p0); on Mesa all but one, the stereo multivi
 font shader (Mesa's llvmpipe lacks `GL_OVR_multiview2`; the game never uses it).
 
 To compare pictures, replay the same frames with two builds and diff the screenshots (for Cuphead
-the port's deterministic replay mode and `tools/emu/imgdiff.py`). The rewrites gave the same
+the port's deterministic replay mode and `pmu-dev imgdiff`). The rewrites gave the same
 pixels as the plain translation on the Mali in every frame compared; full-precision samplers move
 1-13 % of the pixels by 1-2 levels of 255 against ES's lowp default, toward the desktop result.
 
@@ -1260,7 +1260,7 @@ Nothing there is both exact and cheaper on this GPU, so no other rewrite was bui
 ## Blend modes without GrabPass copies (`grab_fetch`, opt-in)
 
 ```sh
-python -m pmunity shaders <data> <out> --grab-fetch on        # or always; config: "shaders": {"grab_fetch": true}
+pmu convert <data> <out> --steps shaders --set shaders.grab_fetch=true        # or always; config: "shaders": {"grab_fetch": true}
 ```
 
 A pass after an unnamed `GrabPass {}` samples `_GrabTexture`, Unity's copy of what the camera drew

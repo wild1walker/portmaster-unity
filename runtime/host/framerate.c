@@ -22,7 +22,7 @@
 // game's rate (a 1080p clip whose decoding is the limit plays slower with more game frames).
 // The default (ua_host.c): desktop for converted desktop data (any Unity version its
 // android_package.json names; games with vsync on are paced as before), android for imported
-// Android builds (pmunity apk) and packages that do not name their Unity version.
+// Android builds (pmu apk) and packages that do not name their Unity version.
 // How: the targetFrameRate setter and getter icalls are wrapped as libunity registers them
 // (mono_add_internal_call / il2cpp_add_internal_call, which it gets through dlsym). The game reads
 // back what it set; Unity gets the rate above, checked again on UnityMain after each frame, since a

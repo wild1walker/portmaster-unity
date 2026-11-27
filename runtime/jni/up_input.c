@@ -380,7 +380,7 @@ H(cc_init)      /* Swappy (the library) starts only when Unity's Optimized Frame
     else if (told == 1)
         up_log("Swappy started (PlayerSettings.androidUseSwappy on). It stays off here (swappy.disable), and "
                "Unity with that setting on then presents nothing (2019.4) or stops after its first frames "
-               "(2021.3+): pack the data with pmunity android-data --swappy off (the default)");
+               "(2021.3+): pack the data with pmu android-data --swappy off (the default)");
     fj_set_data(self, (void *)(intptr_t)a[0].j, NULL);
     return fj_v();
 }

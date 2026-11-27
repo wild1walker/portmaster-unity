@@ -1,15 +1,19 @@
 # The setup's tools in Rust (setup-rs)
 
-A port's first-launch setup runs `python -m pmunity <command>` on the handheld, so it needs
-PortMaster's `python_3.11` runtime and the packages in the setup's `pylibs/` (UnityPy, Pillow, lz4,
-texture2ddecoder, astc_encoder, guided_astc). `setup-rs/` replaces those commands with one static
-binary, `pmu` (aarch64, musl), with the same arguments, outputs and exit statuses. The Python stays
-until every command a setup runs is ported; a setup script then runs `pmu` instead of `pm`.
+Since 2026-11-27 portmaster-unity has no Python: `pmu` (setup-rs: one static aarch64 musl binary) is
+the setup's tool on the handheld and the porter's on the computer (`setup-rs/tools/pmu.sh` runs it in
+Docker there: "The port packager" below), and crates/devtools' `pmu-dev` holds the developer's tools
+that were Python scripts (profiling summaries, generators, device-side monitors: "pmu-dev" below).
+The Python converter it was ported from (`convert/pmunity`, run as `pmu <command>` with
+PortMaster's `python_3.11` and UnityPy, Pillow, lz4, texture2ddecoder, astc_encoder, guided_astc) is
+gone; its last commit is 2147a04 (`git show 2147a04:convert/pmunity/<file>`). What this page says of
+the Python is that record: the parity each command was ported to and tested against, the golden
+files (pmu/tests/golden/) frozen from runs at that parity.
 
 ## The rule: byte-identical
 
 For the same inputs and options, `pmu <command>` writes the same files, byte for byte, as
-`python -m pmunity <command>` at the commit it was ported from. That is what every change is
+`pmu <command>` at the commit it was ported from. That is what every change is
 tested against (below); a difference is a bug, unless it is in a log line. Where the Python output
 comes from a native library (texture decoding, ASTC encoding, image scaling), port or vendor that
 library's own code rather than writing a lookalike.
@@ -32,7 +36,7 @@ From Cuphead's setups (`pm/cuphead/cuphead/setup/patchscript`, `setup64/patchscr
 | `winbcl <data> <dir> [--version --installer --donor APK --player --no-facades --json]` | winbcl.py | Unity's class libraries a build lacks for the Android player (a Windows build's unityjit-linux twins, facades such as netstandard.dll): in a setup from the port's Mono donor (`--donor`, nothing downloaded; what the donor does not carry is named, `not_in_donor`), on the porter's computer also from Unity's Windows editor installer the same way as `player fetch` |
 | `patch-obb new\|ggm\|pack\|check` | patch_obb.py | an add-on's bundles (the DLC added later) as a patch OBB; `check` exits 3 on an incomplete copy |
 | `route <path> [--json \| --env] [--launcher OUT.sh [--port NAME] [--title TEXT] [--template FILE]]` | route.py | which way a game fits a handheld, and why (crates/check `route.rs`): each build under the path (its executables' and player's headers and strings, the data's version and build target, the plugins), the android and box64 verdicts, as the report or as JSON; `--env`: the box64 route's game.env (the first build with a Linux x86-64 executable: its folder, executable, data folder, Unity version, backend and GL mode), what the box64 port's setup writes; `--launcher`: the box64 route's launcher for the game |
-| `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmunity apk: refused: ...`). `--il2cpp --on-device`: a Mono build (armeabi-v7a only) compiled for the arm64 IL2CPP player on the handheld (apk.py's il2cpp_stub, il2cpp_build on crates/il2cpp, il2cpp_apk: the APK with IL2CPP's metadata); `--il2cpp` without `--on-device` (Docker, a PC): status 2 |
+| `apk <inputs> <dir> --target T --json` | apk.py | the apk route: a game's own Android build (an APK with the OBBs beside it, split APKs, XAPK and APKS zips, an App Bundle rebuilt into one APK) laid out for ua_host: the ABI's libraries, the APK (split asset packs merged into it), the OBBs under the player's names, android_package.json; the refusals with the Python's messages (`pmu apk: refused: ...`). `--il2cpp --on-device`: a Mono build (armeabi-v7a only) compiled for the arm64 IL2CPP player on the handheld (apk.py's il2cpp_stub, il2cpp_build on crates/il2cpp, il2cpp_apk: the APK with IL2CPP's metadata); `--il2cpp` without `--on-device` (Docker, a PC): status 2 |
 | `wwise <banks> <out> [--check] [--wwise-lib PATH]` | (none: Rust only, 2026-11-02) | a Wwise game's soundbanks (bank version 128) into the data of ua_host's Wwise player ([wwise-player.md](wwise-player.md)): per bank `<Bank>.uaww.json` and `<Bank>.uaww.pak`, the media read and written one at a time (DATA is never held in memory); status 3 for another bank version |
 | `fmod <banks> <out> [--check] [--fmod-lib PATH]` | (none: Rust only, 2026-11-16) | an FMOD Studio game's banks (format 0x67, FMOD 1.10) into the data of ua_host's FMOD player ([fmod-player.md](fmod-player.md)): per bank `<Bank>.uafm.json` and `<Bank>.uafm.pak` (FMOD's Vorbis rebuilt as Ogg Vorbis with the setup headers of the game's own `libfmod.so`); status 3 for another format |
 | `il2cpp <data> <out> --on-device ...`, `il2cpp fetch <version> [--on-device]` | il2cpp.py, il2cpp_device.py, il2cpp_bee.py, il2cpp_mix.py | the il2cpp-arm64 route's build on the handheld: Unity's IL2CPP and player by range reads, Debian's compilers and Microsoft's .NET (pinned by sha256), UnityLinker, il2cpp, the C++ build (Bee's graph from 2021.2), libil2cpp.so and Data/Managed (below, "`pmu il2cpp`"); the Docker route of a porter's PC (no `--on-device`) stays with the Python: status 2 |
@@ -46,7 +50,7 @@ The setup's `codepatch` (.NET) and `CupheadPort.dll` stay as they are.
 
 On the porter's computer, not the handheld: crates/port is `port.py`'s `port new` and `port
 package` (and what they call: the route hooks' `port_new` of route.py's box64 part, il2cpp.py,
-mono64.py and apk.py, route.py's `port_package`), the same arguments as `python -m pmunity port
+mono64.py and apk.py, route.py's `port_package`), the same arguments as `pmu port
 new|package`. They read the same inputs (port.toml or a .json config, `setup-rs/templates/<route>/`
 with its route.json and templates, the runtime's builds, the donors) and write the same files:
 port.build.json, port.json, setup.env, port.env, the rendered templates, gameinfo.xml,
@@ -77,7 +81,7 @@ folders `DONORS`, `PMU_DIR`, `PMUNITY_MONO64_WORK`, `BOX64_OUT`, `NUGET_PACKAGES
 `PMU_MOUNTS` name, each at its own path. What pmu runs for a build runs outside the container, on
 the computer, as the Python packager ran it there: the runtime's and tools' build scripts (Docker),
 the port's `build.commands` (e.g. a .NET build of its own code), asmpatch's build and survey (the
-computer's .NET 8 SDK: `DOTNET`, else `dotnet` on PATH or ~/.dotnet/dotnet). crates/port `host.rs`
+computer's .NET 8 SDK: `DOTNET`, else `dotnet` on PATH or ~/.dotnet/dotnet). pkgzip's `host.rs` (crates/port re-exports it)
 does it: with `$PMU_HOST_EXEC` (a folder both see) each such command is written there as a shell
 script (its folder, its environment changes, its arguments; stdin closed), pmu.sh's loop runs it in
 the folder pmu was started in and writes its exit status back (the output goes to the terminal, or
@@ -92,7 +96,7 @@ folder) with `setup-rs/templates`. `port new --data <game>` starts from the
 check of the game (below), as the Python's; hook modules named in `$PMUNITY_PORT_HOOKS` are not run
 (pmu stops, status 1), and `port shot` is gone (the screenshot is ua_host's `shot.req` frame:
 tools/device/drive.sh). `made_by` in
-port.build.json stays `pmunity port new`, so either packs what the other made.
+port.build.json stays `pmu port new`, so either packs what the other made.
 
 ## The check: `pmu port check`, `pmu port new --data`, `pmu port routes`, `pmu route`
 
@@ -174,11 +178,11 @@ it: `PMU_PARITY_DIR=1` keeps the outputs and `port.txt.new` to look at, `PMU_POR
 
 ## The setups that run pmu
 
-Cuphead's (portmaster-cuphead) and those `pmunity port new` writes for the android, mono-arm64,
+Cuphead's (portmaster-cuphead) and those `pmu port new` writes for the android, mono-arm64,
 il2cpp-arm64, box64 and apk routes: their patchscript runs `setup/pmu` when
 the release has it (`pm() { "$S/pmu" "$@"; }`; the install step reads the report's scripting
 runtime with sed, the apk route's setup apk.json's fields with sed), else the setup's Python.
-`pmunity port package` ships pmu (`setup-rs/tools/build_pmu.sh`: the binary and the licence texts
+`pmu port package` ships pmu (`setup-rs/tools/build_pmu.sh`: the binary and the licence texts
 of what is compiled into it) when it runs every command of the port's setup (`port.py`'s
 `pmu_covers`: no Python converter plugin of the porter's), else the
 converter and the Python as before. The default convert config of `port new` (shaders, settings,
@@ -261,7 +265,7 @@ numbers).
 
 ### `pmu convert`
 
-The same command line as `python -m pmunity convert` (argparse's rules), the same files, journal
+The same command line as `pmu convert` (argparse's rules), the same files, journal
 (`.pmunity.json`, json.dump's text) and log lines (timings apart), the same exit statuses (0; 1
 with sys.exit's message or the error's; 2 for bad arguments; 3 when the card is too full). Either
 implementation continues the other's journal. Two differences, both outside the bytes compared:
@@ -327,7 +331,7 @@ program; the convert crate's `steps/metal.rs` pairs the vertex and fragment subp
 2017.4 players' built-in resources). `cargo test -p shaderx --test metal` compares
 the translator with the Python on 17 hand-written cases (`tests/metal_golden.json`, written by
 `tests/golden/metal_golden.py` from convert/tests/test_metal.py's MSL and variants of it); on
-games, `regress.py pmu` (below: four macOS builds of 2020.3 - 6000.3, the same files). pmu's own
+games, the Python comparison on games (below: four macOS builds of 2020.3 - 6000.3, the same files). pmu's own
 (2026-11-09): Unity 6's `if (has_vrr_api) { ... }` blocks, which metal.py stops at, are skipped
 when they do not translate (they never run); `metal_unity6_vrr` checks that the golden program
 comes out byte for byte with such a block in it ([shaders.md](shaders.md#macos-builds-metal-programs-msl)). Also pmu's own: GLES3 compute variants from Metal kernels (`translate_kernel`, `steps/compute.rs`'s `add_gles3_metal`; `metal_kernel`: a hand-written kernel's GLSL, which links on Mesa; [shaders.md](shaders.md#metal-kernels-macos-builds-pmu-2026-11-09)).
@@ -394,9 +398,9 @@ reference for such a bundle, it is checked against the Python's conversion of it
 taken out of it as plain files (`tests/golden/scene_bundles.py`), and everything else stays the
 Python's byte for byte: `tests/golden/convert_madeup.sh` runs its cases without the made-up data's
 scene bundle and then `scenes` (pmu's bundle against that reference, every other file against the
-`cuphead` case's); on Enter the Gungeon (`tools/regress/pmu_pair.py`, the port's config) the 3
+`cuphead` case's); on Enter the Gungeon (the retired `tools/regress/pmu_pair.py`, the port's config) the 3
 scene bundles with shaders are the only files that differ from the Python's, and their 8
-serialized files are the reference's; `regress.py pmu` on the six corpus games on this machine
+serialized files are the reference's; the retired `regress.py pmu` on the six corpus games on this machine
 (none has a scene bundle): every converted file the Python's, as before. `cargo test -p convert
 --test scenes` covers the steps on
 made-up scene bundles (the same bytes as the same shaders and textures elsewhere, a sprite in the
@@ -687,7 +691,7 @@ parts the crates build): no cross linker is needed on an arm64 host.
 The reference Python, in the same image:
 
 ```bash
-PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH=<worktree>/convert:/opt/pylibs /opt/py/bin/python3 -m pmunity ...
+PYTHONHOME=/opt/py LD_LIBRARY_PATH=/opt/py/libs PYTHONPATH=<worktree>/convert:/opt/pylibs /opt/py/bin/pmu ...
 ```
 
 Golden tests read real game data from `$PMU_TEST_DATA` (never committed, never named in the
@@ -756,9 +760,11 @@ RS_ROOT=... setup-rs/tools/rs.sh <worktree> sh tests/golden/unityfs.sh "$PMU_TES
 A build folder in a Docker volume (`RS_MOUNTS="$RS_MOUNTS <volume>:/rt"`, `CARGO_TARGET_DIR=/rt`)
 builds far faster than one on a shared host folder.
 
-## Compared with the Python on games: `regress.py pmu`
+## Compared with the Python on games (history)
 
-`tools/regress/regress.py pmu` ([its README](../tools/regress/README.md), "pmu") runs each game of
+Retired with the Python (2026-11-27; the tools are in git history before it, e.g. `git show
+2147a04:tools/regress/pmu_pair.py`): the record below is what made pmu the setup's only converter.
+`regress.py pmu` ran each game of
 the regression list through the android route's commands twice, by the Python and by pmu, in the
 `ua-rust` image, on two copies of the data at the same path, and compares exit statuses, every file
 (size and SHA-256), the archives' entries and the journal. `--builtin` does the same on the desktop
@@ -799,7 +805,8 @@ Then on 2026-11-02 (branch rust-apk), with free games downloaded for it (itch.io
 ## Porter plugins without Python
 
 A port's converter plugin in Python (a file with `STEPS = {name: function(job)}`, run in the
-converter's process with the job's API) cannot run on pmu. Two ways keep such a port's release free
+converter's process with the job's API) cannot run on pmu. (Since 2026-11-27 the Python is retired: what
+follows about it is how the two were checked against each other.) Two ways keep such a port's release free
 of the Python ([plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-steps)):
 
 - A JSON plugin (2026-11-02): named steps of field edits (a glob over the data files, the class,
@@ -807,12 +814,12 @@ of the Python ([plugins.md](plugins.md#converter-plugins-a-ports-own-conversion-
   the Python (`convert/pmunity/edits.py`, plugged into `--plugin` by the file's `.json`) run the
   same way, with the same messages; `pmu_covers` counts it as pmu's. Nothing of the porter's runs,
   so nothing needs a sandbox or a protocol. Checked with `tests/golden/convert_madeup.sh` (the
-  `edits` cases) and `pmu_pair.py --plugin` (above). MonoBehaviours are refused (their fields
+  `edits` cases) and the retired `pmu_pair.py --plugin` (above). MonoBehaviours are refused (their fields
   need the game's assemblies' type trees, which neither implementation gives a plugin).
 - A step built into pmu, chosen by the file's name (`--plugin <dir>/animclips.py` or `--plugin
   animclips`; `plugin()` in `crates/convert/src/steps/mod.rs`, `PMU_PLUGINS` in port.py):
   Cuphead's animclips. The plugin's step is ported into `crates/convert/src/steps/<name>.rs`,
-  checked against the plugin on the game's data (`pmu_pair.py --plugin <file>`), its name added
+  checked against the plugin on the game's data (then `pmu_pair.py --plugin <file>`, retired), its name added
   to `plugin()` and `PMU_PLUGINS`. Built-ins are matched by the file's name only: a porter's own
   plugin called `animclips.py` would run Cuphead's step, so a new plugin needs a name of its own.
 

@@ -49,7 +49,7 @@
 //   - the queues visited must be as many as the manager's map holds.
 // Counts and the first mismatches go to the log.
 //
-// Found as unityhooks.c finds its hooks: tools/re/unityhooks.py rows for the three replaced functions, every
+// Found as unityhooks.c finds its hooks: pmu-dev unityhooks rows for the three replaced functions, every
 // function called or carried out here, and MonoBehaviour's vtable slots checked at load; any other build matches
 // no row and keeps Unity's loops. Hooks first: unityprefetch.c and UA_RELAYOUT come after, and leave these
 // changed functions where they are.
@@ -716,6 +716,6 @@ void nativebeh_on_load(uintptr_t base, size_t size)
                 g_stats ? " (UA_NATIVE_BEH_STATS)" : "");
         return;
     }
-    fprintf(stderr, "[nativebeh] this libunity.so is not one whose behaviour loops were read (tools/re/unityhooks.py); Unity's loops are kept\n");
+    fprintf(stderr, "[nativebeh] this libunity.so is not one whose behaviour loops were read (pmu-dev unityhooks); Unity's loops are kept\n");
 }
 #endif

@@ -1,21 +1,21 @@
-# Games owned as Android builds (`pmunity apk`)
+# Games owned as Android builds (`pmu apk`)
 
 A game's own Android build already holds everything Unity's Android player reads: the player
 libraries (`libmain.so`, `libunity.so`, `libil2cpp.so` or Mono), the data with GLES shaders and
-mobile texture formats, and the manifest. Nothing has to be converted: `pmunity apk` picks the
+mobile texture formats, and the manifest. Nothing has to be converted: `pmu apk` picks the
 libraries for the handheld, keeps the APK as it is and writes what `ua_host` needs to start it.
 This is also the way to the 64-bit route: Unity ships arm64-v8a players only with IL2CPP, and
 IL2CPP Android builds carry them, so a 64-bit-only firmware (ROCKNIX, ...) runs these games with
 the aarch64 `ua_host` and its own GLES/SDL2 (docs/arm64.md).
 
 ```sh
-cd convert
-python -m pmunity apk <game>.apk out/                       # an APK (+ <game>.main.obb beside it)
-python -m pmunity apk base.apk split_config.arm64_v8a.apk main.12.com.x.obb out/
-python -m pmunity apk game.xapk out/                        # .xapk / .apks / a zip of APKs and OBBs
-python -m pmunity apk game.aab out/                         # an App Bundle
-python -m pmunity apk <game>.apk out/ --dry-run             # the report only
-python -m pmunity apk <game>.apk out/ --target armhf,arm64 --json   # the first player the build has; JSON on stdout
+alias pmu="$PWD/setup-rs/tools/pmu.sh"                   # (in the checkout) pmu in Docker
+pmu apk <game>.apk out/                       # an APK (+ <game>.main.obb beside it)
+pmu apk base.apk split_config.arm64_v8a.apk main.12.com.x.obb out/
+pmu apk game.xapk out/                        # .xapk / .apks / a zip of APKs and OBBs
+pmu apk game.aab out/                         # an App Bundle
+pmu apk <game>.apk out/ --dry-run             # the report only
+pmu apk <game>.apk out/ --target armhf,arm64 --json   # the first player the build has; JSON on stdout
 ```
 
 Then copy `out/` to the handheld and start `ua_host out/` with the build of the chosen ABI:
@@ -26,16 +26,16 @@ Then copy `out/` to the handheld and start `ua_host out/` with the build of the 
 
 Unity's Android players with Mono are armeabi-v7a only, so a Mono build needs a 32-bit userland.
 With `--il2cpp` it runs on a 64-bit one too: its assemblies (`assets/bin/Data/Managed/*.dll`) are
-compiled with Unity's IL2CPP (`pmunity il2cpp`, docs/il2cpp.md) for Unity's arm64 IL2CPP player
+compiled with Unity's IL2CPP (`pmu il2cpp`, docs/il2cpp.md) for Unity's arm64 IL2CPP player
 of the build's version, and `out/` gets that player, the new `libil2cpp.so` and an APK with
 IL2CPP's metadata in place of the assemblies:
 
 ```sh
-python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp --home <IL2CPP tools> [--jobs 3]        # PC (Docker)
-python -m pmunity apk <game>.apk out/ --target arm64 --il2cpp --on-device --home <dir>                # an aarch64 handheld
+pmu apk <game>.apk out/ --target arm64 --il2cpp --home <IL2CPP tools> [--jobs 3]        # PC (Docker)
+pmu apk <game>.apk out/ --target arm64 --il2cpp --on-device --home <dir>                # an aarch64 handheld
 ```
 
-It takes what `pmunity il2cpp` takes (`--home`, `--pkg`, `--jobs`, `--on-device`, `--toolchain`,
+It takes what `pmu il2cpp` takes (`--home`, `--pkg`, `--jobs`, `--on-device`, `--toolchain`,
 `--link-xml`, `--strip`, `--keep-cpp`) and acts only when the chosen player is arm64-v8a and the
 build has none (a target list that starts with `armhf` on a system with a 32-bit userland keeps
 the build's own player). Unity 2017.4.16f1 - 6000.2 (the IL2CPP route's range, 2023.1 - 6000.2 as a
@@ -44,17 +44,17 @@ Mono", lists what changes in the layout). The build's own native plugins are
 32-bit ARM and left out. The same AOT limits as for desktop games apply (docs/il2cpp.md, "AOT
 limits"), but the code is the Android build's own, so its Android code paths are the ones compiled.
 
-## As a port (`pmunity port new --route apk`)
+## As a port (`pmu port new --route apk`)
 
 ```sh
-cd convert
-python -m pmunity port check <game>.apk                  # what it is, its ABIs, the apk route
-python -m pmunity port new mygame --data <game>.apk      # -> mygame/ with port.toml and the port
+alias pmu="$PWD/setup-rs/tools/pmu.sh"                   # (in the checkout) pmu in Docker
+pmu port check <game>.apk                  # what it is, its ABIs, the apk route
+pmu port new mygame --data <game>.apk      # -> mygame/ with port.toml and the port
 mygame/package.sh                                        # -> mygame/out/mygame.zip
-REHEARSE_64ONLY=1 PM_7ZZ=<PortMaster's 7zzs.aarch64> ../tools/port/rehearse.sh mygame/out/mygame.zip <game>.apk work/mygame 240
+REHEARSE_64ONLY=1 PM_7ZZ=<PortMaster's 7zzs.aarch64> tools/port/rehearse.sh mygame/out/mygame.zip <game>.apk work/mygame 240
 ```
 
-`--data` takes what `pmunity apk` takes: an `.apk` (with its `.obb` files beside it), an `.xapk`,
+`--data` takes what `pmu apk` takes: an `.apk` (with its `.obb` files beside it), an `.xapk`,
 `.apks` or `.aab`, or a folder of split APKs and OBBs. The check reads the build with the dry run
 and suggests `game.package` (the setup takes only that package), `game.unity_versions`,
 `player.abis` (the APK's ARM players) and, for a Mono build, the pointer mode its code wants
@@ -63,7 +63,7 @@ and suggests `game.package` (the setup takes only that package), `game.unity_ver
 - the release ships `ua_host` (armhf) when the APK has an armeabi-v7a player and `ua_host64` (the
   aarch64 build) when it has an arm64-v8a one: both for a build with both, about 4 MB of the zip;
 - the setup (no download, no conversion: a few minutes) takes the player's copy from `gamedata/`
-  and runs `pmunity apk --target <the players this system runs>` (the release's `setup/pmu apk`,
+  and runs `pmu apk --target <the players this system runs>` (the release's `setup/pmu apk`,
   the same command in setup-rs, with `player.il2cpp`'s compile too: no Python in the release): the armeabi-v7a one where the
   system has a 32-bit userland (`/lib/ld-linux-armhf.so.3`; the tested route on the RG34XX-SP's
   Mali driver), else the arm64-v8a one; `player.abi = "arm64-v8a"` takes the 64-bit one wherever
@@ -76,7 +76,7 @@ and suggests `game.package` (the setup takes only that package), `game.unity_ver
   again from the installed APK (the launcher says how);
 - a Mono build (armeabi-v7a only) with `player.il2cpp = true` in port.toml (the check says when a
   build can take it): the release ships `ua_host64` too, port.json drops the 32-bit userland, and
-  on a system without one the setup runs `pmunity apk --il2cpp --on-device`, which compiles the
+  on a system without one the setup runs `pmu apk --il2cpp --on-device`, which compiles the
   build's code on the handheld (one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi for
   Unity's, Debian's and Microsoft's files; an interrupted build continues on the next launch). A
   system with a 32-bit userland still takes the build's own player.
@@ -201,7 +201,7 @@ docs/compat/README.md ("Android builds run"): Unity 2019.4 - 2022.3, Mono (armea
 (arm64-v8a, and one build's armeabi-v7a libraries on the 32-bit route), Burst, FMOD, GLES2-only,
 Vulkan-first and Swappy-on builds all reach their title screens. No free build with an OBB was
 found; one was made locally by moving an IL2CPP 2021.3 build's `data.unity3d` into a main OBB with
-the 2021.1+ GUID files, as Unity's "Split Application Binary" does: `pmunity apk` found it beside
+the 2021.1+ GUID files, as Unity's "Split Application Binary" does: `pmu apk` found it beside
 the APK, named it `main.1.<package>.obb`, and the player mounted it and reached the title screen.
 
 Mono builds through `--il2cpp` (arm64 rig): a 2022.3 card battler (title, then into its first
@@ -214,9 +214,9 @@ reached its first battle in the arm64 rig.
 
 ## Debugging
 
-- Symbols: `python -m pmunity player fetch <version> <dir> --backend il2cpp --abi arm64-v8a
+- Symbols: `pmu player fetch <version> <dir> --backend il2cpp --abi arm64-v8a
   --symbols-only` fetches `libunity.sym.so` / `libmain.sym.so` of the build's exact version (a few
-  MB of range reads), for `tools/analysis/sym.py` (`UA_SYMS`) and crash reports. They fit Mono
+  MB of range reads), for `pmu-dev sym` (`UA_SYMS`) and crash reports. They fit Mono
   builds and IL2CPP builds made without engine code stripping; with stripping (the IL2CPP default)
   the build links its own `libunity.so` (another build id: compare the `NT_GNU_BUILD_ID` notes) and
   only its exported names are known.
