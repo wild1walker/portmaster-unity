@@ -73,6 +73,9 @@ cp "$D/.fetched" "$W/out/$B/SOURCE.txt"         # which commits the libraries we
 # minutes on 8 cores. The images it compiles load in the plain runtime (same sources: same version).
 # (MONO64_RUNTIME_VOLUME: another docker volume for the build tree, or an absolute path: a folder of the host)
 VOL=${MONO64_RUNTIME_VOLUME:-ua-mono64}; OUT=$W/out/$B; LLVMCONF=; LLVMDIR=
+# MONO64_PARALLEL_MARK=1: Boehm with parallel marking (its mark threads share a stop-the-world collection's marking:
+# a measurement; Unity's players are built without it)
+PMCONF=--disable-parallel-mark; [ "${MONO64_PARALLEL_MARK:-0}" = 1 ] && PMCONF=--enable-parallel-mark
 case "$VOL" in /*) mkdir -p "$VOL" ;; esac
 if [ "${MONO64_LLVM:-0}" = 1 ]; then
   VOL=ua-mono64-llvm; OUT=$W/out/$B-llvm; mkdir -p "$OUT"; cp "$D/.fetched" "$OUT/SOURCE.txt"
@@ -202,7 +205,7 @@ GC=--enable-boehm; grep -q "AC_ARG_ENABLE(bdwgc" configure.ac && GC=--disable-bo
 if [ ! -f config.status ]; then
   NOCONFIGURE=1 ./autogen.sh > /out/autogen.log 2>&1 || { tail -30 /out/autogen.log; exit 1; }
   ./configure --prefix=/b/$B-inst --host=aarch64-pc-linux-gnu --disable-mcs-build --with-mcs-docs=no \
-    --with-glib=embedded --disable-nls --disable-btls --with-monotouch=no --disable-parallel-mark \
+    --with-glib=embedded --disable-nls --disable-btls --with-monotouch=no '"$PMCONF"' \
     --with-sgen=no $GC '"$LLVMCONF"' > /out/configure.log 2>&1 || { tail -40 /out/configure.log; exit 1; }
 fi
 : > /out/make.log

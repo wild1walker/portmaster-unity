@@ -498,6 +498,7 @@ static void census_frame(void)
 }
 
 // UA_GC_LOAD_FLAG=<assembly>:<[namespace.]class>:<static field holding the instance>:<bool field of it> (with UA_GC_TIGHT;
+// the bool is looked up on the class, else on the class of the static field's type: Core.LevelManager's InsideChangeLevel;
 // Enter the Gungeon: Assembly-CSharp:GameManager:mr_manager:m_loadingLevel, its IsLoadingLevel): the game's own "a level
 // is loading" bool, read at the end of every frame on UnityMain (the static field from its class's static data, which
 // mono_class_vtable makes without running the class's static constructor: nothing of the game runs or changes). Tight
@@ -531,6 +532,12 @@ static void load_flag_frame(void)
         char ns[128] = "", *dot = strrchr(c, '.'), *cn = c;
         if (dot) { *dot = 0; snprintf(ns, sizeof ns, "%s", c); cn = dot + 1; }
         void *k = from_name(img, ns, cn), *fs = k ? field(k, sf) : NULL, *fi = k ? field(k, inf) : NULL;
+        if (fs && !fi) {   // the static field holds an instance of another class (Blasphemous: Core.LevelManager): its field
+            void *(*ftype)(void *) = so_dlsym(h, "mono_field_get_type");
+            void *(*tclass)(void *) = so_dlsym(h, "mono_class_from_mono_type");
+            void *fk = ftype && tclass ? tclass(ftype(fs)) : NULL;
+            fi = fk ? field(fk, inf) : NULL;
+        }
         void *vt = fs && fi ? vtable(root(), k) : NULL, *data = vt ? sdata(vt) : NULL;
         if (!data) { fprintf(stderr, "[host] gc tight: UA_GC_LOAD_FLAG=%s: not found: the frame-time rule only\n", spec); g_lf_state = -1; return; }
         g_lf.static_data = data; g_lf.s_off = offset(fs); g_lf.i_off = offset(fi);

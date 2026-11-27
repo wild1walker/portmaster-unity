@@ -960,6 +960,25 @@ prie-dieu's): muOS, the arena 64,188 -> 50,929 objects, 133 -> 157 MB free at th
 about the same (250 MB): the zone's rooms share most of their art; what they held alone was objects. A room the
 player has not walked next to loads when entered (about 6 s on the G350, as entering another zone does).
 
+Stutters in play (Blasphemous on the BattleXP G350, 2026-11-27). The frames over 100 ms in a walk were Mono's full
+collections (115 - 290 ms each: the 2017.4 line's Boehm only collects whole; `UA_MONO64_GC_SLICE` / incremental is not
+in that runtime, and a runtime built with parallel marking, `MONO64_PARALLEL_MARK=1` in tools/mono64/build-mono.sh, gave
+the same lengths). Two things removed them from play: less garbage, and collections moved into the loads. The census
+(`UA_ALLOC_CENSUS`) named the garbage: SmartColliders' `RaycastAll` arrays (44 %), Unity's IMGUI layout groups for
+`OnGUI` scripts that draw nothing or use `GUI` only, and a hidden debug label's position string; asmpatch's
+`smartcolliders-raycast`, `imgui-no-layout`, `blasphemous-core-gui` and `blasphemous-debuginfo-idle` (tools/asmpatch/
+README.md) took it from 0.24 to 0.10 MB/s (4,000 -> 1,100 objects a second; `smartcolliders-raycast`'s check mode:
+114,600 rays, 0 different). ua_host's `UA_GC_TIGHT=8` with the game's level-change flag (`UA_GC_LOAD_FLAG`, runtime.md)
+collects inside room changes, and `UA_GC_ARRIVAL_RESET=10` (Mono built from main: the collector needs the
+`reset-allocd` patch) keeps the next room's streaming (28 MB allocated in its first 10 s) from bringing one on right
+after. A 2.5-minute walk through three room changes: no frame over 100 ms in play (before: one to three of 110 -
+180 ms), 52 - 57 fps walking (49 - 55). What a room change still costs is behind the game's loading screen: the
+engine's `UnloadUnusedAssets` and the game creating the Penitent and his effect pools anew in every room. Two other
+leads did not hold: `UA_JOB_WORKERS` 1, 2 or 3 (and 2017.4 has no `-job-worker-count`) measured the same, and the
+lockstep checker (lockstep.md) did not replay this game's Mono route deterministically (`Time.deltaTime` differs
+between two replays from frame 6), so each change here carries its own proof (a check mode, the call graph, IL
+checks at patch time).
+
 Art a game keeps referenced everywhere but draws in one place: Blasphemous's persistent UI holds the main menu's
 animations, its DLC screens and the two logos in every level (133 textures, 51 MB). The lists cannot help (the menu
 draws it before every game), `UA_UNLOAD_ASSETS` neither (given back while the menu still shows it, it comes back at

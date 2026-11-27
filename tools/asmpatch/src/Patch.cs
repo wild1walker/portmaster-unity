@@ -51,7 +51,7 @@ abstract class Patch
         // optimizations
         new PlayMakerLoopCount(), new PlayMakerDelayedEvents(), new PlayMakerIdle(), new PlayMakerDelayedQuiet(), new PlayMakerTypeLookup(), new UnityObjectNull(), new HollowKnightFade(),
         new InlineHot(check: true), new InlineHot(check: false),   // (inline-check first: inline then finds it done)
-        new BlasphemousCatalogs(), new BlasphemousVideoDepth(), new BlasphemousI2Sources(), new BlasphemousMapScan(), new BlasphemousSkinIdle(), new BlasphemousCrisantaLazy(), new BlasphemousNearRooms(), new SmartCollidersRaycast(),
+        new BlasphemousCatalogs(), new BlasphemousVideoDepth(), new BlasphemousI2Sources(), new BlasphemousMapScan(), new BlasphemousSkinIdle(), new BlasphemousCrisantaLazy(), new BlasphemousNearRooms(), new SmartCollidersRaycast(), new ImguiNoLayout(), new BlasphemousCoreGui(), new BlasphemousDebugInfoIdle(),
         // reductions
         new HollowKnightBlur(), new HollowKnightPost(), new HollowKnightUnload(),
         // screens
