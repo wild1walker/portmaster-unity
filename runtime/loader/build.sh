@@ -88,7 +88,7 @@ docker run --rm $PLAT -v "$DIR/..":/w -w /w/loader -e T="$T" -e CFLAGS="$CFLAGS"
     $CC $S -Wl,-Bsymbolic -Wl,--build-id -Wl,-soname,libsyn_rl.so -o $D/libsyn_rl.so $D/syn_rl_asm.o $D/syn_rl.o -L$D -lc $UNW
     $CC $CFLAGS test/test_relayout.c $L -o $D/test_relayout
   fi
-  # (pack_relocs runs here: built static for the image's target, under its qemu-arm for armhf)
+  # (pack_relocs runs here: built static for the target of the image, under qemu-arm for armhf)
   $CC -O2 -static -o $D/pack_relocs test/pack_relocs.c
   P=$D/pack_relocs; [ -n "$T" ] && P="qemu-arm $D/pack_relocs"
   $P --relr $D/libsyn_1.so $D/libsyn_1.so
