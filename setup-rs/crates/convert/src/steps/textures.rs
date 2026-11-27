@@ -115,6 +115,47 @@ pub trait Codec {
     fn take_counts(&mut self) -> [u64; 6] {
         [0; 6]
     }
+
+    /// The guide's texture levels guided and not in it (absorb's).
+    fn take_guide_counts(&mut self) -> (u64, u64) {
+        (0, 0)
+    }
+
+    /// Whether a texture of this choice is big enough to be converted on every core (SOLO_PX),
+    /// not on one worker.
+    fn big(&self, ch: &Choice) -> bool {
+        ch.width * ch.height >= SOLO_PX
+    }
+
+    /// A codec with the same settings on every core, for encoding the big textures' prepared
+    /// levels on a thread of its own while the step decodes and scales the next (the blocks are
+    /// the same: prepare and encode are convert's halves). None (the default): convert() them.
+    fn solo(&self) -> Option<Box<dyn Codec + Send>> {
+        None
+    }
+
+    /// convert()'s first half (decoded, scaled, the mip levels made, on every core), or None where
+    /// convert() takes the texture another way (strips).
+    fn prepare(
+        &mut self,
+        _t: &Tex,
+        _raw: &[u8],
+        _ch: &Choice,
+    ) -> Result<Option<texcodec::texture::Prepared>> {
+        Ok(None)
+    }
+
+    /// convert()'s second half: prepare()'s levels encoded.
+    fn encode(
+        &mut self,
+        _t: &Tex,
+        _p: texcodec::texture::Prepared,
+        _ch: &Choice,
+        _key: &str,
+        _unity: Option<&str>,
+    ) -> Result<Converted> {
+        Err(Error::Value("this codec encodes no prepared levels".into()))
+    }
 }
 
 /// A config value as texcodec takes its settings (serde_json).
@@ -225,15 +266,73 @@ impl Codec for TexCodec {
         })
     }
 
-    fn worker(&self) -> Option<Box<dyn Codec + Send>> {
-        // (a guide counts what it is asked for: kept on one codec)
-        if self.enc.guide.is_some() {
-            return None;
+    fn big(&self, ch: &Choice) -> bool {
+        // (with the solo encoder these no longer wait for the turns before them: on every core,
+        // they do not keep one worker busy at the end of their file while the others wait)
+        ch.width * ch.height >= PIPE_PX
+    }
+
+    fn solo(&self) -> Option<Box<dyn Codec + Send>> {
+        let es = self.s.encoder().ok()?;
+        let guide = self.enc.guide.as_ref().map(|g| g.share());
+        let enc = texcodec::astc::Encoder::new(es, guide).ok()?;
+        Some(Box::new(TexCodec {
+            s: self.s.clone(),
+            enc,
+            quality: self.quality.clone(),
+        }))
+    }
+
+    fn prepare(
+        &mut self,
+        t: &Tex,
+        raw: &[u8],
+        ch: &Choice,
+    ) -> Result<Option<texcodec::texture::Prepared>> {
+        let name = String::from_utf8_lossy(&t.name);
+        let (tx, c) = (Self::texture(t, &name), Self::choice(ch));
+        if texcodec::texture::takes_strips(&tx, &c, &self.s) {
+            return Ok(None);
         }
+        texcodec::texture::prepare(&tx, raw, &c, self.s.threads, self.s.prepare_split)
+            .map(Some)
+            .map_err(tex_err)
+    }
+
+    fn encode(
+        &mut self,
+        t: &Tex,
+        p: texcodec::texture::Prepared,
+        ch: &Choice,
+        key: &str,
+        unity: Option<&str>,
+    ) -> Result<Converted> {
+        let name = String::from_utf8_lossy(&t.name);
+        let out = texcodec::texture::encode_prepared(
+            &Self::texture(t, &name),
+            p,
+            &Self::choice(ch),
+            &mut self.enc,
+            key,
+            unity,
+        )
+        .map_err(tex_err)?;
+        Ok(Converted {
+            format: out.format,
+            width: out.width,
+            height: out.height,
+            mip_count: out.mip_count,
+            data: out.data,
+        })
+    }
+
+    fn worker(&self) -> Option<Box<dyn Codec + Send>> {
+        // (a guide: the worker reads the same file; what it counts is added to this one's by absorb)
         let mut s = self.s.clone();
         s.threads = 1;
         let es = s.encoder().ok()?;
-        let enc = texcodec::astc::Encoder::new(es, None).ok()?;
+        let guide = self.enc.guide.as_ref().map(|g| g.share());
+        let enc = texcodec::astc::Encoder::new(es, guide).ok()?;
         Some(Box::new(TexCodec {
             s,
             enc,
@@ -242,9 +341,7 @@ impl Codec for TexCodec {
     }
 
     fn strips(&self, t: &Tex, raw: &[u8], ch: &Choice) -> Option<usize> {
-        if self.enc.guide.is_some() {
-            return None;
-        }
+        // (a strip is encoded without the guide, whoever encodes it: texture::strip)
         let name = String::from_utf8_lossy(&t.name);
         texcodec::texture::strips(
             &Self::texture(t, &name),
@@ -294,10 +391,21 @@ impl Codec for TexCodec {
         for (a, b) in self.enc.counts.iter_mut().zip(worker.take_counts()) {
             *a += b;
         }
+        let (used, missed) = worker.take_guide_counts();
+        if let Some(g) = self.enc.guide.as_mut() {
+            g.used += used;
+            g.missed += missed;
+        }
     }
 
     fn take_counts(&mut self) -> [u64; 6] {
         std::mem::take(&mut self.enc.counts)
+    }
+
+    fn take_guide_counts(&mut self) -> (u64, u64) {
+        self.enc.guide.as_mut().map_or((0, 0), |g| {
+            (std::mem::take(&mut g.used), std::mem::take(&mut g.missed))
+        })
     }
 
     fn summary(&mut self) -> Vec<String> {
@@ -1023,6 +1131,9 @@ const CARVE_MIN: usize = 1 << 20;
 /// Textures this big (their new size) are converted alone, on every core (which their own work
 /// keeps busy), rather than on one worker while the others wait for their turn.
 const SOLO_PX: usize = 1 << 20;
+/// texcodec's: textures this big (their new size) are prepared and encoded on every core, the
+/// encoding by the solo encoder (Codec::solo) while the next textures are read and prepared.
+const PIPE_PX: usize = 1 << 18;
 
 /// The memory a texture's conversion may take at most (its data, the decoded levels, the
 /// blocks): what the turns on workers may hold together is kept under a budget.
@@ -1220,6 +1331,18 @@ fn texture_error(rel: &str, tex: &Tex, pid: i64, e: Error) -> Error {
 pub struct Pool {
     pub codecs: Vec<Box<dyn Codec + Send>>,
     pub budget: u64,
+    /// the big textures' encoder (Codec::solo), on a thread of its own
+    pub solo: Option<Box<dyn Codec + Send>>,
+}
+
+/// A big texture's prepared levels for the solo encoder.
+struct SoloJob {
+    tex: Tex,
+    p: texcodec::texture::Prepared,
+    ch: Choice,
+    key: String,
+    unity: String,
+    tx: SyncSender<Result<Converted>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1295,9 +1418,28 @@ fn convert_file(
     let (budget, nworkers) = pool.as_ref().map_or((0, 0), |p| (p.budget, p.codecs.len()));
     let (job_tx, job_rx) = std::sync::mpsc::channel::<Work>();
     let job_rx = std::sync::Mutex::new(job_rx);
+    // (a big texture's levels wait for the solo encoder while it encodes the one before: one
+    // texture encoding, one waiting, and one being prepared at most; the budget counts them)
+    let (solo_tx, solo_rx) = sync_channel::<SoloJob>(1);
     let r = std::thread::scope(|s| -> Result<()> {
-        if let Some(p) = pool.as_mut() {
-            for codec in p.codecs.iter_mut() {
+        let mut solo_tx = Some(solo_tx);
+        let (codecs, solo_codec) = match pool.as_mut() {
+            Some(p) => (Some(&mut p.codecs), p.solo.as_mut()),
+            None => (None, None),
+        };
+        if let Some(codec) = solo_codec {
+            s.spawn(move || {
+                while let Ok(j) = solo_rx.recv() {
+                    let r = codec.encode(&j.tex, j.p, &j.ch, &j.key, Some(&j.unity));
+                    let _ = j.tx.send(r);
+                }
+            });
+        } else {
+            solo_tx = None;
+            drop(solo_rx);
+        }
+        if let Some(codecs) = codecs {
+            for codec in codecs.iter_mut() {
                 let rx = &job_rx;
                 s.spawn(move || loop {
                     let w = rx.lock().unwrap().recv();
@@ -1534,7 +1676,53 @@ fn convert_file(
                     }));
                 }
                 let est = estimate(&tex, &ch, raw.len());
-                if nworkers == 0 || est > budget / 2 || ch.width * ch.height >= SOLO_PX {
+                if let (Some(stx), true) = (
+                    solo_tx.as_ref(),
+                    nworkers > 0 && (est > budget / 2 || enc.big(&ch)),
+                ) {
+                    // (decoded and scaled on every core while the turns before it go on, as the
+                    // budget allows; then encoded by the solo encoder while the next is read)
+                    while turns.later > 0 && turns.inflight + est > budget {
+                        turns
+                            .finish_front(f, stats)
+                            .inspect_err(|_| turn_failed = true)?;
+                    }
+                    if let Some(p) = enc.prepare(&tex, &raw, &ch)? {
+                        drop(raw);
+                        let held = p.bytes() as u64 + (ch.width * ch.height) as u64 * 2;
+                        while turns.later > 0 && turns.inflight + held > budget {
+                            turns
+                                .finish_front(f, stats)
+                                .inspect_err(|_| turn_failed = true)?;
+                        }
+                        let (tx, rx) = sync_channel(1);
+                        let j = SoloJob {
+                            tex: tex.clone(),
+                            p,
+                            ch,
+                            key,
+                            unity: unity.clone(),
+                            tx,
+                        };
+                        stx.send(j).map_err(|_| {
+                            Error::Value(format!("{rel}: the texture workers stopped"))
+                        })?;
+                        turns.inflight += held;
+                        turns.later += 1;
+                        return Ok(Some(Turn::Conv {
+                            pid,
+                            t,
+                            tex,
+                            sd,
+                            size_in,
+                            est: held,
+                            out: Out::Later(rx),
+                            meta,
+                            memo: false,
+                        }));
+                    }
+                }
+                if nworkers == 0 || est > budget / 2 || enc.big(&ch) {
                     // (alone, on every core: the turns before it are finished first)
                     turns.drain(f, stats).inspect_err(|_| turn_failed = true)?;
                     let out = enc.convert(&tex, &raw, &ch, &key, Some(&unity));
@@ -1597,7 +1785,9 @@ fn convert_file(
                 }
             }
         }
-        turns.drain(f, stats)
+        let r = turns.drain(f, stats);
+        drop(solo_tx);
+        r
     });
     r?;
     stats.released += turns.released;
@@ -1635,6 +1825,40 @@ fn convert_file(
     Ok(Some((stream_name.clone(), path, turns.sizes, turns.order)))
 }
 
+/// Files the step will read, PREFETCH_MAX of them at most: the kernel asked to read them into the
+/// page cache ahead (posix_fadvise WILLNEED, on a thread of its own: it may wait for the card's
+/// queue). Only the page cache changes: what is read is the same.
+const PREFETCH_MAX: u64 = 128 << 20;
+
+fn prefetch(paths: &[PathBuf]) {
+    let mut total = 0;
+    let files: Vec<std::fs::File> = paths
+        .iter()
+        .filter(|p| {
+            p.metadata().is_ok_and(|m| {
+                let take = m.is_file() && total + m.len() <= PREFETCH_MAX;
+                if take {
+                    total += m.len();
+                }
+                take
+            })
+        })
+        .filter_map(|p| std::fs::File::open(p).ok())
+        .collect();
+    if files.is_empty() {
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("pmu-prefetch".into())
+        .spawn(move || {
+            for f in files {
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                let _ = rustix::fs::fadvise(&f, 0, None, rustix::fs::Advice::WillNeed);
+                drop(f);
+            }
+        });
+}
+
 /// The workers for the step: one a core (`textures.threads`, else every core), and the memory
 /// their textures may hold together: a quarter of what the system has available when the step
 /// starts, at most 160 MB (PMU_TEXTURE_POOL_MB sets it; 0: no workers, one texture at a time).
@@ -1655,6 +1879,7 @@ fn pool(enc: &dyn Codec, threads: usize) -> Option<Pool> {
     Some(Pool {
         codecs,
         budget: mb << 20,
+        solo: enc.solo(),
     })
 }
 
@@ -1903,6 +2128,17 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
             + beside
             + (64 << 20)
             + if spilled { bsize * 2 } else { 0 };
+        // (a plain file and the streams beside it are read whole by the step: their objects, the
+        // textures' streams, the other streams copied along, the rest when the file is written. The
+        // card starts on them now, while the step converts, instead of when each object is read)
+        if bsize == 0 {
+            prefetch(&[
+                src.clone(),
+                crate::job::with_suffix(&src, ".resS"),
+                crate::job::with_suffix(&st, ".resS"),
+                crate::job::with_suffix(&st, ".resource"),
+            ]);
+        }
         // (with the converted files that wait beside the ones they replace: write_deferred)
         let need = need + job.deferred_bytes();
         job.need_space(need, &format!("convert {rel}"))?;
@@ -2174,6 +2410,9 @@ pub fn run_with(job: &mut Job, args: &Args, mut enc: Box<dyn Codec>) -> Result<(
     }
     if let Some(p) = pool.as_mut() {
         for w in p.codecs.iter_mut() {
+            enc.absorb(w.as_mut());
+        }
+        if let Some(w) = p.solo.as_mut() {
             enc.absorb(w.as_mut());
         }
     }

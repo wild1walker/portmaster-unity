@@ -19,6 +19,30 @@ struct Fake {
     seen: Vec<String>,
     /// whether the step may convert several textures at once (worker codecs)
     workers: bool,
+    /// whether big textures (32 pixels wide and more, scaled) are prepared, then encoded on a
+    /// thread of their own (Codec::solo)
+    solo: bool,
+}
+
+impl Fake {
+    fn new(workers: bool, solo: bool) -> Fake {
+        Fake {
+            seen: Vec::new(),
+            workers,
+            solo,
+        }
+    }
+
+    fn blocks(t: &Tex, ch: &Choice) -> Converted {
+        let n = ch.width.div_ceil(4) * ch.height.div_ceil(4) * 16;
+        Converted {
+            format: 54,
+            width: ch.width,
+            height: ch.height,
+            mip_count: 1,
+            data: vec![t.name.len() as u8; n],
+        }
+    }
 }
 
 impl Codec for Fake {
@@ -55,14 +79,46 @@ impl Codec for Fake {
             String::from_utf8_lossy(&t.name),
             raw.len()
         ));
-        let n = ch.width.div_ceil(4) * ch.height.div_ceil(4) * 16;
-        Ok(Converted {
-            format: 54,
-            width: ch.width,
-            height: ch.height,
-            mip_count: 1,
-            data: vec![t.name.len() as u8; n],
-        })
+        Ok(Fake::blocks(t, ch))
+    }
+
+    fn big(&self, ch: &Choice) -> bool {
+        self.solo && ch.width >= 16 && ch.width < 64
+    }
+
+    fn solo(&self) -> Option<Box<dyn Codec + Send>> {
+        self.solo
+            .then(|| Box::new(Fake::new(false, true)) as Box<dyn Codec + Send>)
+    }
+
+    fn prepare(
+        &mut self,
+        t: &Tex,
+        raw: &[u8],
+        _ch: &Choice,
+    ) -> Result<Option<texcodec::texture::Prepared>> {
+        assert!(self.solo);
+        Ok(Some(texcodec::texture::Prepared {
+            levels: Vec::new(),
+            nlevels: 1,
+            seed: Some((
+                format!("{} {}", String::from_utf8_lossy(&t.name), raw.len()).into_bytes(),
+                false,
+            )),
+        }))
+    }
+
+    fn encode(
+        &mut self,
+        t: &Tex,
+        p: texcodec::texture::Prepared,
+        ch: &Choice,
+        key: &str,
+        _unity: Option<&str>,
+    ) -> Result<Converted> {
+        let what = String::from_utf8(p.seed.unwrap().0).unwrap();
+        self.seen.push(format!("{key} {what}"));
+        Ok(Fake::blocks(t, ch))
     }
 
     fn summary(&mut self) -> Vec<String> {
@@ -70,12 +126,8 @@ impl Codec for Fake {
     }
 
     fn worker(&self) -> Option<Box<dyn Codec + Send>> {
-        self.workers.then(|| {
-            Box::new(Fake {
-                seen: Vec::new(),
-                workers: false,
-            }) as Box<dyn Codec + Send>
-        })
+        self.workers
+            .then(|| Box::new(Fake::new(false, self.solo)) as Box<dyn Codec + Send>)
     }
 }
 
@@ -99,16 +151,23 @@ fn f32_of(v: &Value, path: &[&str]) -> f32 {
 
 #[test]
 fn textures_layer_with_a_stand_in_codec() {
-    textures_layer(false);
+    textures_layer(false, false);
 }
 
 /// The same with the file's small textures converted on workers: the same files.
 #[test]
 fn textures_layer_with_workers() {
-    textures_layer(true);
+    textures_layer(true, false);
 }
 
-fn textures_layer(workers: bool) {
+/// The same with the big ones prepared and then encoded on the solo encoder's thread while the
+/// next are read: the same files.
+#[test]
+fn textures_layer_with_a_solo_encoder() {
+    textures_layer(true, true);
+}
+
+fn textures_layer(workers: bool, solo: bool) {
     let Some(db) = madeup::db() else {
         eprintln!("PMU_TPK not set: skipped");
         return;
@@ -213,10 +272,7 @@ fn textures_layer(workers: bool) {
     textures::run_with(
         &mut job,
         &Args::default(),
-        Box::new(Fake {
-            seen: Vec::new(),
-            workers,
-        }),
+        Box::new(Fake::new(workers, solo)),
     )
     .unwrap();
 
@@ -400,10 +456,7 @@ fn textures_sprites_in_another_file() {
         textures::run_with(
             &mut job,
             &Args::default(),
-            Box::new(Fake {
-                seen: Vec::new(),
-                workers: false,
-            }),
+            Box::new(Fake::new(false, false)),
         )
         .unwrap();
     };
@@ -516,10 +569,7 @@ fn textures_readable_modes() {
         ))
         .unwrap();
         let mut job = Job::new(&data, &data, cfg).unwrap();
-        let fake = Fake {
-            seen: Vec::new(),
-            workers: false,
-        };
+        let fake = Fake::new(false, false);
         textures::run_with(&mut job, &Args::default(), Box::new(fake)).unwrap();
         let opts = Options {
             db: Some(db.clone()),
@@ -583,10 +633,7 @@ fn textures_exact_shaders() {
     let pal_px = exact_game(&db, &data);
     let cfg = pyjson::loads(EXACT_CFG).unwrap();
     let mut job = Job::new(&data, &data, cfg).unwrap();
-    let fake = Fake {
-        seen: Vec::new(),
-        workers: false,
-    };
+    let fake = Fake::new(false, false);
     textures::run_with(&mut job, &Args::default(), Box::new(fake)).unwrap();
     let opts = Options {
         db: Some(db.clone()),
@@ -817,10 +864,7 @@ impl Stopping {
 
 impl Codec for Stopping {
     fn choose(&self, t: &Tex) -> Option<Choice> {
-        Fake {
-            seen: Vec::new(),
-            workers: false,
-        }
+        Fake::new(false, false)
         .choose(t)
     }
 
