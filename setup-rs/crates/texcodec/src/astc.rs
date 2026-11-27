@@ -21,6 +21,8 @@ pub const PRESETS: [(&str, f32); 4] = [
 
 /// ASTCENC_FLG_USE_DECODE_UNORM8, the flag textures.py sets.
 const USE_DECODE_UNORM8: c_uint = 1 << 1;
+/// ASTCENC_FLG_DECOMPRESS_ONLY (PMU_CPU_DUMP's decoder).
+const DECOMPRESS_ONLY: c_uint = 1 << 4;
 
 /// Blocks across the image of the blocks left to the encoder (Astc.GATHER_COLS).
 pub const GATHER_COLS: usize = 256;
@@ -51,6 +53,14 @@ extern "C" {
     ) -> c_int;
     fn tc_astc_reset(ctx: *mut c_void) -> c_int;
     fn tc_astc_free(ctx: *mut c_void);
+    fn tc_astc_decompress(
+        ctx: *mut c_void,
+        data: *const u8,
+        len: usize,
+        rgba: *mut u8,
+        w: c_uint,
+        h: c_uint,
+    ) -> c_int;
     fn tc_astc_error(status: c_int) -> *const c_char;
     fn ga_init();
     fn ga_encode(
@@ -361,13 +371,17 @@ impl Encoder {
         seed: Option<Seed>,
         key: Option<&str>,
     ) -> Result<Vec<u8>, Error> {
-        if !self.settings.guided {
+        let blocks = if !self.settings.guided {
             let _t = crate::prof::Timer::new(crate::prof::Stage::Astc);
-            return self
-                .context(block, Tier::Other)?
-                .compress(rgba, w, h, block);
+            self.context(block, Tier::Other)?
+                .compress(rgba, w, h, block)?
+        } else {
+            self.guided_rows(rgba, w, h, block, seed, key)?
+        };
+        if let Some(dir) = std::env::var_os("PMU_CPU_DUMP") {
+            dump_level(std::path::Path::new(&dir), rgba, w, h, block, &blocks, key)?;
         }
-        self.guided_rows(rgba, w, h, block, seed, key)
+        Ok(blocks)
     }
 
     fn guided_rows(
@@ -709,4 +723,61 @@ mod tests {
         assert_eq!(at(0, 4), 0);
         assert_eq!(at(4, 4), 4); // the pad: block 1 again
     }
+}
+
+/// PMU_CPU_DUMP=<dir> (a measurement, off unless set): each level the encoder is given, as given
+/// (<dir>/<key>__<w>x<h>.src.rgba, RGBA8, rows as given) and as its ASTC blocks decode
+/// (.dec.rgba), so two settings' pictures can be compared texel by texel (crates/picdiff `tex`).
+/// Level 0 only (the key's last field); a key's characters outside [A-Za-z0-9_-] become '_'.
+fn dump_level(
+    dir: &std::path::Path,
+    rgba: &[u8],
+    w: usize,
+    h: usize,
+    block: (u32, u32),
+    blocks: &[u8],
+    key: Option<&str>,
+) -> Result<(), Error> {
+    let key = key.unwrap_or("-");
+    if key.rsplit('|').next() != Some("0") {
+        return Ok(());
+    }
+    let mut status = 0;
+    // SAFETY: plain values in, a context pointer (or NULL and a status) out.
+    let ctx = unsafe {
+        tc_astc_new(
+            block.0,
+            block.1,
+            0.0,
+            USE_DECODE_UNORM8 | DECOMPRESS_ONLY,
+            -1,
+            -1,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            1,
+            &mut status,
+        )
+    };
+    if ctx.is_null() {
+        return Err(astc_error(status));
+    }
+    let mut dec = vec![0u8; w * h * 4];
+    // SAFETY: dec holds w x h RGBA8; blocks holds every block of it (the encoder's output).
+    let st = unsafe {
+        tc_astc_decompress(ctx, blocks.as_ptr(), blocks.len(), dec.as_mut_ptr(), w as c_uint, h as c_uint)
+    };
+    // SAFETY: allocated by tc_astc_new above, freed once.
+    unsafe { tc_astc_free(ctx) };
+    if st != 0 {
+        return Err(astc_error(st));
+    }
+    let safe: String = key
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join(format!("{safe}__{w}x{h}.src.rgba")), rgba)?;
+    std::fs::write(dir.join(format!("{safe}__{w}x{h}.dec.rgba")), &dec)?;
+    Ok(())
 }

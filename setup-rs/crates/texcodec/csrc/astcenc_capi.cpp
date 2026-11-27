@@ -90,6 +90,24 @@ int tc_astc_compress(astcenc_context* ctx, const unsigned char* rgba, unsigned w
 	return astcenc_compress_image(ctx, &image, &swizzle, out, out_len, thread_index);
 }
 
+/// Decoding (PMU_CPU_DUMP, src/astc.rs): w x h RGBA8 (rows as given) from the blocks in data, on one
+/// thread (a context made for one thread), as a USE_DECODE_UNORM8 decoder sees them.
+int tc_astc_decompress(astcenc_context* ctx, const unsigned char* data, size_t len, unsigned char* rgba,
+                       unsigned w, unsigned h)
+{
+	void* slices[1] = {rgba};
+	astcenc_image image;
+	image.dim_x = w;
+	image.dim_y = h;
+	image.dim_z = 1;
+	image.data_type = ASTCENC_TYPE_U8;
+	image.data = slices;
+	const astcenc_swizzle swizzle{ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+	astcenc_error err = astcenc_decompress_image(ctx, data, len, &image, &swizzle, 0);
+	astcenc_error reset = astcenc_decompress_reset(ctx);
+	return err != ASTCENC_SUCCESS ? err : reset;
+}
+
 int tc_astc_reset(astcenc_context* ctx)
 {
 	return astcenc_compress_reset(ctx);
