@@ -13,12 +13,16 @@
 // call never waits for the previous frame's GPU work: the times are the driver's CPU work. Thread and
 // process CPU time a frame are reported too (the process's includes the driver's own threads, as
 // mesa_glthread's).
-//   --hash <out> [--hash-frames A-B|last:N] [--hash-draws] [--hash-dump <dir>]   pixels, not times: each framebuffer's
+//   --hash <out> [--hash-frames A-B|last:N] [--hash-step N] [--hash-swap-only] [--hash-draws] [--hash-dump <dir>]   pixels, not times: each framebuffer's
 //                colour read back and hashed where a pass ends (a bind) and at the swap, with --hash-draws after
 //                every draw and clear too (glreplay_hash.c; two logs compared by glpixdiff)
 //   --evict <KB> between calls (untimed), run <KB> of code and read <KB> of data, each from the next slice of
 //                a 4 MB region of its own: the caches as a game's own code and data between its GL calls leave
 //                them (a replayer alone keeps the driver's code hot, which the game does not)
+//   UA_GL_RENAME, UA_GL_SAMECLEAR (environment, as for ua_host): the calls go through ua_host's own layers
+//                glrename.c and glpass.c (in ua_host's order: rename -> pass -> the driver), glrename_frame and
+//                glpass_frame at each swap: the same trace replayed with and without them shows what they change
+//                on the screen (a trace is written above those layers, so it holds the game's own calls)
 //   --check      glGetError after every call: the calls a driver refused, by entry point (the replay is
 //                only a fair comparison where no driver refuses anything the game's driver took)
 // Environment:
@@ -52,6 +56,8 @@
 #include "glrec_gen.h"
 #undef GLREC_PART
 #include "glreplay_hash.h"
+#include "glrename.h"
+#include "glpass.h"
 
 #define TR_TAG (1ull << 63)
 #define TR_FRAME 0xFFFFF0u
@@ -481,6 +487,9 @@ static void evict(void)
     g_ev_at += g_evict;
 }
 
+static int g_hash_swap_only;           // --hash-swap-only
+static int g_layers;                   // UA_GL_RENAME / UA_GL_SAMECLEAR: ua_host's layers in the call path
+
 static void replay_rec(const rec *r)
 {
     unsigned long hcall = g_hcall++;
@@ -492,7 +501,7 @@ static void replay_rec(const rec *r)
     if (!rp_how[r->op] || !rp_fn[r->op]) return;
     if (g_main_thread != 255 && r->thread != g_main_thread) g_other_thread_calls++;
     int hbind = r->op == OP_glBindFramebuffer && ((GLenum)r->a[0] == GL_FRAMEBUFFER || (GLenum)r->a[0] == GL_DRAW_FRAMEBUFFER);
-    if (g_hash && hbind && rph_on(g_hframe)) rph_read(g_hframe, hcall, "bind", g_hfb, !g_hfb, g_hw, g_hh);   // (the pass that ends)
+    if (g_hash && hbind && !g_hash_swap_only && rph_on(g_hframe)) rph_read(g_hframe, hcall, "bind", g_hfb, !g_hfb, g_hw, g_hh);   // (the pass that ends)
     if (g_show_b && r->op == OP_glAttachShader)
         for (int k = 0; k < 4; k++) if (!g_show_att[r->a[0] & 0xffff][k]) { g_show_att[r->a[0] & 0xffff][k] = (unsigned)r->a[1]; break; }
     if (g_show_b && hcall >= g_show_a && hcall <= g_show_b) {
@@ -514,7 +523,7 @@ static void replay_rec(const rec *r)
     rp_call(r->op, r->a, r->ret);
     if (g_hash) {
         if (hbind) g_hfb = (unsigned)r->a[1];
-        else if ((g_class[r->op] == C_DRAW || g_class[r->op] == C_CLEAR) && rph_draws() && rph_on(g_hframe))
+        else if ((g_class[r->op] == C_DRAW || g_class[r->op] == C_CLEAR) && rph_draws() && !g_hash_swap_only && rph_on(g_hframe))
             rph_read(g_hframe, hcall, "draw", g_hfb, !g_hfb, g_hw, g_hh);
     }
     if (g_measuring) { g_op_ticks[r->op] += (double)(ticks() - t); g_op_calls[r->op]++; }
@@ -562,6 +571,7 @@ static void frame_end(void)
     if (g_hash && rph_on(g_hframe)) rph_read(g_hframe, g_hcall, "swap", 0, 1, g_hw, g_hh);   // (before the swap: after it the window is undefined)
     g_hframe++;
     uint64_t t = g_measuring ? ticks() : 0;
+    if (g_layers) { glpass_frame(); glrename_frame(); }   // (ua_host's swap hook calls them in this order)
     e_SwapBuffers(g_dpy, g_surf);
     RX(glFlush)();
     if (g_measuring) { g_end_ticks += (double)(ticks() - t); g_end_n++; }
@@ -577,6 +587,29 @@ static void *sym(const char *n)
     if (!p) p = dlsym(g_egl, n);
     if (!p && gpa) p = gpa(n);
     return p;
+}
+
+// ua_host's glrename.c and glpass.c layers (UA_GL_RENAME, UA_GL_SAMECLEAR): rename -> pass -> the driver
+static const so_shim *g_lay_rename, *g_lay_pass;
+static void *lay_find(const so_shim *t, const char *n)
+{
+    for (; t && t->name; t++) if (!strcmp(t->name, n)) return t->fn;
+    return NULL;
+}
+static void *after_pass(const char *n) { return sym(n); }
+static void *after_rename(const char *n) { void *p = lay_find(g_lay_pass, n); return p ? p : sym(n); }
+static unsigned layers_init(void)
+{
+    g_lay_pass = glpass_table(after_pass);
+    g_lay_rename = glrename_table(after_rename);
+    unsigned n = 0;
+    for (unsigned i = 0; i < OP_N; i++) {
+        void *p = lay_find(g_lay_rename, glrec_name[i]);
+        if (!p) p = lay_find(g_lay_pass, glrec_name[i]);
+        if (p && rp_fn[i]) { rp_fn[i] = p; n++; }
+    }
+    g_layers = g_lay_rename[0].name || g_lay_pass[0].name;
+    return n;
 }
 
 // The driver: libEGL/libGLESv2 (GLREP_EGL/GLREP_GLES), a GLES 3 context on a WxH RGBA8 D24S8 pbuffer, made current.
@@ -709,6 +742,7 @@ int main(int argc, char **argv)
     int w = 720, h = 480;
     const char *hash_out = NULL, *hash_frames = NULL, *hash_dump = NULL;
     int hash_draws = 0, info = 0;
+    long hash_step = 1;
     size_t evict_kb = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--from") && i + 1 < argc) from = atol(argv[++i]);
@@ -720,6 +754,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--hash") && i + 1 < argc) hash_out = argv[++i];
         else if (!strcmp(argv[i], "--hash-frames") && i + 1 < argc) hash_frames = argv[++i];
         else if (!strcmp(argv[i], "--hash-draws")) hash_draws = 1;
+        else if (!strcmp(argv[i], "--hash-swap-only")) g_hash_swap_only = 1;
+        else if (!strcmp(argv[i], "--hash-step") && i + 1 < argc) hash_step = atol(argv[++i]);
         else if (!strcmp(argv[i], "--hash-dump") && i + 1 < argc) hash_dump = argv[++i];
         else if (!strcmp(argv[i], "--info")) info = 1;
         else if (!strcmp(argv[i], "--zero-discard")) g_zero_discard = 1;
@@ -732,7 +768,7 @@ int main(int argc, char **argv)
         print_info(maj, min);
         return 0;
     }
-    if (!path) { fprintf(stderr, "usage: glreplay --info | <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-draws] [--hash-dump <dir>]] [--show A-B] [--evict KB]\n"); return 2; }
+    if (!path) { fprintf(stderr, "usage: glreplay --info | <trace.gz> [--from F] [--to F] [--size WxH] [--check] [--no-finish] [--hash <out> [--hash-frames A-B] [--hash-step N] [--hash-swap-only] [--hash-draws] [--hash-dump <dir>]] [--show A-B] [--evict KB]\n"); return 2; }
     time_init();
     classes();
     evict_init(evict_kb);
@@ -762,6 +798,9 @@ int main(int argc, char **argv)
     if (open_driver(w, h, &maj, &min) < 0) return 1;
     unsigned nfn = 0;
     for (unsigned i = 0; i < OP_N; i++) if ((rp_fn[i] = sym(glrec_name[i]))) nfn++;
+    unsigned nlay = layers_init();
+    if (g_layers) fprintf(stderr, "glreplay: %u entry points through ua_host's layers (UA_GL_RENAME=%s, UA_GL_SAMECLEAR=%s)\n", nlay,
+                          getenv("UA_GL_RENAME") ? getenv("UA_GL_RENAME") : "0", getenv("UA_GL_SAMECLEAR") ? getenv("UA_GL_SAMECLEAR") : "0");
     char last_frames[64];                                // --hash-frames last:N: the trace's last N frames
     if (hash_frames && !strncmp(hash_frames, "last:", 5)) {
         long n_ = atol(hash_frames + 5);
@@ -771,6 +810,7 @@ int main(int argc, char **argv)
     if (hash_out) {                                      // --hash (glreplay_hash.c)
         if (rph_init(hash_out, hash_frames, hash_draws, hash_dump, sym) < 0) return 1;
         g_hash = 1; g_hw = w; g_hh = h;
+        rph_step(hash_step);
     }
     const GLubyte *(*g_GetString)(GLenum) = sym("glGetString");
     fprintf(stderr, "glreplay: EGL %d.%d, %s, %s, %s; %u entry points\n", maj, min, g_GetString(GL_VENDOR), g_GetString(GL_RENDERER),

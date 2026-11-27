@@ -3,7 +3,8 @@
 // replays of one UA_GL_REC_FILE trace (two drivers, or one driver twice) can be compared picture by picture
 // and a difference traced to the draw that made it (tools/analysis/pixdiff.py).
 //
-//   glreplay <trace.gz> --hash <out.txt> [--hash-frames A-B | last:N] [--hash-draws] [--hash-dump <dir>]
+//   glreplay <trace.gz> --hash <out.txt> [--hash-frames A-B | last:N] [--hash-step N] [--hash-swap-only] [--hash-draws] [--hash-dump <dir>]
+//   (--hash-step N: every Nth frame of the range only; --hash-swap-only: the window before each swap only, no pass ends)
 //
 // A line of <out.txt>: "<frame> <call> <event> fb<game's name> <w>x<h> <kind> <hash>", event `bind` (the
 // pass on that framebuffer ends: the game binds another), `swap` (the frame ends; fb0 is the window), `draw`
@@ -31,6 +32,7 @@ static const char *g_dump;
 static void *(*g_sym)(const char *);
 static unsigned char *g_buf; static size_t g_nbuf;
 static unsigned long g_lines;
+static long g_step = 1;
 
 static void (*q_GetIntegerv)(GLenum, GLint *);
 static void (*q_BindFramebuffer)(GLenum, GLuint);
@@ -71,7 +73,8 @@ int rph_init(const char *out, const char *frames, int draws, const char *dump, v
     return 0;
 }
 
-int rph_on(long frame) { return g_out && frame >= g_from && (g_to < 0 || frame < g_to); }
+int rph_on(long frame) { return g_out && frame >= g_from && (g_to < 0 || frame < g_to) && (frame - g_from) % g_step == 0; }
+void rph_step(long step) { g_step = step > 0 ? step : 1; }
 int rph_draws(void) { return g_draws; }
 
 static uint64_t fnv(const unsigned char *p, size_t n, uint64_t h)

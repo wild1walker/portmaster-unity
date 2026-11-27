@@ -2611,6 +2611,16 @@ of a frame). Instead one recorded GL stream is replayed and its pictures read ba
    that pass or before it differs; both replays again with `--hash-frames F-F --hash-draws` give the first
    draw that differs, by its call number in the trace.
 
+`--hash-step N` reads back every Nth frame of the `--hash-frames` range only, `--hash-swap-only` the window
+before each swap only (no pass ends): what the player sees, at a fraction of the readbacks. With
+`UA_GL_RENAME` and `UA_GL_SAMECLEAR` in its environment (the values ua_host takes), glreplay's calls go
+through ua_host's own glrename.c and glpass.c (rename, then pass, then the driver, as in ua_host;
+`glrename_frame`/`glpass_frame` at each swap): a trace holds the game's own calls (the recorder sits above
+those layers), so one trace replayed without and with them gives the same frames as the game draws them
+without and with the option, on the same driver, with no difference of timing between the two
+(`picdiff frames`: quality.md, "Picture changes no one sees"). Only the window's readbacks mean anything
+then: a renamed texture's storage can owe its picture at a pass's end.
+
 Tested on a fake driver with pixels (test/fake_hash_gl.c; pointer_test.sh, arm64 and armhf): one driver twice
 gives no difference; a driver that draws one call otherwise is found at its pass, then named exactly.
 
