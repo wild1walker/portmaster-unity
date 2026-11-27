@@ -20,6 +20,12 @@
 //   UA_ALLOC_STATS=<s>       (a measurement) MemoryManager::Allocate's calls counted by memory label and caller (the
 //                            return address in libunity) and printed every <s> seconds: which kinds of objects are made
 //                            where, for an allocator that keeps one kind's objects together (6000.0.61f1 arm64-v8a)
+//   UA_OBJ_HEAPS=1|stats     (an experiment, off) Unity's objects of a few kinds made in heaps of their own: the
+//                            allocation each ProduceHelper<T>::Produce makes (label 44, the object heap) goes to one of
+//                            four new DualThreadAllocator<DynamicHeapAllocator> heaps (Unity's own allocator type, made
+//                            and registered as Unity makes its CACHEOBJECTS heap) by the kind: behaviours; GameObjects
+//                            and Transforms; renderers and mesh filters; Animators, particle systems, audio sources and
+//                            2D physics. Where objects lie changes, nothing else (below). 6000.0.61f1 arm64-v8a
 //
 // Rows as unityhooks.c's: offset, size and FNV-1a of the bytes the function was read from, per Unity build; a
 // function whose bytes differ is left alone. The rows are matched before any other hook changes libunity (the
@@ -698,11 +704,118 @@ static pthread_mutex_t g_as_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_as_total, g_as_dropped;
 static uintptr_t g_as_mm;                       // the MemoryManager the calls were made on
 
+
+// --- UA_OBJ_HEAPS
+//
+// Read in 6000.0.61f1 arm64-v8a: MemoryManager (this) keeps its allocators in arrays at +0x38 (the allocator), +0xb8
+// (its main-thread heap) and +0x138 (its other-thread heap), their number at +0 (32 bits), the label -> allocator table
+// at +0x1620 (16 bytes a label), its VirtualAllocator at +0x2110. InitializeDefaultAllocators makes the CACHEOBJECTS heap
+// (label 44's: Unity's objects) as: two DynamicHeapAllocator(blockSize = BootConfig parameter 0x19ba6d0 [0], threaded
+// false / true, NULL, NULL, name, false) in 0x1e0 bytes each, one DualThreadAllocator<DynamicHeapAllocator>(name,
+// bucket allocator, main, thread, VirtualAllocator) in 0x140 bytes, appended to the three arrays. Ours makes four more
+// the same way right after InitializeDefaultAllocators returns (the bucket allocator and VirtualAllocator read from the
+// CACHEOBJECTS heap's +0x100 and +0x130). MemoryManager::Allocate with label 44 from inside a routed
+// ProduceHelper<T>::Produce (its return address) asks our heap (its vtable's Allocate, +0x10, with Unity's size and
+// alignment rounding) instead of the label's; a failure goes on to Unity's own path. Freeing needs nothing: Unity finds
+// the allocator by the pointer (TryDeallocateWithLabel: the label's allocator refuses a pointer it does not hold, then
+// GetAllocatorContainingPtr, which asks each registered allocator whether it holds it).
+static const struct row g_oh_rows[] = {
+    { "6000.0.61f1 arm64-v8a", "MemoryManager::InitializeDefaultAllocators", 0x76ac08, 0x980, ISA_A64, 0xaace5228c16eb8bdull },
+    { "6000.0.61f1 arm64-v8a", "DynamicHeapAllocator::DynamicHeapAllocator", 0x767c24, 0xd4, ISA_A64, 0x959865ea3d2fdeb2ull },
+    { "6000.0.61f1 arm64-v8a", "DualThreadAllocator<DynamicHeapAllocator>::DualThreadAllocator", 0x7663d4, 0xb8, ISA_A64, 0x30788e6dabad3982ull },
+    { "6000.0.61f1 arm64-v8a", "BootConfig::ParameterData<unsigned long>::operator[]", 0x76d900, 0x58, ISA_A64, 0x8cc9966f5c7630a6ull },
+    { "6000.0.61f1 arm64-v8a", "MemoryManager::GetAllocatorContainingPtr", 0x76bf78, 0x148, ISA_A64, 0xf674c650e90eb48aull },
+    { "6000.0.61f1 arm64-v8a", "MemoryManager::TryDeallocateWithLabel", 0x76c0c0, 0x154, ISA_A64, 0x355a40c7aa91b100ull },
+};
+// the routed ProduceHelper<T, false>::Produce functions: offset, size, heap
+static const struct { uint32_t off, size; int heap; const char *type; } g_oh_produce[] = {
+    { 0x9d3168, 0x50, 0, "MonoBehaviour" },
+    { 0x77c230, 0x50, 1, "GameObject" }, { 0x920c4c, 0x84, 1, "Transform" },
+    { 0x1001a34, 0x15c, 2, "SpriteRenderer" }, { 0xffaed0, 0xcc, 2, "MeshRenderer" }, { 0x101e348, 0x64, 2, "MeshFilter" },
+    { 0x11d7360, 0x50, 2, "ParticleSystemRenderer" },
+    { 0xb7fb00, 0x50, 3, "Animator" }, { 0x11f3128, 0x50, 3, "ParticleSystem" }, { 0xc24c84, 0x50, 3, "AudioSource" },
+    { 0xd8a210, 0x5c, 3, "CircleCollider2D" }, { 0xd91d14, 0x7c, 3, "PolygonCollider2D" }, { 0xd99ab8, 0x6c, 3, "BoxCollider2D" },
+    { 0xd9e7b4, 0x70, 3, "EdgeCollider2D" }, { 0xd9fe7c, 0x90, 3, "Rigidbody2D" },
+};
+enum { OH_HEAPS = 4, OH_LABEL = 44 };
+static int g_oh_mode;                           // 1 on, 3 stats
+static uintptr_t g_oh_heap[OH_HEAPS];
+static uint64_t g_oh_n[OH_HEAPS], g_oh_bytes[OH_HEAPS], g_oh_fail;
+static void (*g_oh_init_orig)(uintptr_t);
+static const char *const g_oh_names[OH_HEAPS][3] = {
+    { "UA_OBJ_BEHAVIOURS", "UA_OBJ_BEHAVIOURS_MAIN", "UA_OBJ_BEHAVIOURS_THREAD" },
+    { "UA_OBJ_GAMEOBJECTS", "UA_OBJ_GAMEOBJECTS_MAIN", "UA_OBJ_GAMEOBJECTS_THREAD" },
+    { "UA_OBJ_RENDERERS", "UA_OBJ_RENDERERS_MAIN", "UA_OBJ_RENDERERS_THREAD" },
+    { "UA_OBJ_COMPONENTS", "UA_OBJ_COMPONENTS_MAIN", "UA_OBJ_COMPONENTS_THREAD" },
+};
+
+static void oh_init_hook(uintptr_t mm)
+{
+    g_oh_init_orig(mm);
+    uintptr_t base = g_alloc_base;
+    uintptr_t cache = (uintptr_t)*(uint64_t *)(mm + 0x1620 + 16 * OH_LABEL);       // label 44's allocator
+    int32_t n = *(int32_t *)mm;
+    if (!cache || n < 1 || n + OH_HEAPS > 16) { fprintf(stderr, "[enginerw] UA_OBJ_HEAPS: %d allocators, label 44's %p: off\n", n, (void *)cache); g_oh_mode = 0; return; }
+    uintptr_t bucket = (uintptr_t)*(uint64_t *)(cache + 0x100), valloc = (uintptr_t)*(uint64_t *)(cache + 0x130);
+    if (valloc != mm + 0x2110) { fprintf(stderr, "[enginerw] UA_OBJ_HEAPS: the object heap is not laid out as read: off\n"); g_oh_mode = 0; return; }
+    uint64_t (*param)(uintptr_t, int) = (uint64_t (*)(uintptr_t, int))(base + 0x76d900);
+    void (*heap_ctor)(uintptr_t, uint32_t, int, uintptr_t, uintptr_t, const char *, int) =
+        (void (*)(uintptr_t, uint32_t, int, uintptr_t, uintptr_t, const char *, int))(base + 0x767c24);
+    void (*dual_ctor)(uintptr_t, const char *, uintptr_t, uintptr_t, uintptr_t, uintptr_t) =
+        (void (*)(uintptr_t, const char *, uintptr_t, uintptr_t, uintptr_t, uintptr_t))(base + 0x7663d4);
+    for (int k = 0; k < OH_HEAPS; k++) {
+        void *m1 = NULL, *m2 = NULL, *d = NULL;
+        if (posix_memalign(&m1, 64, 0x1e0) || posix_memalign(&m2, 64, 0x1e0) || posix_memalign(&d, 64, 0x140)) { g_oh_mode = 0; return; }
+        memset(m1, 0, 0x1e0); memset(m2, 0, 0x1e0); memset(d, 0, 0x140);
+        heap_ctor((uintptr_t)m1, (uint32_t)param(base + 0x19ba6d0, 0), 0, 0, 0, g_oh_names[k][1], 0);
+        heap_ctor((uintptr_t)m2, (uint32_t)param(base + 0x19ba6d0, 0), 1, 0, 0, g_oh_names[k][2], 0);
+        dual_ctor((uintptr_t)d, g_oh_names[k][0], bucket, (uintptr_t)m1, (uintptr_t)m2, valloc);
+        int32_t i = *(int32_t *)mm;
+        *(uint64_t *)(mm + 0xb8 + 8 * (uint32_t)i) = (uint64_t)(uintptr_t)m1;
+        *(uint64_t *)(mm + 0x138 + 8 * (uint32_t)i) = (uint64_t)(uintptr_t)m2;
+        *(uint64_t *)(mm + 0x38 + 8 * (uint32_t)i) = (uint64_t)(uintptr_t)d;
+        *(int32_t *)mm = i + 1;
+        g_oh_heap[k] = (uintptr_t)d;
+    }
+    fprintf(stderr, "[enginerw] UA_OBJ_HEAPS: %d heaps made after Unity's %d allocators (block size %llu)\n", OH_HEAPS, n,
+            (unsigned long long)param(base + 0x19ba6d0, 0));
+}
+
+// from alloc_hook: label 44 from a routed Produce -> our heap, else 0
+static void *oh_alloc(uint32_t caller, uint32_t lab, size_t size, size_t align)
+{
+    if (lab != OH_LABEL || !g_oh_heap[0]) return NULL;
+    int heap = -1;
+    for (size_t i = 0; i < sizeof g_oh_produce / sizeof *g_oh_produce; i++)
+        if (caller - g_oh_produce[i].off < g_oh_produce[i].size) { heap = g_oh_produce[i].heap; break; }
+    if (heap < 0) return NULL;
+    // Unity's rounding (MemoryManager::Allocate): size at least 1, alignment ((align - 1) | 15) + 1
+    size_t sz = size > 1 ? size : 1, al = ((align - 1) | 15) + 1;
+    uintptr_t a = g_oh_heap[heap];
+    void *(*fn)(uintptr_t, size_t, int) = (void *(*)(uintptr_t, size_t, int))*(uint64_t *)(*(uint64_t *)a + 0x10);
+    void *p = fn(a, sz, (int)al);
+    if (g_oh_mode == 3) {
+        if (p) { __atomic_add_fetch(&g_oh_n[heap], 1, __ATOMIC_RELAXED); __atomic_add_fetch(&g_oh_bytes[heap], sz, __ATOMIC_RELAXED); }
+        else __atomic_add_fetch(&g_oh_fail, 1, __ATOMIC_RELAXED);
+    }
+    return p;
+}
+static void oh_report(void)
+{
+    if (g_oh_mode != 3) return;
+    fprintf(stderr, "[enginerw] UA_OBJ_HEAPS stats: behaviours %llu (%llu B), GameObjects+Transforms %llu (%llu B), renderers %llu (%llu B), "
+            "components %llu (%llu B), refused %llu\n",
+            (unsigned long long)g_oh_n[0], (unsigned long long)g_oh_bytes[0], (unsigned long long)g_oh_n[1], (unsigned long long)g_oh_bytes[1],
+            (unsigned long long)g_oh_n[2], (unsigned long long)g_oh_bytes[2], (unsigned long long)g_oh_n[3], (unsigned long long)g_oh_bytes[3],
+            (unsigned long long)g_oh_fail);
+}
 static void *alloc_hook(uintptr_t mm, size_t size, size_t align, uint64_t label, uint32_t opts, const char *file, int line)
 {
     uintptr_t ra = (uintptr_t)__builtin_return_address(0);
     uint32_t caller = ra >= g_alloc_base && ra < g_alloc_base + g_alloc_size ? (uint32_t)(ra - g_alloc_base) : 0;
     uint32_t lab = (uint32_t)(label & 0xffff);
+    if (g_oh_mode) { void *p = oh_alloc(caller, lab, size, align); if (p) return p; }
+    if (g_alloc_secs <= 0) return g_alloc_orig(mm, size, align, label, opts, file, line);
     uint32_t h = (lab * 0x9e3779b1u ^ caller * 0x85ebca6bu) & (AS_SLOTS - 1);
     pthread_mutex_lock(&g_as_lock);
     g_as_mm = mm;
@@ -748,15 +861,21 @@ static void alloc_report(void)
 }
 static void alloc_match(uintptr_t base, size_t size)
 {
-    const char *v = getenv("UA_ALLOC_STATS");
-    if (!v || !*v || !strcmp(v, "0")) return;
-    g_alloc_secs = atof(v) > 0 ? atof(v) : 10;
-    if (!unityhooks_matches(&g_alloc_row, base, size)) { g_alloc_secs = 0; fprintf(stderr, "[enginerw] UA_ALLOC_STATS: not the code read; off\n"); return; }
+    const char *v = getenv("UA_ALLOC_STATS"), *o = getenv("UA_OBJ_HEAPS");
+    if (v && *v && strcmp(v, "0")) g_alloc_secs = atof(v) > 0 ? atof(v) : 10;
+    if (o && *o && strcmp(o, "0")) g_oh_mode = !strcmp(o, "stats") ? 3 : 1;
+    if (g_alloc_secs <= 0 && !g_oh_mode) return;
+    int ok = unityhooks_matches(&g_alloc_row, base, size);
+    for (size_t i = 0; g_oh_mode && i < sizeof g_oh_rows / sizeof *g_oh_rows; i++) ok = ok && unityhooks_matches(&g_oh_rows[i], base, size);
+    if (!ok) { g_alloc_secs = 0; g_oh_mode = 0; fprintf(stderr, "[enginerw] UA_ALLOC_STATS / UA_OBJ_HEAPS: not the code read; off\n"); return; }
     g_alloc_base = base; g_alloc_size = size;
 }
 static void alloc_patch(uintptr_t base)
 {
-    if (g_alloc_secs <= 0) return;
+    if (g_oh_mode && unityhooks_hook(base + g_oh_rows[0].off, ISA_A64, (void *)oh_init_hook, (void **)&g_oh_init_orig) != 0) {
+        fprintf(stderr, "[enginerw] UA_OBJ_HEAPS: hook failed\n"); g_oh_mode = 0;
+    }
+    if (g_alloc_secs <= 0 && !g_oh_mode) return;
     if (unityhooks_hook(base + g_alloc_row.off, ISA_A64, (void *)alloc_hook, (void **)&g_alloc_orig) != 0) {
         fprintf(stderr, "[enginerw] UA_ALLOC_STATS: hook failed\n"); g_alloc_secs = 0;
     }
@@ -827,7 +946,7 @@ void enginerw_frame(void)
 #if defined(__aarch64__)
     static unsigned long frames;
     static struct timespec t0;
-    if (g_count_secs <= 0 && !g_anchor_mode && !g_cull_mode && !g_dpw_mode && g_alloc_secs <= 0) return;
+    if (g_count_secs <= 0 && !g_anchor_mode && !g_cull_mode && !g_dpw_mode && g_alloc_secs <= 0 && !g_oh_mode) return;
     double secs = g_count_secs > 0 ? g_count_secs : 5;
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -840,6 +959,7 @@ void enginerw_frame(void)
     cull_report();
     dpw_report(nf);
     if (g_alloc_secs > 0) alloc_report();
+    oh_report();
     if (g_count_secs <= 0) { t0 = t; f0 = frames; return; }
     fprintf(stderr, "[enginerw] calls a frame over %lu frames (%.1f fps):", nf, (double)nf / dt);
     for (size_t i = 0; i < NCOUNT; i++) {

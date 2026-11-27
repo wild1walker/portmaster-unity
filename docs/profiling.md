@@ -1825,8 +1825,22 @@ are already apart from data, but within the object heap they lie in creation ord
 Transform and components, not a pass's objects next to each other (all MonoBehaviours, all SpriteRenderers, all
 Animators). A per-kind heap would be routed by the caller (`ProduceHelper<T>::Produce` is one function a type) and
 would need an allocator Unity's `GetAllocatorContainingPtr` knows (Unity's `BaseAllocator` interface, registered);
-not built yet. What it would change is where objects lie, so anything Unity orders by address (hash sets keyed by
-pointers, sorts by pointer) could change order: lockstep and glreplay decide.
+built as `UA_OBJ_HEAPS` (an experiment): four heaps of Unity's own `DualThreadAllocator<DynamicHeapAllocator>` type,
+made and registered as Unity makes its CACHEOBJECTS heap, each `Produce<T>`'s allocation routed by kind (behaviours;
+GameObjects and Transforms; renderers; Animators, particle systems, audio sources and 2D physics); frees find the
+heap by the pointer. King's Pass: 39,785 objects (12.3 MB) made in them, the game runs to the end of the record;
+A against B in one hold (schedstat, `hwcount -g data,l2` 25 s from frame 1,800):
+
+| run | UnityMain ms a frame | `ld_dep_stall` / cycles | L2 refills / 1000 cycles | L2 refills / 1000 instructions |
+|---|---|---|---|---|
+| off | 17.28 | 56.7 % | 2.911 | 19.43 |
+| `UA_OBJ_HEAPS=1` | 17.31 | 57.0 % | 2.908 | 19.36 |
+
+No change: the lines a frame fetches are not fewer when each kind's objects lie together. A pass touches one or two
+lines of each object it visits whatever its neighbours are, and what it visits a frame (about 42,000 lines) is more
+than the shared L2 keeps between frames with the render thread, the job worker, FMOD's mixer and Mali's thread in
+it too. Because nothing was gained, its exactness (anything Unity orders by address) was not taken further; it stays
+an experiment, off.
 
 ### Unity 2017.4's job workers: exact, and per game (2026-11-27)
 
