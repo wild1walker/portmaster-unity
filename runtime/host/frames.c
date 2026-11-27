@@ -13,6 +13,12 @@
 //                     not). The frame is read in the swap; the file is written by a thread of its
 //                     own ("[frames] screenshot <path>" once it is), so an SD card's slow write is
 //                     not a hitch of the game's
+//   UA_FRAME_HASH=<file>  (a check, off by default) every presented frame read back as a screenshot is (the
+//                     same rectangle, before the keyboard and cursor) and hashed, FNV-1a 64 over its RGBA bytes:
+//                     one line "<frame> <hash>" a frame. Two runs of one lockstep record (docs/lockstep.md) then
+//                     compare picture by picture (`diff`). UA_FRAME_HASH_FROM=<n>: from presented frame <n> on;
+//                     UA_FRAME_HASH_SHOTS=<f>,<f>...: those frames also saved as shot-<n>.ppm. The readback waits
+//                     for the GPU: never time a run with it. Needs the frame on this thread (not UA_GL_REC=auto/thread)
 #define _GNU_SOURCE
 #include "glprobe.h"
 #include "glpresent.h"
@@ -98,7 +104,7 @@ static void *shot_write(void *arg)
     return NULL;
 }
 
-static void screenshot(void)
+static int gl_funcs(void)
 {
     if (!gl_ReadPixels)
     {
@@ -112,7 +118,13 @@ static void screenshot(void)
         }
     }
     if (!gl_ReadPixels || !gl_GetIntegerv || !gl_BindFramebuffer || !gl_BindBuffer || !gl_PixelStorei)
-    { fprintf(stderr, "[frames] screenshot: no GLES functions\n"); return; }
+    { fprintf(stderr, "[frames] screenshot: no GLES functions\n"); return 0; }
+    return 1;
+}
+
+static void screenshot(void)
+{
+    if (!gl_funcs()) return;
     int x0 = 0, y0 = 0, w = g_width, h = g_height, rfb = 0, pbo = 0, align = 4;
     display_frame_rect(&x0, &y0, &w, &h);
     gl_GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
@@ -167,6 +179,57 @@ static volatile unsigned long g_presented;
 unsigned long frames_presented(void) { return g_presented; }
 double frames_t_start(void) { return g_t_start; }
 
+// --- UA_FRAME_HASH
+static FILE *g_fh;
+static unsigned long g_fh_from;
+static char g_fh_shots[512];
+static int frame_hash_init(void)
+{
+    static int st = -1;                     // -1 not read, 0 off, 1 on
+    if (st >= 0) return st;
+    const char *p = getenv("UA_FRAME_HASH");
+    st = 0;
+    if (!p || !*p) return 0;
+    if (!(g_fh = fopen(p, "w"))) { fprintf(stderr, "[frames] UA_FRAME_HASH: cannot write %s\n", p); return 0; }
+    const char *f = getenv("UA_FRAME_HASH_FROM"), *sh = getenv("UA_FRAME_HASH_SHOTS");
+    g_fh_from = f ? strtoul(f, NULL, 10) : 0;
+    if (sh) snprintf(g_fh_shots, sizeof g_fh_shots, ",%s,", sh);
+    fprintf(stderr, "[frames] UA_FRAME_HASH: every frame's picture hashed to %s from frame %lu\n", p, g_fh_from);
+    return st = 1;
+}
+static int frame_hash_shot(unsigned long frame)
+{
+    char k[32];
+    snprintf(k, sizeof k, ",%lu,", frame);
+    return g_fh_shots[0] && strstr(g_fh_shots, k) != NULL;
+}
+static int gl_funcs(void);
+static void frame_hash(unsigned long frame)
+{
+    if (!gl_funcs()) return;
+    int x0 = 0, y0 = 0, w = g_width, h = g_height, rfb = 0, pbo = 0, align = 4;
+    display_frame_rect(&x0, &y0, &w, &h);
+    static unsigned char *px;
+    static size_t cap;
+    size_t need = (size_t)w * h * 4;
+    if (need > cap) { free(px); px = malloc(need); cap = px ? need : 0; }
+    if (!px) return;
+    gl_GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+    gl_GetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
+    gl_GetIntegerv(GL_PACK_ALIGNMENT, &align);
+    gl_BindFramebuffer(GL_READ_FRAMEBUFFER, glpresent_fb0());
+    gl_BindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    gl_PixelStorei(GL_PACK_ALIGNMENT, 4);
+    gl_ReadPixels(x0, y0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    gl_PixelStorei(GL_PACK_ALIGNMENT, align);
+    gl_BindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+    gl_BindFramebuffer(GL_READ_FRAMEBUFFER, rfb);
+    uint64_t hv = 0xcbf29ce484222325ull;
+    for (size_t i = 0; i < need; i++) { hv ^= px[i]; hv *= 0x100000001b3ull; }
+    fprintf(g_fh, "%lu %016llx\n", frame, (unsigned long long)hv);
+    if (frame % 60 == 0) fflush(g_fh);
+}
+
 static void on_swap(void *ctx)
 {
     (void)ctx;
@@ -205,6 +268,10 @@ static void on_swap(void *ctx)
     if (osk_first) osk_draw();                  // the on-screen keyboard (nothing unless the game opened its own)
     int cursor = !osk_active();                 // no cursor while the keyboard has the pad
     if (cursor && cursor_first) pointer_draw();
+    if (frame_hash_init() && g_presented >= g_fh_from) {
+        frame_hash(g_presented);
+        if (frame_hash_shot(g_presented)) shot = 1;
+    }
     if (shot) screenshot();
     if (!osk_first) osk_draw();
     if (cursor && !cursor_first) pointer_draw();          // UA_POINTER's cursor (nothing when off)

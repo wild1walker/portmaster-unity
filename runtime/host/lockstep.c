@@ -28,6 +28,9 @@
 //   UA_LOCKSTEP_ICALLS=0        transforms and enabled read through mono_runtime_invoke only
 //   UA_LOCKSTEP_IGNORE=<class>[.<field>][,...]  fields (or all of a class's own fields) left out of the hash: what a
 //                               game keeps of the sound's clock
+//   UA_LOCKSTEP_FREEZE=<f>      a check's aid that CHANGES the game: from frame <f> on Time.timeScale = 0 every frame and
+//                               the virtual clocks stay at frame <f>, so the game's picture stands still while Unity
+//                               still runs every frame's work (a change that alters a picture shows as a new one)
 //   UA_LOCKSTEP_NUDGE=<class>.<field>@<frame>[+<delta>]   a test aid that CHANGES the game: after frame
 //                               <frame>, <delta> (default 1) added to that number field of every script of
 //                               that class: the checker must name it
@@ -77,7 +80,7 @@ void android_sles_pace(long long frames, int fps);
 enum { OFF, M_RECORD, M_REPLAY, M_HASH };
 static int g_mode, g_cfg;
 static char g_in_path[512], g_hash_path[512];
-static long g_frames_max, g_dump[8];
+static long g_frames_max, g_dump[8], g_freeze;
 static int g_ndump, g_fps = 60, g_seed = 1, g_depth = 2, g_elems = 32, g_settle_ms = 5000, g_clock = 1;
 static char g_nudge_class[128], g_nudge_field[128], g_ignore[1024];
 static long g_nudge_frame = -1;
@@ -95,7 +98,7 @@ static void cfg(void)
     else { fprintf(stderr, "[lockstep] UA_LOCKSTEP=%s: not record:<file>, replay:<file> or hash: off\n", e); return; }
     if ((g_mode == M_RECORD || g_mode == M_REPLAY) && !g_in_path[0]) { fprintf(stderr, "[lockstep] no input file: off\n"); g_mode = OFF; return; }
 #define NUM(var, name, lo) if ((e = getenv(name)) && *e) { long v = atol(e); if (v >= lo) var = v; }
-    NUM(g_frames_max, "UA_LOCKSTEP_FRAMES", 1); NUM(g_fps, "UA_LOCKSTEP_FPS", 1); NUM(g_depth, "UA_LOCKSTEP_DEPTH", 0);
+    NUM(g_frames_max, "UA_LOCKSTEP_FRAMES", 1); NUM(g_freeze, "UA_LOCKSTEP_FREEZE", 1); NUM(g_fps, "UA_LOCKSTEP_FPS", 1); NUM(g_depth, "UA_LOCKSTEP_DEPTH", 0);
     NUM(g_elems, "UA_LOCKSTEP_ELEMS", 0); NUM(g_settle_ms, "UA_LOCKSTEP_SETTLE", 0);
 #undef NUM
     if ((e = getenv("UA_LOCKSTEP_SEED")) && *e) g_seed = atoi(e);
@@ -124,9 +127,14 @@ static int64_t g_epoch_unix = 1767225600;   // 2026-01-01 UTC; a record keeps it
 // (no initial values: the loader's thread-local block must stay as so_loader.h says)
 static __thread long t_frame1;   // the frame + 1 the count below is of
 static __thread long t_calls;
-static int64_t virt_us(void)
+static long clock_frame(void)       // the frame the virtual clocks read (UA_LOCKSTEP_FREEZE: held there)
 {
     long f = __atomic_load_n(&g_frame, __ATOMIC_ACQUIRE);
+    return g_freeze && f > g_freeze ? g_freeze : f;
+}
+static int64_t virt_us(void)
+{
+    long f = clock_frame();
     if (t_frame1 != f + 1) { t_frame1 = f + 1; t_calls = 0; }
     // the frame's time for its first 2000 reads on a thread (so it does not depend on how many reads a frame's work
     // made: a loop timing a slice of work sees none pass), then 1 us more for each read (a loop waiting for the
@@ -143,9 +151,9 @@ static int64_t w_tickcount64(void) { g_clock_reads[3]++; return virt_us() / 1000
 static int64_t w_timestamp(void) { g_clock_reads[4]++; return virt_us() * 10; }
 // Time.unscaledTime / unscaledDeltaTime: Unity counts them from its real start and its first frames' real lengths
 // (6000.0 keeps the capture step only from its second frame on): from the frame count instead
-static SO_ABI float w_unscaled(void) { return (float)((double)__atomic_load_n(&g_frame, __ATOMIC_ACQUIRE) * g_step_us / 1e6); }
-static SO_ABI double w_unscaled_d(void) { return (double)__atomic_load_n(&g_frame, __ATOMIC_ACQUIRE) * g_step_us / 1e6; }
-static SO_ABI float w_unscaled_dt(void) { return (float)(g_step_us / 1e6); }
+static SO_ABI float w_unscaled(void) { return (float)((double)clock_frame() * g_step_us / 1e6); }
+static SO_ABI double w_unscaled_d(void) { return (double)clock_frame() * g_step_us / 1e6; }
+static SO_ABI float w_unscaled_dt(void) { return g_freeze && __atomic_load_n(&g_frame, __ATOMIC_ACQUIRE) > g_freeze ? 0.f : (float)(g_step_us / 1e6); }
 static int64_t w_filetime(void) { g_clock_reads[5]++; return (g_epoch_unix + 11644473600LL) * 10000000LL + virt_us() * 10; }
 static int64_t g_base_ns;          // the real monotonic time lockstep_init ran at: the virtual clocks' zero
 // the input events' times (getEventTime: Android's uptime, the monotonic clock in ms) on the same virtual clock as
@@ -1166,6 +1174,13 @@ void lockstep_frame(void)
     long frame = __atomic_add_fetch(&g_frame, 1, __ATOMIC_ACQ_REL);
     if (!g_started && mono_ready() && engine_ready()) { g_started = 1; start_clock(frame); }
     else if (g_started) keep_clock(frame);
+    if (g_freeze && frame >= g_freeze && g_started && k_time) {
+        static MonoMethod *set_ts;
+        if (!set_ts) set_ts = M.method_from_name(k_time, "set_timeScale", 1);
+        float z = 0.f; void *args[1] = { &z }; MonoObject *exc = NULL;
+        if (set_ts) M.invoke(set_ts, NULL, args, &exc);
+        if (frame == g_freeze) fprintf(stderr, "[lockstep] frame %ld: frozen (Time.timeScale 0, the clocks held)%s\n", frame, set_ts ? "" : ": no Time.timeScale");
+    }
     if (g_hash && g_started) hash_frame(frame);
     int n = give_inputs(frame);
     if (n && g_hash) fprintf(g_hash, "I %ld %d\n", frame, n);

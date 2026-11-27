@@ -61,6 +61,7 @@ differences, or the game is not deterministic under the checker and nothing it s
 | `UA_LOCKSTEP_UNITY_CLOCK=0` | leave Unity's own monotonic clock alone |
 | `UA_LOCKSTEP_AUDIO=0` | the silent sound output on the clock again, not paced by frames |
 | `UA_LOCKSTEP_LOADS=0` | scene loads not held to the frame |
+| `UA_LOCKSTEP_FREEZE=<frame>` | a check's aid that changes the game: from `<frame>` on `Time.timeScale = 0` every frame and the virtual clocks (and the wrapped unscaled getters) held at that frame, so the picture stands still while Unity still culls, sorts, batches and draws every frame: with `UA_FRAME_HASH` (runtime.md) a change switched on and off inside one run (`UA_JOB_SPLIT`) shows as a picture that changes at the switches. Stop the inputs before it (a record cut at that frame, keys released) |
 | `UA_LOCKSTEP_NUDGE=<class>.<field>@<frame>[+<delta>]` | a test aid that changes the game: `<delta>` added to that number field of every script of the class after `<frame>` |
 
 ## What makes a replay the same

@@ -33,6 +33,8 @@
 //                        cores less one: 3 on the four-core handhelds); 2017.x has no -job-worker-count switch
 //   UA_JOB_SLEEP=1       Unity 2017.x's render thread sleeps in WaitForJobGroup when there is no job to help with,
 //                        as the main thread does, instead of spinning (unityjobs.c)
+//   UA_JOB_SPLIT=<a>[,<b>...][:<frames>]  (a check) Unity 2017.x's job split functions answer as if the queue had <a>
+//                        workers, then <b>, ... in turn every <frames> frames (1); the workers stay as they are
 //   UA_UNITY_HOOKS=0     no hook at all (the default without UA_GFX_JOBS, UA_GLES_POOL or UA_FAST_VERTS)
 //
 // How a function is found. Unity publishes symbol files for its Android players (`pmu player
@@ -366,9 +368,104 @@ static void job_workers_on_load(uintptr_t base, size_t size)
         fprintf(stderr, "[unityhooks] %s: hook failed; the job queue as Unity sets it\n", r->func);
 }
 
+// --- UA_JOB_SPLIT (a check): the functions every job that splits its work by the worker count asks (2017.4: culling,
+// the render queue's extraction, lights and shadow casters, culling groups, transform change dispatch, skinned mesh
+// bounds, UI geometry, tilemap bounds, physics poses, dynamic batches' vertex budget), replaced by ones that answer for
+// another count: GetJobQueueThreadCount() returns it; CalculateJobCountWithMinIndicesPerJob(n, m) is min(2t + 2,
+// ceil(n / m), 16), 1 when t is 0; ...MaxWorkerThreads(n, m) that, at least 1, at most t (read from both players). The
+// queue's workers and the scheduler's batching (JobBatchDispatcher reads the queue itself) stay as they are. With the
+// game's clock stopped (UA_LOCKSTEP_FREEZE) a split that changed what a job computes changes the picture at a switch
+static const struct row g_split_get[] = {
+    { "2017.4.27f1 arm64-v8a", "JobSystem::GetJobQueueThreadCount", 0x6ef5ac, 0x18, ISA_A64, 0x582b473f026d9d9dull },
+    { "2017.4.40f1 arm64-v8a", "JobSystem::GetJobQueueThreadCount", 0x6ef248, 0x18, ISA_A64, 0x582b473f026d9d9dull },
+};
+static const struct row g_split_calc[] = {
+    { "2017.4.27f1 arm64-v8a", "CalculateJobCountWithMinIndicesPerJob", 0x6ef550, 0x5c, ISA_A64, 0xf9a5c68cf6196f6aull },
+    { "2017.4.40f1 arm64-v8a", "CalculateJobCountWithMinIndicesPerJob", 0x6ef1ec, 0x5c, ISA_A64, 0xf9a5c68cf6196f6aull },
+};
+static const struct row g_split_calcmax[] = {
+    { "2017.4.27f1 arm64-v8a", "CalculateJobCountWithMinIndicesPerJobMaxWorkerThreads", 0x6ef5c4, 0x6c, ISA_A64, 0xc8f457322aae881full },
+    { "2017.4.40f1 arm64-v8a", "CalculateJobCountWithMinIndicesPerJobMaxWorkerThreads", 0x6ef260, 0x6c, ISA_A64, 0xc8f457322aae881full },
+};
+static int g_split_t[16], g_split_n, g_split_every = 1, g_split_cur;
+static unsigned long g_split_calls[3], g_split_other[3];     // calls; answers another count would have changed
+static int split_t(void) { return __atomic_load_n(&g_split_cur, __ATOMIC_RELAXED); }
+static int calc_for(int t, int n, int m)
+{
+    if (!t) return 1;
+    int r = (n + m - 1) / m;
+    if (2 * t + 2 < r) r = 2 * t + 2;
+    return r > 16 ? 16 : r;
+}
+static int calcmax_for(int t, int n, int m)
+{
+    int r = calc_for(t, n, m);
+    if (r < 1) r = 1;
+    return r < t ? r : t;
+}
+// (counted: whether an answer for the list's other counts would have been another number)
+static int split_differs(int (*f)(int, int, int), int n, int m, int r)
+{
+    for (int i = 0; i < g_split_n; i++) if (f(g_split_t[i], n, m) != r) return 1;
+    return 0;
+}
+static int split_get(void)
+{
+    __atomic_add_fetch(&g_split_calls[0], 1, __ATOMIC_RELAXED);
+    if (g_split_n > 1) __atomic_add_fetch(&g_split_other[0], 1, __ATOMIC_RELAXED);
+    return split_t();
+}
+static int split_calc(int n, int m)
+{
+    int t = split_t(), r = calc_for(t, n, m);
+    __atomic_add_fetch(&g_split_calls[1], 1, __ATOMIC_RELAXED);
+    if (split_differs(calc_for, n, m, r)) __atomic_add_fetch(&g_split_other[1], 1, __ATOMIC_RELAXED);
+    return r;
+}
+static int split_calcmax(int n, int m)
+{
+    int t = split_t(), r = calcmax_for(t, n, m);
+    __atomic_add_fetch(&g_split_calls[2], 1, __ATOMIC_RELAXED);
+    if (split_differs(calcmax_for, n, m, r)) __atomic_add_fetch(&g_split_other[2], 1, __ATOMIC_RELAXED);
+    return r;
+}
+static void job_split_on_load(uintptr_t base, size_t size)
+{
+    const char *v = getenv("UA_JOB_SPLIT");
+    if (!v || !*v) return;
+    char buf[128]; snprintf(buf, sizeof buf, "%s", v);
+    char *colon = strchr(buf, ':');
+    if (colon) { *colon = 0; g_split_every = atoi(colon + 1) > 0 ? atoi(colon + 1) : 1; }
+    for (char *s = strtok(buf, ","); s && g_split_n < 16; s = strtok(NULL, ","))
+        if (atoi(s) >= 1 && atoi(s) <= 128) g_split_t[g_split_n++] = atoi(s);
+    if (!g_split_n) { fprintf(stderr, "[unityhooks] UA_JOB_SPLIT=%s: counts 1 - 128; nothing changed\n", v); return; }
+    const struct row *a = find_row(g_split_get, 2, base, size), *b = find_row(g_split_calc, 2, base, size),
+                     *c = find_row(g_split_calcmax, 2, base, size);
+    if (!a || !b || !c) { fprintf(stderr, "[unityhooks] UA_JOB_SPLIT: this libunity.so's split functions were not read; nothing changed\n"); return; }
+    g_split_cur = g_split_t[0];
+    if (unityhooks_jump(base + a->off, a->isa, (void *)split_get) || unityhooks_jump(base + b->off, b->isa, (void *)split_calc)
+        || unityhooks_jump(base + c->off, c->isa, (void *)split_calcmax))
+        fprintf(stderr, "[unityhooks] UA_JOB_SPLIT: a replacement failed (the split may be mixed)\n");
+    else fprintf(stderr, "[unityhooks] UA_JOB_SPLIT: jobs split as for %d worker(s)%s, every %d frames in turn (%s)\n",
+                 g_split_t[0], g_split_n > 1 ? " and others" : "", g_split_every, a->unity);
+}
+static void job_split_frame(void)
+{
+    static unsigned long f;
+    if (g_split_n < 2) return;
+    f++;
+    if (f % 600 == 0)
+        fprintf(stderr, "[unityhooks] UA_JOB_SPLIT: frame %lu: GetJobQueueThreadCount %lu calls, CalculateJobCount... %lu (%lu would "
+                "split otherwise for another count), ...MaxWorkerThreads %lu (%lu)\n", f, g_split_calls[0], g_split_calls[1],
+                g_split_other[1], g_split_calls[2], g_split_other[2]);
+    int t = g_split_t[(f / (unsigned long)g_split_every) % (unsigned long)g_split_n];
+    if (t != g_split_cur) __atomic_store_n(&g_split_cur, t, __ATOMIC_RELAXED);
+}
+
 void unityhooks_frame(void)
 {
     static unsigned long frames;
+    job_split_frame();                          // UA_JOB_SPLIT
     unitybeh_frame();                           // UA_BEH_STATS
     unityscripts_frame();                       // UA_SCRIPT_FIND
     nativebeh_frame();                          // UA_NATIVE_BEH, UA_NATIVE_BEH_STATS
@@ -394,6 +491,7 @@ void unityhooks_on_load(so_module *m)
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
     job_workers_on_load(base, size);            // UA_JOB_WORKERS
     unityjobs_on_load(base, size);              // UA_JOB_SLEEP (unityjobs.c)
+    job_split_on_load(base, size);              // UA_JOB_SPLIT
     unitylayers_on_load(base, size);            // UaHost::LayersInScene (unitylayers.c)
     fmodasync_on_load(base, size);              // UA_FMOD_ASYNC, UA_FMOD_COUNT (fmodasync.c)
     nativebeh_on_load(base, size);              // UA_NATIVE_BEH (nativebeh.c): before UA_PREFETCH, whose `beh` sites it replaces
