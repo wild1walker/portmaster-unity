@@ -130,6 +130,19 @@ pub const HOOKS: &[(&str, &str, &str)] = &[
     ("__aarch64_ldadd8_relax", "__aarch64_ldadd8_relax", "call"),
     ("__aarch64_ldadd8_acq_rel", "__aarch64_ldadd8_acq_rel", "call"),
     ("__aarch64_cas8_acq_rel", "__aarch64_cas8_acq_rel", "call"),
+    // enginerw.c: UA_ANCHOR_WALK (replaced whole), UA_CULL_STEP1 (replaced whole; IsNodeVisibleFast above),
+    // UA_DIRECTOR_PREWALK (ExecutePrepareFrames: its call of RebuildPrepareFrameJobs in 6000.0, its entry in 2017.4;
+    // the traversal's code its offsets were read from), UA_PREFETCH's anim site on 2017.4 (Animator::BuildJobs' call of
+    // the output's target getter; on 6000.0 the getter is folded into another symbol: unityprefetch.c names its
+    // address), UA_ALLOC_STATS (MemoryManager::Allocate, counted)
+    ("_ZN2UI13RectTransform38UpdateAnchorPositionIfTransformChangedEb", "UI::RectTransform::UpdateAnchorPositionIfTransformChanged", "replace"),
+    ("_ZN15DirectorManager20ExecutePrepareFramesE", "DirectorManager::ExecutePrepareFrames", ""),
+    ("_ZN15DirectorManager24RebuildPrepareFrameJobsEv", "DirectorManager::RebuildPrepareFrameJobs", "call"),
+    ("_ZN14PlayableOutput15PrepareTraverseE", "PlayableOutput::PrepareTraverse", "call"),
+    ("_ZN13PlayableGraph12PrepareFrameE", "PlayableGraph::PrepareFrame", "call"),
+    ("_ZN8Animator9BuildJobsE", "Animator::BuildJobs", "call"),
+    ("_ZNK23AnimationPlayableOutput17GetTargetAnimatorEv", "AnimationPlayableOutput::GetTargetAnimator", "call"),
+    ("_ZN13MemoryManager8AllocateEmm10MemLabelId15AllocateOptionsPKci$", "MemoryManager::Allocate", ""),
 ];
 
 pub fn fnv1a(b: &[u8]) -> u64 {

@@ -1813,6 +1813,21 @@ a pass reads neighbouring memory, less data per object), not earlier fetches of 
 
 All the switches stay opt-in (exact, no cost measurable, no gain on Hollow Knight).
 
+### Where Unity's objects live (`UA_ALLOC_STATS`, King's Pass, 2026-11-27)
+
+The allocations of a run to the middle of King's Pass (4.8 M) by label and caller: nearly all are temporary (label 1,
+the thread's stack allocator `TLSAllocator`; label 2 and 7, `ThreadsafeLinearAllocator`: type trees, vectors and
+strings of the load, the culling and render-loop scratch every frame, about 450 a frame in play). The engine's
+objects come from `ProduceHelper<T>::Produce` (label 44: MonoBehaviours 320 bytes, GameObjects 112 bytes, ...) on an
+allocator of their own (`DualThreadAllocator<DynamicHeapAllocator>`), separate from the default heap that holds
+their data (labels 25, 30, 58, 75, 77, 78: Mecanim's value arrays, keyframes, strings, property sheets). So objects
+are already apart from data, but within the object heap they lie in creation order: a GameObject next to its
+Transform and components, not a pass's objects next to each other (all MonoBehaviours, all SpriteRenderers, all
+Animators). A per-kind heap would be routed by the caller (`ProduceHelper<T>::Produce` is one function a type) and
+would need an allocator Unity's `GetAllocatorContainingPtr` knows (Unity's `BaseAllocator` interface, registered);
+not built yet. What it would change is where objects lie, so anything Unity orders by address (hash sets keyed by
+pointers, sorts by pointer) could change order: lockstep and glreplay decide.
+
 ## Shader programs: compiles, links and Unity's binary cache
 
 ```sh

@@ -17,6 +17,9 @@
 //                            traversal follows (below). =stats: graphs, nodes and levels a frame
 //   UA_PREFETCH=...,anim     (also unityprefetch.c's name) on Unity 2017.4 arm64: Animator::BuildJobs' loop fetches the
 //                            next outputs' Animators ahead, as unityprefetch.c's `anim` stub does on 6000.0 (below)
+//   UA_ALLOC_STATS=<s>       (a measurement) MemoryManager::Allocate's calls counted by memory label and caller (the
+//                            return address in libunity) and printed every <s> seconds: which kinds of objects are made
+//                            where, for an allocator that keeps one kind's objects together (6000.0.61f1 arm64-v8a)
 //
 // Rows as unityhooks.c's: offset, size and FNV-1a of the bytes the function was read from, per Unity build; a
 // function whose bytes differ is left alone. The rows are matched before any other hook changes libunity (the
@@ -27,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <pthread.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -679,6 +683,84 @@ static void anim17_patch(uintptr_t base, size_t size)
     (void)base; (void)size;
 #endif
 }
+
+// --- UA_ALLOC_STATS: MemoryManager::Allocate(this, size, align, MemLabelId (x3; its identifier the low 16 bits),
+// AllocateOptions, file, line), 6000.0.61f1 arm64-v8a
+static const struct row g_alloc_row = { "6000.0.61f1 arm64-v8a", "MemoryManager::Allocate", 0x7697d8, 0x174, ISA_A64, 0x6d3803dbc3d22270ull };
+static void *(*g_alloc_orig)(uintptr_t, size_t, size_t, uint64_t, uint32_t, const char *, int);
+static double g_alloc_secs;
+static uintptr_t g_alloc_base;
+static size_t g_alloc_size;
+enum { AS_SLOTS = 4096 };
+struct as_ent { uint32_t key_label, key_caller; uint64_t n, bytes; };
+static struct as_ent g_as[AS_SLOTS];
+static pthread_mutex_t g_as_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_as_total, g_as_dropped;
+static uintptr_t g_as_mm;                       // the MemoryManager the calls were made on
+
+static void *alloc_hook(uintptr_t mm, size_t size, size_t align, uint64_t label, uint32_t opts, const char *file, int line)
+{
+    uintptr_t ra = (uintptr_t)__builtin_return_address(0);
+    uint32_t caller = ra >= g_alloc_base && ra < g_alloc_base + g_alloc_size ? (uint32_t)(ra - g_alloc_base) : 0;
+    uint32_t lab = (uint32_t)(label & 0xffff);
+    uint32_t h = (lab * 0x9e3779b1u ^ caller * 0x85ebca6bu) & (AS_SLOTS - 1);
+    pthread_mutex_lock(&g_as_lock);
+    g_as_mm = mm;
+    g_as_total++;
+    for (int k = 0; k < 64; k++, h = (h + 1) & (AS_SLOTS - 1)) {
+        struct as_ent *e = &g_as[h];
+        if (!e->n) { e->key_label = lab; e->key_caller = caller; }
+        if (e->key_label == lab && e->key_caller == caller) { e->n++; e->bytes += size; goto done; }
+    }
+    g_as_dropped++;
+done:
+    pthread_mutex_unlock(&g_as_lock);
+    return g_alloc_orig(mm, size, align, label, opts, file, line);
+}
+
+static int as_cmp(const void *a, const void *b)
+{
+    const struct as_ent *x = a, *y = b;
+    return x->n < y->n ? 1 : x->n > y->n ? -1 : 0;
+}
+static void alloc_report(void)
+{
+    static struct as_ent copy[AS_SLOTS];
+    pthread_mutex_lock(&g_as_lock);
+    memcpy(copy, g_as, sizeof copy);
+    uint64_t tot = g_as_total, dr = g_as_dropped;
+    pthread_mutex_unlock(&g_as_lock);
+    qsort(copy, AS_SLOTS, sizeof *copy, as_cmp);
+    fprintf(stderr, "[enginerw] UA_ALLOC_STATS: %llu allocations so far (%llu not in the table); label caller count bytes:\n",
+            (unsigned long long)tot, (unsigned long long)dr);
+    for (int i = 0; i < 60 && copy[i].n; i++)
+    {
+        // and the allocator Unity gives the label (GetAllocator(MemLabelId) at +0x76be1c): its vtable's first two
+        // slots as offsets in libunity, to be named with the symbols
+        uintptr_t (*get)(uintptr_t, uint64_t) = (uintptr_t (*)(uintptr_t, uint64_t))(g_alloc_base + 0x76be1c);
+        uintptr_t al = g_as_mm ? get(g_as_mm, copy[i].key_label) : 0;
+        uint64_t s0 = 0, s1 = 0;
+        if (al) { uintptr_t vt = (uintptr_t)*(uint64_t *)al; s0 = *(uint64_t *)vt - g_alloc_base; s1 = *(uint64_t *)(vt + 16) - g_alloc_base; }
+        fprintf(stderr, "[enginerw] alloc %u +0x%x %llu %llu allocator %p vt +0x%llx +0x%llx\n", copy[i].key_label, copy[i].key_caller,
+                (unsigned long long)copy[i].n, (unsigned long long)copy[i].bytes, (void *)al, (unsigned long long)s0,
+                (unsigned long long)s1);
+    }
+}
+static void alloc_match(uintptr_t base, size_t size)
+{
+    const char *v = getenv("UA_ALLOC_STATS");
+    if (!v || !*v || !strcmp(v, "0")) return;
+    g_alloc_secs = atof(v) > 0 ? atof(v) : 10;
+    if (!unityhooks_matches(&g_alloc_row, base, size)) { g_alloc_secs = 0; fprintf(stderr, "[enginerw] UA_ALLOC_STATS: not the code read; off\n"); return; }
+    g_alloc_base = base; g_alloc_size = size;
+}
+static void alloc_patch(uintptr_t base)
+{
+    if (g_alloc_secs <= 0) return;
+    if (unityhooks_hook(base + g_alloc_row.off, ISA_A64, (void *)alloc_hook, (void **)&g_alloc_orig) != 0) {
+        fprintf(stderr, "[enginerw] UA_ALLOC_STATS: hook failed\n"); g_alloc_secs = 0;
+    }
+}
 #endif
 
 void enginerw_on_load_match(uintptr_t base, size_t size)
@@ -688,6 +770,7 @@ void enginerw_on_load_match(uintptr_t base, size_t size)
     cull_match(base, size);
     dpw_match(base, size);
     anim17_match(base, size);
+    alloc_match(base, size);
     const char *v = getenv("UA_ENGINE_COUNT");
     if (!v || !*v) return;
     g_count_secs = atof(v);
@@ -720,6 +803,7 @@ void enginerw_on_load_patch(uintptr_t base, size_t size)
     cull_patch(base);
     dpw_patch(base, size);
     anim17_patch(base, size);
+    alloc_patch(base);
     for (size_t i = 0; i < NCOUNT; i++) {
         if (!g_matched[i]) continue;
         uint32_t *s = count_stub(&g_calls[i]);
@@ -743,7 +827,7 @@ void enginerw_frame(void)
 #if defined(__aarch64__)
     static unsigned long frames;
     static struct timespec t0;
-    if (g_count_secs <= 0 && !g_anchor_mode && !g_cull_mode && !g_dpw_mode) return;
+    if (g_count_secs <= 0 && !g_anchor_mode && !g_cull_mode && !g_dpw_mode && g_alloc_secs <= 0) return;
     double secs = g_count_secs > 0 ? g_count_secs : 5;
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -755,6 +839,7 @@ void enginerw_frame(void)
     anchor_report(nf);
     cull_report();
     dpw_report(nf);
+    if (g_alloc_secs > 0) alloc_report();
     if (g_count_secs <= 0) { t0 = t; f0 = frames; return; }
     fprintf(stderr, "[enginerw] calls a frame over %lu frames (%.1f fps):", nf, (double)nf / dt);
     for (size_t i = 0; i < NCOUNT; i++) {
