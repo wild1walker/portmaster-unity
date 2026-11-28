@@ -26,6 +26,7 @@
 static _Atomic int g_finishing;
 int up_is_finishing(void) { return g_finishing; }
 const char *so_module_at(const void *addr, uintptr_t *bias) { (void)addr; (void)bias; return NULL; }
+uintptr_t so_relayout_orig(uintptr_t addr) { return addr; }   // (no UA_RELAYOUT copies here)
 // the loader's exidx lookup, for this program and glibc's libraries (32-bit ARM)
 #include <link.h>
 struct xq { uintptr_t pc, exidx; int count; };

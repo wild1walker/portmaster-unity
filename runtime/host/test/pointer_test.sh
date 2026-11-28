@@ -38,7 +38,7 @@ run='set -e
   $CC -O2 -g -Wall -Wextra -Wno-unused-parameter -o $O/test_glrec test/test_glrec.c glrec.c glrec_fg.c glmerge.c $O/rec/libGLESv2.so.2 -ldl -lpthread -lz
   mkdir -p $O/replay
   $CC -O2 -g -Wall -Wextra -shared -fPIC -o $O/replay/libfakereplay.so test/fake_replay_gl.c
-  $CC -O2 -g -Wall -Wextra -o $O/glreplay glreplay.c glreplay_hash.c glrename.c glpass.c -ldl -lz -lpthread
+  $CC -O2 -g -Wall -Wextra -o $O/glreplay glreplay.c glreplay_hash.c glrename.c glpass.c glarena.c -ldl -lz -lpthread
   mkdir -p $O/hash
   $CC -O2 -g -Wall -Wextra -shared -fPIC -o $O/hash/libfakehash.so test/fake_hash_gl.c
   $CC -O2 -g -Wall -Wextra -o $O/glpixdiff glpixdiff.c
