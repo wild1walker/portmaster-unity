@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 mod astc_guide;
 mod benchsum;
+mod census3d;
 mod devmon;
 mod elf;
 mod fontgen;
@@ -35,6 +36,7 @@ fn ok(r: Result<(), String>) -> Result<u8, String> {
 }
 
 const TOOLS: &[(&str, &str, Run)] = &[
+    ("census3d", "what a 3D game's frames are made of, per scene, from its data: census3d <Game_Data> [--json out.json] [--top N] [--bundles REGEX]", census3d::run),
     ("fontgen", "runtime/host/osk_font.h from an X11 PCF font: fontgen <font.pcf[.gz]>", |a| ok(fontgen::run(a))),
     ("glrec-gen", "runtime/host/glrec_gen.h from Khronos' GLES headers: glrec-gen <dir with gl32.h and gl2ext.h>", |a| ok(glrec_gen::run(a))),
     ("profsum", "a UA_PROF recording summed up: profsum <prof-N.txt> [--syms DIR] [--lib FILE] [--thread T] [--top N] ...", profsum::run),

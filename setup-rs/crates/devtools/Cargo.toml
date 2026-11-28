@@ -23,7 +23,8 @@ unityfs = { path = "../unityfs" }
 libc = "0.2"
 convert = { path = "../convert" }
 port = { path = "../port" }
-serde = "1"
+serde = { version = "1", features = ["derive"] }
+androiddata = { path = "../androiddata" }
 # (the player survey's disassembly: tools/re, as the Python's used Capstone)
 capstone = "0.12"
 texcodec = { path = "../texcodec" }
