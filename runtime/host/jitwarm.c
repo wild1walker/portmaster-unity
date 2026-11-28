@@ -38,7 +38,7 @@
 // when compiling it can run none: its class, the class of every static field its IL names (ldsfld,
 // ldsflda, stsfld) and, where the runtime inlines that way, of every AggressiveInlining method it calls,
 // either has no .cctor or has run it already (the runtime's probe: Mono's own MonoVTable flag, see
-// jitwarm_set_probe). Until then the method waits and is tried again every 30 frames, so it is compiled ahead
+// jitwarm_set_probe; the Mono route's own runtime exports mono_unity_class_cctor_ran for it). Until then the method waits and is tried again every 30 frames, so it is compiled ahead
 // once the game itself has used those classes; a static constructor itself is never compiled ahead, and a body
 // the walk cannot read (an opcode it does not know) is left to the game. The warm-up thus runs no managed
 // code: every static constructor runs where the game makes it run, as without the warm-up. Logged:
@@ -680,6 +680,13 @@ static void install(void)
         fprintf(stderr, "[jitwarm] Mono's API for the static constructor rule is missing: off\n");
         g_on = 0;
         return;
+    }
+    // the Mono route's own runtime (tools/mono64, the cctor-ran patch): the vtable's initialized flag, read by Mono
+    // itself (it creates and runs nothing); its inliner runs an AggressiveInlining callee's class constructor
+    // (method-to-ir.c, mono_method_check_inlining), so those callees' classes are checked too
+    if (!g_probe && h) {
+        int (*ran)(void *) = (int (*)(void *))so_dlsym(h, "mono_unity_class_cctor_ran");
+        if (ran) jitwarm_set_probe(ran, JITWARM_INLINE_CCTORS);
     }
     read_list(LIST);
     size_t own_n = g_list_n; long own_stale = g_stale;

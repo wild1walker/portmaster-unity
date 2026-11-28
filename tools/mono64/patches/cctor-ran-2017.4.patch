@@ -1,0 +1,26 @@
+--- a/mono/metadata/object.c
++++ b/mono/metadata/object.c
+@@ -1820,6 +1820,23 @@
+ 	return NULL;
+ }
+ 
++/*
++ * mono_unity_class_cctor_ran: (portmaster-unity, tools/mono64) TRUE when KLASS's static constructor has run in
++ * the current domain (its vtable there exists and is initialized), FALSE otherwise. It creates nothing and runs
++ * nothing: ua_host's JIT warm-up asks it before compiling a method whose compile could run that constructor.
++ */
++MONO_API gboolean
++mono_unity_class_cctor_ran (MonoClass *klass)
++{
++	MonoDomain *domain = mono_domain_get ();
++	MonoVTable *vt;
++
++	if (!klass || !domain)
++		return FALSE;
++	vt = mono_class_try_get_vtable (domain, klass);
++	return vt && vt->initialized && !vt->init_failed;
++}
++
+ static gpointer*
+ alloc_vtable (MonoDomain *domain, size_t vtable_size, size_t imt_table_bytes)
+ {
