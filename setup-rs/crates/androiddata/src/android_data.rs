@@ -238,14 +238,39 @@ pub fn clone(src: &str, dst: &str, allow_hardlink: bool) -> Result<&'static str,
     if lexists(dst) {
         fs::remove_file(dst).map_err(io_at(dst))?;
     }
-    if allow_hardlink && fs::hard_link(src, dst).is_ok() {
-        return Ok("hardlink");
+    if allow_hardlink {
+        if hard_link_followed(src, dst).is_ok() {
+            return Ok("hardlink");
+        }
+        // A failed link can still leave dst: Docker Desktop's shared folders on macOS (setup-rs/tools/pmu.sh)
+        // answer EIO to a link of a symlink after macOS made it, to the file the symlink names. The copy
+        // below would open that file to write: the source itself, cut to nothing (the regression run's
+        // views are symlinks into the corpus).
+        if lexists(dst) {
+            fs::remove_file(dst).map_err(io_at(dst))?;
+        }
     }
     copyfile(src, dst)?;
     if let Ok(m) = fs::metadata(src) {
         let _ = fs::set_permissions(dst, m.permissions());
     }
     Ok("copy")
+}
+
+/// os.link(src, dst): a link to the file a symlink src names (linkat AT_SYMLINK_FOLLOW; std's
+/// hard_link links the symlink itself on Linux).
+fn hard_link_followed(src: &str, dst: &str) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c = |p: &str| CString::new(Path::new(p).as_os_str().as_bytes()).map_err(std::io::Error::other);
+    let (s, d) = (c(src)?, c(dst)?);
+    // SAFETY: two NUL-terminated paths that live across the call.
+    let r = unsafe { libc::linkat(libc::AT_FDCWD, s.as_ptr(), libc::AT_FDCWD, d.as_ptr(), libc::AT_SYMLINK_FOLLOW) };
+    if r == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// shutil.copyfile.
@@ -2456,6 +2481,25 @@ mod tests {
              \t<dllmap dll=\"SDL2\" target=\"libSDL2-2.0.so.0\" os=\"!windows\"/>\n\
              \t<dllmap dll=\"libmono.so.0\" target=\"libmono.so\" os=\"!windows\"/>\n</configuration>\n"
         );
+    }
+
+    /// a symlinked source (the regression run's views): dst is a link to the file it names, as
+    /// os.link gives, not a link to the symlink; a copy leaves the source as it was
+    #[test]
+    fn clone_through_a_symlink() {
+        let t = crate::paths::temp_dir().unwrap();
+        let (real, link) = (py::join(&t, "real.bin"), py::join(&t, "view.bin"));
+        fs::write(&real, b"game bytes").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let d = py::join(&t, "out/a.bin");
+        assert_eq!(clone(&link, &d, true).unwrap(), "hardlink");
+        assert!(!fs::symlink_metadata(&d).unwrap().file_type().is_symlink());
+        assert_eq!(fs::metadata(&real).unwrap().ino(), fs::metadata(&d).unwrap().ino());
+        let c = py::join(&t, "out/b.bin");
+        assert_eq!(clone(&link, &c, false).unwrap(), "copy");
+        assert_eq!(fs::read(&c).unwrap(), b"game bytes");
+        assert_eq!(fs::read(&real).unwrap(), b"game bytes");
+        let _ = fs::remove_dir_all(&t);
     }
 
     /// a port's assembly patch and asmpatch on one assembly: the port's first (on the original), then

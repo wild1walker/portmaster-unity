@@ -343,6 +343,12 @@ fn walk_link(src: &str, root: &str, dst: &str, skip: &[&str]) -> Result<()> {
             util::unlink(&d)?;
         }
         if std::fs::hard_link(&s, &d).is_err() {
+            // (a failed link can still leave d, a link to the file itself: Docker Desktop's shared
+            // folders on macOS answer EIO to a link of a symlink after making it. copy2 would cut
+            // that file, the source, to nothing)
+            if util::lexists(&d) {
+                util::unlink(&d)?;
+            }
             util::copy2(&s, &d)?;
         }
     }

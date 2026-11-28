@@ -90,6 +90,13 @@ the commands run where pmu runs. `crates/port/tests/host.rs` runs requests throu
 (`pmu.sh --serve <dir>`). `pmu slim-donor <apk> [out]` is package's slim_donor by itself (a port's
 own packaging script: Cuphead's).
 
+Docker Desktop's shared folders on macOS answer a hard link of a **symlink** (Linux's `link`, which does
+not follow it) with EIO after macOS has made the link, to the file the symlink names. A fallback copy
+into that path then opens the source itself and cuts it to nothing: on 2026-11-27 the regression run
+(its views are symlinks into the corpus) emptied 156 files of two corpus games that way. android-data
+links with `AT_SYMLINK_FOLLOW` (Python's `os.link`), and every link-else-copy removes whatever a failed
+link left before copying.
+
 The templates, the converter it ships for ports pmu does not cover, `LICENSE` and `THIRD_PARTY.md`
 come from the checkout: `$PMUNITY_REPO`, else the first folder above the program (or the working
 folder) with `setup-rs/templates`. `port new --data <game>` starts from the
