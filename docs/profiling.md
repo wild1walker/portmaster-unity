@@ -742,7 +742,7 @@ tests but has not been benched in a 2017.4 game.)
 core and the render thread 60 %, so the watching has idle cores to spend. A 2.5-minute walk, the steady 220 s
 compared, three A/B rounds in alternating order: off 54.45 / 54.40 / 54.35 fps, `UA_FUTEX_SPIN=50` 55.46 / 55.23 /
 54.72 (+0.7 fps), 400 54.98 (one round). Blasphemous ships 50 on every device; Enter the Gungeon (2017.4) measured
-+0.5 fps with it. So: profile first. `bsem_futex` or `syscall` high in UnityMain's self time and idle workers mean
++0.5 fps with it. On the RG34XX-SP (muOS, H700) the Amanecidas fight, the last 80 s, A B A B: off 52.93 / 52.72, 50 52.99 / 55.12 fps: no cost there. (Blasphemous's "offscreen" cameras are its picture itself: the game camera and the UI camera each draw a 640x360 texture that a third camera puts on the screen.) So: profile first. `bsem_futex` or `syscall` high in UnityMain's self time and idle workers mean
 it pays; cores already busy (Hollow Knight above) mean it costs.
 
 ### Mono's runtime invoke and thread-local reads (Unity 2017.4, `UA_MONO_INVOKE`, `UA_MONO_TLS`)
