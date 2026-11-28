@@ -273,7 +273,7 @@ pub fn stale_build(stale: &mut Vec<String>, what: &str, built: &Path, root: &Pat
 // ---- the components a route's release takes (route.json "package")
 
 fn ua_host_part(ctx: &mut PackCtx, o: &UaOpts, dst: &str, suffix: &str) -> Result<()> {
-    let p = o.ua_host.clone().map(PathBuf::from).unwrap_or_else(|| ctx.runtime.join("runtime/host/out/ua_host"));
+    let p = o.ua_host.clone().map(PathBuf::from).unwrap_or_else(|| ctx.runtime.join("runtime/host/out/arm64/ua_host"));
     if !p.is_file() {
         if o.no_build {
             return Err(exit(format!("{}: build the runtime first (runtime/build.sh)", p.display())));
@@ -282,9 +282,8 @@ fn ua_host_part(ctx: &mut PackCtx, o: &UaOpts, dst: &str, suffix: &str) -> Resul
         ctx.run("building the runtime (runtime/build.sh, Docker)", &mut Command::new(build))?;
     }
     if o.ua_host.is_none() || o.ua_host_default {
-        let arm = ps(&p).contains("/arm64/");
         let mut st = std::mem::take(&mut ctx.stale);
-        stale_build(&mut st, "ua_host", &p, &ctx.runtime, &format!("{}runtime/build.sh", if arm { "ARCH=arm64 " } else { "" }));
+        stale_build(&mut st, "ua_host", &p, &ctx.runtime, "runtime/build.sh");
         ctx.stale = st;
     }
     ctx.add(&p, dst, Some(0o755))?;
@@ -308,11 +307,7 @@ fn ua_host_part(ctx: &mut PackCtx, o: &UaOpts, dst: &str, suffix: &str) -> Resul
     ctx.license_file("LICENSE.libhybris.txt", &hyb)?;
     let ml = match &o.media_licenses {
         Some(m) => PathBuf::from(m),
-        None if o.ua_host.is_some() => {
-            let up3 = p.parent().and_then(Path::parent).and_then(Path::parent).unwrap_or(Path::new("/"));
-            up3.join("media/out/licenses")
-        }
-        None => ctx.runtime.join("runtime/media/out/licenses"),
+        None => ctx.runtime.join("runtime/media/out/arm64/licenses"),
     };
     let mut lic: Vec<String> = match fs::read_dir(&ml) {
         Ok(rd) if ml.is_dir() => rd
@@ -354,21 +349,21 @@ struct UaOpts {
 
 fn ua_host_arm64_part(ctx: &mut PackCtx, opts: &PackOpts, dst: &str, suffix: &str) -> Result<()> {
     let rt = ctx.runtime.join("runtime");
-    let own = given(&opts.ua_host_arm64, None);
+    let own = given(&opts.ua_host_arm64, None).or_else(|| given(&opts.ua_host, None));
     let o = UaOpts {
         ua_host: Some(own.clone().unwrap_or_else(|| ps(&rt.join("host/out/arm64/ua_host")))),
         ua_host_default: own.is_none(),
         media_licenses: Some(
             given(&opts.media_licenses_arm64, None)
-                .or_else(|| if suffix.is_empty() { given(&opts.media_licenses, None) } else { None })
+                .or_else(|| given(&opts.media_licenses, None))
                 .unwrap_or_else(|| ps(&rt.join("media/out/arm64/licenses"))),
         ),
         no_build: opts.no_build,
     };
     if !Path::new(o.ua_host.as_ref().unwrap()).is_file() && !opts.no_build {
         ctx.run(
-            "building the 64-bit runtime (runtime/build.sh, Docker)",
-            Command::new(rt.join("build.sh")).env("ARCH", "arm64"),
+            "building the runtime (runtime/build.sh, Docker)",
+            Command::new("bash").arg(rt.join("build.sh")),
         )?;
     }
     ua_host_part(ctx, &o, dst, suffix)?;
@@ -391,15 +386,6 @@ fn ua_host_arm64_part(ctx: &mut PackCtx, opts: &PackOpts, dst: &str, suffix: &st
 
 fn component(ctx: &mut PackCtx, c: &str, opts: &PackOpts) -> Result<bool> {
     match c {
-        "ua_host" => {
-            let o = UaOpts {
-                ua_host: given(&opts.ua_host, None),
-                ua_host_default: false,
-                media_licenses: given(&opts.media_licenses, None),
-                no_build: opts.no_build,
-            };
-            ua_host_part(ctx, &o, "ua_host", "")?;
-        }
         "ua_host_arm64" => ua_host_arm64_part(ctx, opts, "ua_host", "")?,
         "ua_host64" => ua_host_arm64_part(ctx, opts, "ua_host64", ".ua_host64")?,
         "pmu" => pmu_part(ctx, opts)?,
@@ -415,7 +401,7 @@ fn component(ctx: &mut PackCtx, c: &str, opts: &PackOpts) -> Result<bool> {
 fn is_component(c: &str) -> bool {
     matches!(
         c,
-        "ua_host" | "ua_host_arm64" | "ua_host64" | "pmu" | "asmpatch" | "pmhlslcc" | "pmspirvcross" | "mono64"
+        "ua_host_arm64" | "ua_host64" | "pmu" | "asmpatch" | "pmhlslcc" | "pmspirvcross" | "mono64"
     )
 }
 
@@ -857,7 +843,7 @@ pub fn slim_donor(src: &Path, dst: &Path) -> Result<Vec<String>> {
     Ok(dropped)
 }
 
-pub fn add_donors(ctx: &mut PackCtx, names: &[Val], src: Option<String>, aarch64_only: bool) -> Result<()> {
+pub fn add_donors(ctx: &mut PackCtx, names: &[Val], src: Option<String>) -> Result<()> {
     if names.is_empty() {
         return Ok(());
     }
@@ -897,11 +883,9 @@ pub fn add_donors(ctx: &mut PackCtx, names: &[Val], src: Option<String>, aarch64
     ctx.log(&format!("== donors: {}", names.join(", ")));
     for n in &names {
         let d = ctx.add(Path::new(&pkgzip::py::join(&src, n)), &format!("donor/{n}"), Some(0o644))?;
-        if aarch64_only {
-            let gone = slim_donor(&d, &d)?;
-            if !gone.is_empty() {
-                ctx.log(&format!("== donor/{n}: without its 32-bit player ({} files of lib/; aarch64 only)", gone.len()));
-            }
+        let gone = slim_donor(&d, &d)?;
+        if !gone.is_empty() {
+            ctx.log(&format!("== donor/{n}: without its 32-bit player ({} files of lib/; aarch64 only)", gone.len()));
         }
     }
     ctx.license_text("LICENSE.unity-donor.txt", DONOR_LICENSE)
@@ -1017,11 +1001,10 @@ pub fn package(repo: &Repo, port_src: &str, opts: &PackOpts, log: &mut dyn FnMut
         Some(r) => abspath(Path::new(r)),
         None => repo.root.clone(),
     };
-    let a64 = cfg.dict("port").truthy("aarch64_only");
     let rname = cfg.dict("port").get("route").map_or("None".into(), Val::py_str);
-    if a64 && !AARCH64_ROUTES.contains(&rname.as_str()) {
+    if !AARCH64_ROUTES.contains(&rname.as_str()) {
         return Err(exit(format!(
-            "port.aarch64_only: this port folder was made for the {rname} route (an armhf setup and player): run `port new` again, which takes the mono-arm64 route"
+            "this port folder was made for the {rname} route (an armhf setup and player; armhf was removed, tag last-armhf): run `port new` again, which takes the mono-arm64 route"
         )));
     }
     let (covers, why) = crate::text::pmu_covers(&cfg);
@@ -1078,7 +1061,7 @@ pub fn package(repo: &Repo, port_src: &str, opts: &PackOpts, log: &mut dyn FnMut
     fs::set_permissions(zipdir.join(&launcher), fs::Permissions::from_mode(0o644)).map_err(io_at(zipdir.join(&launcher)))?;
     ctx.add(&port_src.join(&name), ".", None)?;
     let donors = port_donors(&cfg, &route);
-    add_donors(&mut ctx, &donors, given(&opts.donors, Some("DONORS")), a64)?;
+    add_donors(&mut ctx, &donors, given(&opts.donors, Some("DONORS")))?;
     for c in route.list("package") {
         let c = c.py_str();
         let opt = c.ends_with('?');
@@ -1098,16 +1081,16 @@ pub fn package(repo: &Repo, port_src: &str, opts: &PackOpts, log: &mut dyn FnMut
         if !sp.exists() {
             return Err(exit(format!("build.outputs: {} was not made", sp.display())));
         }
-        if a64 && sp.is_file() && elf_machine(&head(&sp, 20)) == Some(EM_ARM) {
-            ctx.log(&format!("build.outputs: {dst} not shipped: armhf, and the port is aarch64 only"));
+        if sp.is_file() && elf_machine(&head(&sp, 20)) == Some(EM_ARM) {
+            ctx.log(&format!("build.outputs: {dst} not shipped: armhf (every release is aarch64 only)"));
             continue;
         }
         let mode = if sp.is_file() && is_program(&head(&sp, 4)) { Some(0o755) } else { None };
         let d = ctx.add(&sp, dst, mode)?;
-        if a64 && d.is_dir() {
+        if d.is_dir() {
             let pd = ctx.port_dir.clone();
             for x in armhf_files(&d, &pd)? {
-                ctx.log(&format!("build.outputs: {dst}: {x} not shipped: armhf, and the port is aarch64 only"));
+                ctx.log(&format!("build.outputs: {dst}: {x} not shipped: armhf (every release is aarch64 only)"));
                 fs::remove_file(pd.join(&x)).map_err(io_at(pd.join(&x)))?;
             }
         }
@@ -1135,16 +1118,11 @@ pub fn package(repo: &Repo, port_src: &str, opts: &PackOpts, log: &mut dyn FnMut
             ctx.add(Path::new(path), shipped, Some(0o644))?;
         }
     }
-    if a64 {
-        let bad = armhf_files(&zipdir, &zipdir)?;
-        if !bad.is_empty() {
-            return Err(exit(format!(
-                "port.aarch64_only: the release would carry armhf (32-bit ARM) files: {}",
-                bad.join(", ")
-            )));
-        }
-        ctx.log("aarch64 only: no armhf file in the release");
+    let bad = armhf_files(&zipdir, &zipdir)?;
+    if !bad.is_empty() {
+        return Err(exit(format!("the release would carry armhf (32-bit ARM) files: {}", bad.join(", "))));
     }
+    ctx.log("aarch64 only: no armhf file in the release");
     let zpath = out.join(format!("{name}.zip"));
     let mut modes = ctx.modes.clone();
     modes.insert(launcher.clone(), 0o644);

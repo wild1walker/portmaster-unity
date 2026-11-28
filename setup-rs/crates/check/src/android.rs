@@ -52,14 +52,14 @@ pub fn check_android(repo: &Repo, mut rep: Dict, inputs: &[String], log: &mut dy
     {
         let td = tempdir()?;
         let managed = join(&td.0, "Managed");
-        // (every ARM player the build has, whatever machine checks it)
+        // (the arm64 player, or a Mono build's armv7 one compiled with IL2CPP for it: player.il2cpp)
         let o = apk::Opts {
-            target: "arm64,armhf".into(),
+            target: "arm64".into(),
             abi: None,
             any_version: false,
             force: false,
             dry_run: true,
-            il2cpp: false,
+            il2cpp: true,
             il2cpp_opts: Default::default(),
             managed_to: Some(managed.clone()),
         };
@@ -88,20 +88,17 @@ pub fn check_android(repo: &Repo, mut rep: Dict, inputs: &[String], log: &mut dy
         let abis = str_list(info, "abis");
         let mono = info.str("backend") == "mono";
         if abis == ["armeabi-v7a"] {
-            needs.push("armeabi-v7a only: a system with a 32-bit (armhf) userland (ua_host); not 64-bit-only ones (ROCKNIX, ...)".into());
+            needs.push("armeabi-v7a only: its 32-bit player is not run (armhf was removed, tag last-armhf)".into());
             if mono {
                 notes.push(match apk::il2cpp::il2cpp_refusal(&v) {
-                    Some(why) => format!("64-bit-only systems: {why}"),
-                    None => "64-bit-only systems too: player.il2cpp = true has the setup compile the build's code with Unity's \
-                             IL2CPP on such a handheld, for Unity's arm64 IL2CPP player (`pmu apk --il2cpp --on-device`: one to \
-                             a few hours, about 1.6 GB free, Wi-Fi; the release then ships ua_host64 too)".to_string(),
+                    Some(why) => format!("player.il2cpp: {why}"),
+                    None => "player.il2cpp = true: the setup compiles the build's code with Unity's IL2CPP on the handheld, \
+                             for Unity's arm64 IL2CPP player (`pmu apk --il2cpp --on-device`: one to a few hours, about 1.6 GB \
+                             free, Wi-Fi; the release ships ua_host64)".to_string(),
                 });
             }
-        } else if abis == ["arm64-v8a"] {
-            needs.push("arm64-v8a only: the 64-bit ua_host (ua_host64), on any aarch64 system".into());
         } else {
-            needs.push("armeabi-v7a (ua_host) where the system has a 32-bit userland, arm64-v8a (ua_host64) on 64-bit-only systems: \
-                        the release ships both".into());
+            needs.push("arm64-v8a: the 64-bit ua_host (ua_host64), on any aarch64 system".into());
         }
         needs.push("nothing converted or downloaded: the setup installs the player's APK and OBBs (a few minutes; about the build's \
                     size free on the card)".into());

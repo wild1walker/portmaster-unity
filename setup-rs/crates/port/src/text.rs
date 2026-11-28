@@ -20,8 +20,8 @@ pub const TEST_RESOLUTIONS: [&str; 4] = [
 
 pub fn route_text(route: &str) -> Option<&'static str> {
     Some(match route {
-        "android" => "Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime",
-        "il2cpp-arm64" => "the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)",
+        "android" => "Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)",
+        "il2cpp-arm64" => "the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player",
         "mono-arm64" => "the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)",
         "box64" => "the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)",
         "apk" => "the game's own Android build (`pmu apk`)",
@@ -39,10 +39,9 @@ pub fn game_forms(build: &str) -> &'static str {
 
 pub fn route_needs_text(route: &str) -> Option<&'static str> {
     Some(match route {
-        "android" => "a handheld with a 32-bit (armhf) userland beside its 64-bit system (e.g. Knulli on Allwinner H700 devices)",
         "il2cpp-arm64" | "mono-arm64" => "a 64-bit (aarch64) handheld",
         "box64" => "a 64-bit (aarch64) handheld with OpenGL ES 3, and PortMaster's Westonpack (downloaded on the first launch)",
-        "apk" => "a 64-bit (aarch64) handheld with OpenGL ES 3, and a 32-bit (armhf) userland beside its 64-bit system (e.g. Knulli) for a game whose APK has only its 32-bit player",
+        "apk" => "a 64-bit (aarch64) handheld with OpenGL ES 3",
         _ => return None,
     })
 }
@@ -51,30 +50,28 @@ pub fn player_on(route: &str) -> &'static str {
     match route {
         "mono-arm64" => "Unity's 64-bit (arm64) Android player, its own code on Unity's Mono for 64-bit ARM, run natively",
         "il2cpp-arm64" => "Unity's 64-bit (arm64) IL2CPP Android player, its code compiled with IL2CPP, run natively",
-        _ => "Unity's own Android player, run natively on the handheld's 32-bit userland",
+        _ => "Unity's own Android player, run natively",
     }
 }
 
 pub fn handheld_needs(route: &str) -> &'static str {
     match route {
-        "mono-arm64" | "il2cpp-arm64" => "A 64-bit (aarch64) handheld with GLES 3 (no 32-bit userland needed).",
-        _ => "A handheld with a 32-bit (armhf) userland and GLES 3 (e.g. Knulli on Allwinner H700 devices),\n  and a 64-bit (aarch64) system for the setup's tools.",
+        _ => "A 64-bit (aarch64) handheld with GLES 3 (no 32-bit userland needed).",
     }
 }
 
 fn route_setup(key: &str) -> Option<&'static str> {
     Some(match key {
         "il2cpp-arm64" => "The first launch also compiles the game's code with Unity's IL2CPP on the handheld: one to a few hours, about 1.6 GB free, Wi-Fi for Unity's and Debian's files.",
-        "apk+il2cpp" => "On a handheld without a 32-bit userland the first launch compiles the game's code with Unity's IL2CPP for Unity's 64-bit player: one to a few hours, about 1.6 GB free, Wi-Fi for Unity's and Debian's files.",
+        "apk+il2cpp" => "The first launch compiles the game's code with Unity's IL2CPP for Unity's 64-bit player: one to a few hours, about 1.6 GB free, Wi-Fi for Unity's and Debian's files.",
         _ => return None,
     })
 }
 
 fn build_step(c: &str) -> Option<&'static str> {
     Some(match c {
-        "ua_host" => "runtime/build.sh                                            # ua_host, the 32-bit runtime (Docker)",
-        "ua_host_arm64" => "ARCH=arm64 runtime/build.sh                                 # ua_host, the 64-bit runtime (Docker)",
-        "ua_host64" => "ARCH=arm64 runtime/build.sh                                 # ua_host64, the 64-bit runtime (Docker)",
+        "ua_host_arm64" => "runtime/build.sh                                            # ua_host, the runtime (Docker)",
+        "ua_host64" => "runtime/build.sh                                            # ua_host64, the runtime (Docker)",
         "pmu" => "setup-rs/tools/build_pmu.sh tools/port/out/pmu               # the setup's tools, pmu, aarch64 (Docker)",
         "asmpatch" => "tools/asmpatch/build.sh                                     # asmpatch (.NET 8 SDK)",
         "pmhlslcc" => "ARCH=arm64 tools/hlslcc/build.sh                            # pmhlslcc, HLSLcc for the setup, aarch64 (Docker)",
@@ -320,8 +317,7 @@ pub fn port_json(cfg: &Dict) -> Val {
     let (p, g) = (cfg.dict("port"), cfg.dict("game"));
     let title = s(p.get("title"));
     let name = s(p.get("name"));
-    let mut reqs: Vec<Val> = if p.truthy("aarch64_only") { vec![] } else { vec![Val::s("armhf")] };
-    reqs.extend(p.list("reqs").iter().filter(|r| !r.eq(&Val::s("armhf"))).cloned());
+    let reqs: Vec<Val> = p.list("reqs").iter().filter(|r| !r.eq(&Val::s("armhf"))).cloned().collect();
     let or_none = |k: &str| p.get(k).filter(|v| v.truthy()).cloned().unwrap_or(Val::Null);
     let desc = p.get("desc").filter(|v| v.truthy()).cloned().unwrap_or_else(|| Val::Str(format!("{title} on Unity's Android player.")));
     let inst = p.get("inst").filter(|v| v.truthy()).cloned().unwrap_or_else(|| {
@@ -421,11 +417,12 @@ pub fn thanks_sentence(cfg: &Dict) -> String {
 }
 
 /// Whether the setup takes Unity's Unix class libraries from the port's Mono donor: a Windows
-/// build of Unity 2021.2+ (or of versions not named) on the android route.
+/// build of Unity 2021.2+ (or of versions not named) on the mono-arm64 route (the android route's
+/// successor: armhf was removed).
 pub fn needs_winbcl(cfg: &Dict) -> bool {
     let g = cfg.dict("game");
     if g.str("build") != "windows"
-        || cfg.dict("port").str("route") != "android"
+        || !matches!(cfg.dict("port").str("route"), "mono-arm64" | "android")
         || cfg.dict("android_data").get("winbcl").is_some_and(|w| w.eq(&Val::s("off")))
     {
         return false;
@@ -830,7 +827,6 @@ pub fn wants(part: &str, cfg: &Dict) -> bool {
         "pmhlslcc" => needs_pmhlslcc(cfg),
         "pmspirvcross" => needs_pmspirvcross(cfg),
         "pmu" => pmu,
-        "ua_host" => (abis.is_empty() || has("armeabi-v7a")) && !cfg.dict("port").truthy("aarch64_only"),
         "ua_host64" => abis.is_empty() || has("arm64-v8a") || pl.truthy("il2cpp"),
         _ => true,
     }

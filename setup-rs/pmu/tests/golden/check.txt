@@ -10,23 +10,24 @@ command 0: port check <BASE>/in/linux --asmpatch none -> exit 0
   out:   StreamingAssets: 0 bundles (0 MB); 2 other Unity archives
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
   out:         + GL mode gles (GLES 3 shaders added by the setup)
   out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
@@ -215,20 +216,12 @@ command 1: port check <BASE>/in/linux --asmpatch none --json -> exit 0
   out:  "routes": [
   out:   {
   out:    "route": "android",
-  out:    "ok": true,
-  out:    "why": [],
+  out:    "ok": false,
+  out:    "why": [
+  out:     "the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player"
+  out:    ],
   out:    "needs": [
   out:     "the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)"
-  out:    ]
-  out:   },
-  out:   {
-  out:    "route": "il2cpp-arm64",
-  out:    "ok": true,
-  out:    "available": true,
-  out:    "why": [],
-  out:    "needs": [
-  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
-  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
   out:    ]
   out:   },
   out:   {
@@ -241,6 +234,16 @@ command 1: port check <BASE>/in/linux --asmpatch none --json -> exit 0
   out:     "tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0",
   out:     "the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)",
   out:     "the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
   out:    ]
   out:   },
   out:   {
@@ -280,8 +283,9 @@ command 1: port check <BASE>/in/linux --asmpatch none --json -> exit 0
   out:   "mb": 0.0,
   out:   "io": true
   out:  },
-  out:  "route": "android",
+  out:  "route": "mono-arm64",
   out:  "donors": [
+  out:   "donor-2019.4.8f1-il2cpp-arm64.apk",
   out:   "donor-2019.4.8f1-mono-armv7.apk"
   out:  ]
   out: }
@@ -297,23 +301,24 @@ command 2: port check <BASE>/in/linux/My Game/My Game_Data --asmpatch none --no-
   out:   verdict: mixed
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
   out:         + GL mode gles (GLES 3 shaders added by the setup)
   out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
@@ -345,23 +350,24 @@ command 0: port check <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh -> exit 0
   out:   StreamingAssets: 0 bundles (0 MB); 2 other Unity archives
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
   out:         + GL mode gles (GLES 3 shaders added by the setup)
   out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
@@ -604,20 +610,12 @@ command 1: port check <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh --json ->
   out:  "routes": [
   out:   {
   out:    "route": "android",
-  out:    "ok": true,
-  out:    "why": [],
+  out:    "ok": false,
+  out:    "why": [
+  out:     "the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player"
+  out:    ],
   out:    "needs": [
   out:     "the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)"
-  out:    ]
-  out:   },
-  out:   {
-  out:    "route": "il2cpp-arm64",
-  out:    "ok": true,
-  out:    "available": true,
-  out:    "why": [],
-  out:    "needs": [
-  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
-  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
   out:    ]
   out:   },
   out:   {
@@ -630,6 +628,16 @@ command 1: port check <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh --json ->
   out:     "tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0",
   out:     "the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)",
   out:     "the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)"
+  out:    ]
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
   out:    ]
   out:   },
   out:   {
@@ -669,8 +677,9 @@ command 1: port check <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh --json ->
   out:   "mb": 0.0,
   out:   "io": true
   out:  },
-  out:  "route": "android",
+  out:  "route": "mono-arm64",
   out:  "donors": [
+  out:   "donor-2019.4.8f1-il2cpp-arm64.apk",
   out:   "donor-2019.4.8f1-mono-armv7.apk"
   out:  ]
   out: }
@@ -688,23 +697,24 @@ command 2: port check <BASE>/in/linux --asmpatch <BASE>/in/fail.sh -> exit 0
   out:   StreamingAssets: 0 bundles (0 MB); 2 other Unity archives
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + the donor donor-2019.4.8f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2019.4.8f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
   out:         + GL mode gles (GLES 3 shaders added by the setup)
   out:         + Mono JIT under emulation: expect about half the Android route's frame rate (Mono AOT of the assemblies helps first-use hitches)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
@@ -739,22 +749,23 @@ command 0: port check <BASE>/in/net35 --asmpatch none -> exit 0
   out:   verdict: pad
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + the donor donor-2017.4.30f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)
   out:         + the donor donor-2017.4.30f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2017.4.30f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         - the Linux build is x86 (box64 runs x86-64; box86 would be needed)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.30f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.30f1-il2cpp-arm64.apk, donor-2017.4.30f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
@@ -862,20 +873,12 @@ command 1: port check <BASE>/in/net35 --asmpatch none --json -> exit 0
   out:  "routes": [
   out:   {
   out:    "route": "android",
-  out:    "ok": true,
-  out:    "why": [],
+  out:    "ok": false,
+  out:    "why": [
+  out:     "the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player"
+  out:    ],
   out:    "needs": [
   out:     "the donor donor-2017.4.30f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.30f1 editor> MonoArmv7 <DONORS dir>`)"
-  out:    ]
-  out:   },
-  out:   {
-  out:    "route": "il2cpp-arm64",
-  out:    "ok": true,
-  out:    "available": true,
-  out:    "why": [],
-  out:    "needs": [
-  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
-  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
   out:    ]
   out:   },
   out:   {
@@ -892,6 +895,16 @@ command 1: port check <BASE>/in/net35 --asmpatch none --json -> exit 0
   out:    ]
   out:   },
   out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
   out:    "route": "box64",
   out:    "ok": false,
   out:    "available": true,
@@ -901,8 +914,9 @@ command 1: port check <BASE>/in/net35 --asmpatch none --json -> exit 0
   out:    "needs": []
   out:   }
   out:  ],
-  out:  "route": "android",
+  out:  "route": "mono-arm64",
   out:  "donors": [
+  out:   "donor-2017.4.30f1-il2cpp-arm64.apk",
   out:   "donor-2017.4.30f1-mono-armv7.apk"
   out:  ]
   out: }
@@ -916,18 +930,19 @@ command 0: port check <BASE>/in/windows --asmpatch none -> exit 1
   out:   Unity 2021.3.5f1, il2cpp
   out: 
   out: routes:
-  out:   [no ] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
   out:         - scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
   out:         + the donor donor-2021.3.5f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2021.3.5f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         - needs a Mono build (an IL2CPP desktop build is compiled for its own system)
   out:   [no ] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         - needs a Mono build
+  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         - needs a Mono build (an IL2CPP desktop build is compiled for its own system)
   out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         - needs the game's Linux build (this one is windows)
   out: 
-  out: unsupported: scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs a Mono build; needs the game's Linux build (this one is windows)
+  out: unsupported: scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build; needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs the game's Linux build (this one is windows)
   out: - native plugins: discord_game_sdk.dll: Discord: not on the handheld (calls fail)
   out: 
   out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}, "convert": {"shaders": {"from": ["d3d11"]}}}
@@ -1009,7 +1024,8 @@ command 1: port check <BASE>/in/windows --json -> exit 1
   out:    "route": "android",
   out:    "ok": false,
   out:    "why": [
-  out:     "scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player)"
+  out:     "scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player)",
+  out:     "the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player"
   out:    ],
   out:    "needs": [
   out:     "Direct3D 11 shaders: `shaders.from = [\"d3d11\"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)",
@@ -1017,20 +1033,20 @@ command 1: port check <BASE>/in/windows --json -> exit 1
   out:    ]
   out:   },
   out:   {
-  out:    "route": "il2cpp-arm64",
-  out:    "ok": false,
-  out:    "available": true,
-  out:    "why": [
-  out:     "needs a Mono build (an IL2CPP desktop build is compiled for its own system)"
-  out:    ],
-  out:    "needs": []
-  out:   },
-  out:   {
   out:    "route": "mono-arm64",
   out:    "ok": false,
   out:    "available": true,
   out:    "why": [
   out:     "needs a Mono build"
+  out:    ],
+  out:    "needs": []
+  out:   },
+  out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": false,
+  out:    "available": true,
+  out:    "why": [
+  out:     "needs a Mono build (an IL2CPP desktop build is compiled for its own system)"
   out:    ],
   out:    "needs": []
   out:   },
@@ -1045,7 +1061,7 @@ command 1: port check <BASE>/in/windows --json -> exit 1
   out:   }
   out:  ],
   out:  "route": null,
-  out:  "unsupported": "scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs a Mono build; needs the game's Linux build (this one is windows)"
+  out:  "unsupported": "scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build; needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs the game's Linux build (this one is windows)"
   out: }
   err: .. reading the game's settings and scenes
   err: .. reading the StreamingAssets bundles
@@ -1061,14 +1077,15 @@ command 0: port check <BASE>/in/two --asmpatch none -> exit 0
   out:   also: windows build (mono) at <BASE>/in/two/win/Thing_Data
   out: 
   out: routes:
-  out:   [no ] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
   out:         - Unity 5.4.1f1: the converter supports 5.6 - 6000.6
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + the donor donor-5.4.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 5.4.1f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         - Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4
   out:   [no ] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         - a .NET 3.5 game: Unity's Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator (Unity 2017.4: on its MonoBleedingEdge with Mono's 4.x class libraries)
   out:         - Unity 5.4.1f1: the arm64 Android players start with 2017.4
+  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         - Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4
   out:   [yes] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
   out:         + GL mode mesa (data as it is)
@@ -1092,19 +1109,20 @@ command 1: port check <BASE>/in/two/win --asmpatch none -> exit 1
   out:   verdict: none
   out: 
   out: routes:
-  out:   [no ] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
   out:         - Unity 5.4.1f1: the converter supports 5.6 - 6000.6
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
   out:         + the donor donor-5.4.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 5.4.1f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         - Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4
   out:   [no ] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         - a .NET 3.5 game: Unity's Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator (Unity 2017.4: on its MonoBleedingEdge with Mono's 4.x class libraries)
   out:         - Unity 5.4.1f1: the arm64 Android players start with 2017.4
+  out:   [no ] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         - Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4
   out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         - needs the game's Linux build (this one is windows)
   out: 
-  out: unsupported: Unity 5.4.1f1: the converter supports 5.6 - 6000.6; Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4; a .NET 3.5 game: Unity's Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator (Unity 2017.4: on its MonoBleedingEdge with Mono's 4.x class libraries); needs the game's Linux build (this one is windows)
+  out: unsupported: Unity 5.4.1f1: the converter supports 5.6 - 6000.6; a .NET 3.5 game: Unity's Mono of its desktop player (Mono 2.6) has no 64-bit ARM code generator (Unity 2017.4: on its MonoBleedingEdge with Mono's 4.x class libraries); Unity 5.4.1f1: the arm64 IL2CPP players start with 2017.4; needs the game's Linux build (this one is windows)
   out: warning: graphics APIs not read: assuming d3d11
   out: 
   out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}, "convert": {"shaders": {"from": ["d3d11"]}}}
@@ -1121,26 +1139,27 @@ command 0: port check <BASE>/in/mac/Mac Game.app --asmpatch none -> exit 0
   out:   verdict: none
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + the donor donor-2020.3.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + the donor donor-2020.3.1f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2020.3.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         - needs the game's Linux build (this one is macos)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2020.3.1f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2020.3.1f1-il2cpp-arm64.apk, donor-2020.3.1f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
   out: warning: graphics APIs not read: assuming glcore
-  out: - native plugins: fmodstudio.bundle: FMOD: needs an ARM (armhf) build of FMOD; without it the game is silent or stops
+  out: - native plugins: fmodstudio.bundle: FMOD: needs an ARM (aarch64) build of FMOD; without it the game is silent or stops
   out: 
   out: port config (port new starts from these): {"android_data": {"asmpatch": "off"}}
   err: .. reading the game's settings and scenes
@@ -1149,7 +1168,7 @@ command 1: port check <BASE>/in/mac --asmpatch none --json -> exit 0
   out: {
   out:  "path": "<BASE>/in/mac",
   out:  "notes": [
-  out:   "native plugins: fmodstudio.bundle: FMOD: needs an ARM (armhf) build of FMOD; without it the game is silent or stops"
+  out:   "native plugins: fmodstudio.bundle: FMOD: needs an ARM (aarch64) build of FMOD; without it the game is silent or stops"
   out:  ],
   out:  "warnings": [
   out:   "graphics APIs not read: assuming glcore"
@@ -1237,26 +1256,18 @@ command 1: port check <BASE>/in/mac --asmpatch none --json -> exit 0
   out:  "plugins": [
   out:   [
   out:    "../../PlugIns/fmodstudio.bundle",
-  out:    "FMOD: needs an ARM (armhf) build of FMOD; without it the game is silent or stops"
+  out:    "FMOD: needs an ARM (aarch64) build of FMOD; without it the game is silent or stops"
   out:   ]
   out:  ],
   out:  "routes": [
   out:   {
   out:    "route": "android",
-  out:    "ok": true,
-  out:    "why": [],
+  out:    "ok": false,
+  out:    "why": [
+  out:     "the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player"
+  out:    ],
   out:    "needs": [
   out:     "the donor donor-2020.3.1f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2020.3.1f1 editor> MonoArmv7 <DONORS dir>`)"
-  out:    ]
-  out:   },
-  out:   {
-  out:    "route": "il2cpp-arm64",
-  out:    "ok": true,
-  out:    "available": true,
-  out:    "why": [],
-  out:    "needs": [
-  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
-  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
   out:    ]
   out:   },
   out:   {
@@ -1272,6 +1283,16 @@ command 1: port check <BASE>/in/mac --asmpatch none --json -> exit 0
   out:    ]
   out:   },
   out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
   out:    "route": "box64",
   out:    "ok": false,
   out:    "available": true,
@@ -1281,8 +1302,9 @@ command 1: port check <BASE>/in/mac --asmpatch none --json -> exit 0
   out:    "needs": []
   out:   }
   out:  ],
-  out:  "route": "android",
+  out:  "route": "mono-arm64",
   out:  "donors": [
+  out:   "donor-2020.3.1f1-il2cpp-arm64.apk",
   out:   "donor-2020.3.1f1-mono-armv7.apk"
   out:  ]
   out: }
@@ -1298,8 +1320,8 @@ command 2: port check -> exit 2
   err: pmu port check: error: the following arguments are required: game
 == routes
 command 0: port routes -> exit 0
-  out: android       templates     Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
-  out: il2cpp-arm64  templates     the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
+  out: android       no templates  Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out: il2cpp-arm64  templates     the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
   out: mono-arm64    templates     the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out: box64         templates     the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out: apk           templates     the game's own Android build (`pmu apk`)
@@ -1886,8 +1908,8 @@ file launcher.sh 644 7096 3158567e8634715b
 == new-linux
 command 0: port new mygame --data <BASE>/in/linux --asmpatch none --out port -> exit 0
   out: checking <BASE>/in/linux
-  out: port mygame (android route) -> <BASE>/work/port
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: port mygame (mono-arm64 route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: warning: graphics APIs not read: assuming glcore
   out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
   out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
@@ -1904,7 +1926,7 @@ command 0: port new mygame --data <BASE>/in/linux --asmpatch none --out port -> 
   out: - services: Steamworks, Wwise
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
-  out:   - port.desc is empty (port.json says "My Game on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.desc is empty (port.json says "My Game on Unity's 64-bit Android player (its own code on Unity's Mono, shipped with the port)."): describe the game in a sentence or two
   out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
   out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
   out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
@@ -1917,8 +1939,8 @@ command 0: port new mygame --data <BASE>/in/linux --asmpatch none --out port -> 
 command 1: port new mygame --data <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh --out port -> exit 0
   out: using <BASE>/work/port/port.toml
   out: checking <BASE>/in/linux
-  out: port mygame (android route) -> <BASE>/work/port
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: port mygame (mono-arm64 route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: warning: graphics APIs not read: assuming glcore
   out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
   out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
@@ -1944,7 +1966,7 @@ command 1: port new mygame --data <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.
   out:   - [controls] is empty: the READMEs use the check's draft from the game's pad bindings: "Left Stick" = "Move"; "Right Stick" = "Aim (up, down); handhelds without a right stick cannot"; D-Pad = "the left stick on handhelds without sticks; Select gives the d-pad back: Select (up, down)"; B = "Jump, UI submit"; A = "Dodge roll"; Start = "Pause"; Select = "the d-pad as the d-pad, again as the left stick (handhelds without sticks; the game no longer gets this button)"
   out: for a PortMaster submission (10; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
-  out:   - port.desc is empty (port.json says "My Game on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.desc is empty (port.json says "My Game on Unity's 64-bit Android player (its own code on Unity's Mono, shipped with the port)."): describe the game in a sentence or two
   out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
   out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
   out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
@@ -1955,8 +1977,8 @@ command 1: port new mygame --data <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 2: port new fresh --data <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.sh -> exit 0
   out: checking <BASE>/in/linux
-  out: port fresh (android route) -> <BASE>/work/fresh
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: port fresh (mono-arm64 route) -> <BASE>/work/fresh
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: warning: graphics APIs not read: assuming glcore
   out: warning: 2 file(s) under StreamingAssets look like Unity bundles the converter does not read (StreamingAssets/hidden.dat: a UnityFS bundle behind other bytes (the game's own offset or encryption), StreamingAssets/web.unity3d: a UnityRaw archive (Unity 5.x uncompressed bundles)): their shaders and textures stay as the desktop build has them (shaders without GLES programs draw magenta or not at all); the game's own loader may need a look (docs/porting.md, port check)
   out: - Wwise 2017.2.9 build 6726 (Plugins/x86_64/libAkSoundEngine.so (a string); 2 soundbanks in StreamingAssets/Audio/GeneratedSoundBanks/Linux: version 128 (Wwise 2017.2)): the port gives the game ua_host's built-in Wwise, made of the integration's own entry points (every call succeeds, banks load, the bank-loaded and end-of-event callbacks reach the game). Sound: the setup converts the banks in StreamingAssets/Audio/GeneratedSoundBanks/Linux once (pmu wwise: wwise.banks in port.toml) into the port's wwise/ folder, which ua_host's own Wwise player plays (UA_WWISE_DATA, docs/wwise-player.md); no Vorbis codebooks found in Plugins/x86_64/libAkSoundEngine.so: its Vorbis sounds would stay silent (ADPCM and PCM ones play)
@@ -1976,7 +1998,7 @@ command 2: port new fresh --data <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.s
   out: - services: Steamworks, Wwise
   out: for a PortMaster submission (10; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
-  out:   - port.desc is empty (port.json says "My Game on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.desc is empty (port.json says "My Game on Unity's 64-bit Android player (its own code on Unity's Mono, shipped with the port)."): describe the game in a sentence or two
   out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
   out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
   out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
@@ -1986,43 +2008,41 @@ command 2: port new fresh --data <BASE>/in/linux --asmpatch <BASE>/in/asmpatch.s
   out:   - no screenshot (<BASE>/work/fresh/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file fresh/.gitignore 644 260 b65b22e3a900afb4
-file fresh/.port_files 644 304 1fe5390ada3f87e3
-file fresh/My Game.sh 644 7782 2fbdf10767794815
-file fresh/README.md 644 2169 b53846936e10a55f
-file fresh/fresh/README.md 644 2649 69ab1ba7cf6bccfc
+file fresh/.port_files 644 285 6f69b360b6fe1b89
+file fresh/My Game.sh 644 6800 c877226c23f5c56f
+file fresh/README.md 644 2217 c6f3605163c2c302
+file fresh/fresh/README.md 644 2591 b1f2e5a975ef42df
 file fresh/fresh/fresh.ini 644 483 3b8d6ee4c6f53a0b
 file fresh/fresh/gamedata/PUT_GAME_FILES_HERE.txt 644 484 eac23188bc3f8bb8
-file fresh/fresh/gameinfo.xml 644 230 3b18013e79fd66c1
+file fresh/fresh/gameinfo.xml 644 291 32d9c210d0285a6d
 file fresh/fresh/port.env 644 422 dd6a16bbf4c1544b
-file fresh/fresh/port.json 644 900 abfe260b3637c71f
+file fresh/fresh/port.json 644 932 06ac2fb87eda3cdf
 file fresh/fresh/setup.txt 644 265 d7323f2f73dd9d11
 file fresh/fresh/setup/convert.json 644 119 9b747d9590464036
-file fresh/fresh/setup/patchscript 644 25648 37f8536c979d1352
-file fresh/fresh/setup/setup.env 644 800 308707fe8578b48a
-file fresh/fresh/setup/update 644 4416 016dd8d137ed57e7
+file fresh/fresh/setup/patchscript 644 27146 cf077a9752d3a1bf
+file fresh/fresh/setup/setup.env 644 839 dc443bb5c5ffb126
 file fresh/package.sh 755 1265 63886912f1de6ac4
-file fresh/port.build.json 644 8342 5267254e9ac26635
-file fresh/port.toml 644 7568 480a774b0e18ef60
-file fresh/testing_thread.txt 644 1329 025ee93a9c890978
+file fresh/port.build.json 644 8523 424915f5f9f91259
+file fresh/port.toml 644 7450 bd1aeb6a0be1b56b
+file fresh/testing_thread.txt 644 1250 693f770384267819
 file port/.gitignore 644 260 b65b22e3a900afb4
-file port/.port_files 644 306 82d37c875d9da824
-file port/My Game.sh 644 7790 564e9b29bafb0173
-file port/README.md 644 2174 ce61cb4ef1263009
-file port/mygame/README.md 644 2654 dd8aa69e9860e20e
+file port/.port_files 644 286 a8da3b005284abb8
+file port/My Game.sh 644 6808 05db5aeecc7c6035
+file port/README.md 644 2222 008346ac177add68
+file port/mygame/README.md 644 2596 29de07ccbce36ea7
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 484 eac23188bc3f8bb8
-file port/mygame/gameinfo.xml 644 231 672fce3fcd0b5c87
+file port/mygame/gameinfo.xml 644 292 7cd0f790bda6862b
 file port/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port/mygame/port.env 644 420 4df2a1ec6aa06b08
-file port/mygame/port.json 644 903 ab947f6f82b20487
+file port/mygame/port.json 644 935 309645a6ef4a73ff
 file port/mygame/setup.txt 644 265 d7323f2f73dd9d11
 file port/mygame/setup/convert.json 644 119 9b747d9590464036
-file port/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file port/mygame/setup/setup.env 644 802 57fae40826789850
-file port/mygame/setup/update 644 4416 016dd8d137ed57e7
+file port/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
+file port/mygame/setup/setup.env 644 841 341db0b946c88d18
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 8339 fb21443ade89b70b
-file port/port.toml 644 7005 86be041cb0c3e617
-file port/testing_thread.txt 644 1331 62e45118e9c6b3c4
+file port/port.build.json 644 8519 56ba7f1de6bfd3fb
+file port/port.toml 644 6887 d4604e1299a647e6
+file port/testing_thread.txt 644 1252 475f64ae602d6f95
 == new-net35
 command 0: port new old --data <BASE>/in/net35 --asmpatch none --route mono-arm64 --title The Old Game -> exit 0
   out: checking <BASE>/in/net35
@@ -2062,7 +2082,7 @@ command 1: port new old2 --data <BASE>/in/net35 --asmpatch none --route box64 ->
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file old/.gitignore 644 260 b65b22e3a900afb4
 file old/.port_files 644 268 38afa7dc50c48f18
-file old/README.md 644 1930 8f82de560d70c3b1
+file old/README.md 644 1923 3b319ca36a684912
 file old/The Old Game.sh 644 6831 fc2f1a5ee6a5f6a5
 file old/old/README.md 644 2303 7e4f9a5138b34df0
 file old/old/gamedata/PUT_GAME_FILES_HERE.txt 644 500 498a6c07402291c9
@@ -2075,8 +2095,8 @@ file old/old/setup/convert.json 644 119 9b747d9590464036
 file old/old/setup/patchscript 644 27146 cf077a9752d3a1bf
 file old/old/setup/setup.env 644 820 e749e8bc7411f6da
 file old/package.sh 755 1263 ab3bd83e0d9da2e3
-file old/port.build.json 644 3617 5eae75c15f76d161
-file old/port.toml 644 6809 58df0bdd7056aa86
+file old/port.build.json 644 3594 b14efac474ba0c43
+file old/port.toml 644 6653 83393624ff6be1e3
 file old/testing_thread.txt 644 873 bcf42584cc219986
 file old2/.gitignore 644 260 b65b22e3a900afb4
 file old2/.port_files 644 291 53784478c5399f1a
@@ -2094,13 +2114,13 @@ file old2/old2/setup/gles.json 644 428 1ac69b00e00ff198
 file old2/old2/setup/patchscript 644 10095 0d8337b8ecef27ba
 file old2/old2/setup/setup.env 644 704 c885ef89427c69e7
 file old2/package.sh 755 1264 5b299fb124476421
-file old2/port.build.json 644 3233 c5fe4f93a0d16a7e
-file old2/port.toml 644 6625 eb113968114bfdcd
+file old2/port.build.json 644 3210 ffcadb7b9f6d3398
+file old2/port.toml 644 6469 490327114732667c
 file old2/testing_thread.txt 644 862 388f6d9db55e8933
 == new-refused
 command 0: port new win --data <BASE>/in/windows --asmpatch none -> exit 1
   out: checking <BASE>/in/windows
-  err: no route fits this game: scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs a Mono build; needs the game's Linux build (this one is windows)
+  err: no route fits this game: scripting backend il2cpp: the game's code is compiled for its desktop platform (no managed assemblies for the Mono player); needs a Mono build; needs a Mono build (an IL2CPP desktop build is compiled for its own system); needs the game's Linux build (this one is windows)
 command 1: port new nothing --data <BASE>/in/none -> exit 1
   out: checking <BASE>/in/none
   err: <BASE>/in/none: no Unity game here (no folder with globalgamemanagers, mainData or data.unity3d, no Android build: .apk, .xapk, .apks, .aab)
@@ -2124,23 +2144,24 @@ command 0: port check <BASE>/in/data --asmpatch none -> exit 0
   out:     textures: DXT5 2 (8 MB), RGBA32 1 (0 MB)
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
   out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)
   out:         + the donor donor-2017.4.9f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         - needs the game's Linux build (this one is windows)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-il2cpp-arm64.apk, donor-2017.4.9f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
@@ -2329,21 +2350,13 @@ command 1: port check <BASE>/in/data --asmpatch none --json -> exit 0
   out:  "routes": [
   out:   {
   out:    "route": "android",
-  out:    "ok": true,
-  out:    "why": [],
+  out:    "ok": false,
+  out:    "why": [
+  out:     "the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player"
+  out:    ],
   out:    "needs": [
   out:     "Direct3D 11 shaders: `shaders.from = [\"d3d11\"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)",
   out:     "the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)"
-  out:    ]
-  out:   },
-  out:   {
-  out:    "route": "il2cpp-arm64",
-  out:    "ok": true,
-  out:    "available": true,
-  out:    "why": [],
-  out:    "needs": [
-  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
-  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
   out:    ]
   out:   },
   out:   {
@@ -2360,6 +2373,16 @@ command 1: port check <BASE>/in/data --asmpatch none --json -> exit 0
   out:    ]
   out:   },
   out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
   out:    "route": "box64",
   out:    "ok": false,
   out:    "available": true,
@@ -2373,8 +2396,9 @@ command 1: port check <BASE>/in/data --asmpatch none --json -> exit 0
   out:   "mb": 0.0,
   out:   "io": false
   out:  },
-  out:  "route": "android",
+  out:  "route": "mono-arm64",
   out:  "donors": [
+  out:   "donor-2017.4.9f1-il2cpp-arm64.apk",
   out:   "donor-2017.4.9f1-mono-armv7.apk"
   out:  ]
   out: }
@@ -2392,23 +2416,24 @@ command 2: port check <BASE>/in/data --asmpatch none --no-scan -> exit 0
   out:   verdict: none
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
   out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)
   out:         + the donor donor-2017.4.9f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         - needs the game's Linux build (this one is windows)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-il2cpp-arm64.apk, donor-2017.4.9f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
@@ -2429,25 +2454,26 @@ command 0: port check <BASE>/in/packed --asmpatch none -> exit 0
   out:   verdict: none
   out: 
   out: routes:
-  out:   [yes] android: Unity's Android player (armv7, Mono) on the handheld's 32-bit userland: portmaster-unity's runtime
+  out:   [no ] android: Unity's armv7 Mono player on a 32-bit userland: removed with armhf (tag last-armhf)
+  out:         - the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player
   out:         + Direct3D 11 shaders: `shaders.from = ["d3d11"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)
   out:         + a compressed build: the setup unpacks it first (pmu unpack)
   out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
-  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player (for 64-bit-only systems)
-  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
-  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [yes] mono-arm64: the game's own assemblies on Unity's Mono for aarch64 Linux (shipped with the port), in Unity's arm64 Android player (for 64-bit systems; no IL2CPP compile)
   out:         + the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` runs tools/mono64/build-mono.sh, Docker; docs/mono-arm64.md)
   out:         + tested to the title in the arm64 rig with Unity 2019.4, 2020.3, 2021.3 and 6000.0
   out:         + a .NET 3.5 game: its 2.0 class libraries replaced by Mono's 4.x ones from the same Mono tree (player.mono64_classlibs; tools/mono64/build-classlibs.sh; Cuphead, Unity 2017.4)
   out:         + the donor donor-2017.4.9f1-il2cpp-arm64.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> Il2cppArm64 <DONORS dir>`)
   out:         + the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)
+  out:   [yes] il2cpp-arm64: the game's code compiled with IL2CPP on the handheld, on Unity's arm64 IL2CPP Android player
+  out:         + the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)
+  out:         + tested to the title in the arm64 rig with Unity 2017.4 - 2022.3
   out:   [no ] box64: the game's own x86-64 Linux player under box64 (tools/box64, `pmu route`)
   out:         - the data has Direct3D11, Vulkan shaders, no OpenGL ones: the box64 port draws with OpenGL (gles, gl4es or Mesa); this player would need Vulkan on the handheld
   out:         + box64 and the player's x86-64 libraries on the handheld (tools/box64)
   out: 
-  out: recommended route: android
-  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-mono-armv7.apk
+  out: recommended route: mono-arm64
+  out: donors the port ships (Unity's player; the handheld never downloads it): donor-2017.4.9f1-il2cpp-arm64.apk, donor-2017.4.9f1-mono-armv7.apk
   out:   build each with tools/donor/build.sh <the Unity editor of that version> MonoArmv7|Il2cppArm64 <DONORS dir>
   out:   (tools/donor/get-editor.sh <version> <dir>: that editor with Android Build Support, unpacked on a Mac);
   out:   `port package` takes them from --donors DIR or $DONORS (docs/porting.md, "Donors")
@@ -2553,22 +2579,14 @@ command 1: port check <BASE>/in/packed --asmpatch none --json -> exit 0
   out:  "routes": [
   out:   {
   out:    "route": "android",
-  out:    "ok": true,
-  out:    "why": [],
+  out:    "ok": false,
+  out:    "why": [
+  out:     "the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): mono-arm64 runs such games on Unity's arm64 player"
+  out:    ],
   out:    "needs": [
   out:     "Direct3D 11 shaders: `shaders.from = [\"d3d11\"]`, translated on the handheld by pmhlslcc (HLSLcc; the release ships it: `ARCH=arm64 tools/hlslcc/build.sh`)",
   out:     "a compressed build: the setup unpacks it first (pmu unpack)",
   out:     "the donor donor-2017.4.9f1-mono-armv7.apk (Unity's player, shipped in the release: `tools/donor/build.sh <Unity 2017.4.9f1 editor> MonoArmv7 <DONORS dir>`)"
-  out:    ]
-  out:   },
-  out:   {
-  out:    "route": "il2cpp-arm64",
-  out:    "ok": true,
-  out:    "available": true,
-  out:    "why": [],
-  out:    "needs": [
-  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
-  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
   out:    ]
   out:   },
   out:   {
@@ -2585,6 +2603,16 @@ command 1: port check <BASE>/in/packed --asmpatch none --json -> exit 0
   out:    ]
   out:   },
   out:   {
+  out:    "route": "il2cpp-arm64",
+  out:    "ok": true,
+  out:    "available": true,
+  out:    "why": [],
+  out:    "needs": [
+  out:     "the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries (the one route whose setup downloads)",
+  out:     "tested to the title in the arm64 rig with Unity 2017.4 - 2022.3"
+  out:    ]
+  out:   },
+  out:   {
   out:    "route": "box64",
   out:    "ok": false,
   out:    "available": true,
@@ -2596,8 +2624,9 @@ command 1: port check <BASE>/in/packed --asmpatch none --json -> exit 0
   out:    ]
   out:   }
   out:  ],
-  out:  "route": "android",
+  out:  "route": "mono-arm64",
   out:  "donors": [
+  out:   "donor-2017.4.9f1-il2cpp-arm64.apk",
   out:   "donor-2017.4.9f1-mono-armv7.apk"
   out:  ]
   out: }
@@ -2605,8 +2634,9 @@ command 1: port check <BASE>/in/packed --asmpatch none --json -> exit 0
 == new-data
 command 0: port new datagame --data <BASE>/in/data --asmpatch none -> exit 0
   out: checking <BASE>/in/data
-  out: port datagame (android route) -> <BASE>/work/datagame
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2017.4.9f1-mono-armv7.apk
+  out: a .NET 3.5 game: the release ships Mono's 4.x class libraries for it (player.mono64_classlibs)
+  out: port datagame (mono-arm64 route) -> <BASE>/work/datagame
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2017.4.9f1-il2cpp-arm64.apk, donor-2017.4.9f1-mono-armv7.apk
   out: warning: 456 MB of uncompressed textures (RGBA32 2, ARGB32 1; main data and StreamingAssets bundles): on a handheld with 1 GB of RAM the game, the system and these share it, and the scenes that load many of them may not fit. The textures step (convert.steps += "textures"; docs/porting.md, "Small handhelds (1 GB)") re-encodes them as ASTC 4x4, a quarter of RGBA32's memory (slightly different pixels, a longer setup); try the port on a 1 GB handheld first, watching log.txt's memory
   out: - 1 StreamingAssets bundle(s) without a serialized file (StreamingAssets/bundles/res.bundle): nothing in them to convert, left as they are
   out: - 1 scene bundle(s) under StreamingAssets (several serialized files each: StreamingAssets/bundles/scene.bundle): pmu's convert converts each of their files (shaders, textures, JSON plugin edits); the Python converter, which a release ships only for a Python converter plugin of the port's, leaves them as they are (their shaders: desktop-only)
@@ -2618,7 +2648,7 @@ command 0: port new datagame --data <BASE>/in/data --asmpatch none -> exit 0
   out: - BC/DXT textures decode to about 245 MB of RGBA on the handheld (its GPU cannot sample them): more than a 1 GB device can hold next to the game. The textures step is suggested (convert.steps), re-encoding them as ASTC at the GPU's own size; remove it only for a device with the memory to spare
   out: for a PortMaster submission (10; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
-  out:   - port.desc is empty (port.json says "the made up game on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.desc is empty (port.json says "the made up game on Unity's 64-bit Android player (its own code on Unity's Mono, shipped with the port)."): describe the game in a sentence or two
   out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
   out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
   out:   - game.release_date is empty: gameinfo.xml gives the frontend the game's release date (YYYY-MM-DD)
@@ -2690,21 +2720,20 @@ command 2: route <BASE>/in/packed --json -> exit 0
 command 3: route <BASE>/in/packed --env -> exit 1
   err: <BASE>/in/packed: no Linux x86-64 build here
 file datagame/.gitignore 644 260 b65b22e3a900afb4
-file datagame/.port_files 644 349 98a2cf793b69ff58
-file datagame/README.md 644 1919 2c04bb993f4a5990
-file datagame/datagame/README.md 644 2355 49c4e3d7650627fc
+file datagame/.port_files 644 327 a912e2481feb0ac2
+file datagame/README.md 644 1967 b490290108cc65a7
+file datagame/datagame/README.md 644 2297 32aab8fd600eec83
 file datagame/datagame/datagame.ini 644 483 3b8d6ee4c6f53a0b
 file datagame/datagame/gamedata/PUT_GAME_FILES_HERE.txt 644 495 b18690df9b00ab46
-file datagame/datagame/gameinfo.xml 644 301 ab968188e0fa2a0a
+file datagame/datagame/gameinfo.xml 644 362 bddd30db4053bc08
 file datagame/datagame/port.env 644 185 b5d3a3c6cb138934
-file datagame/datagame/port.json 644 929 65d91ce628d27d3e
+file datagame/datagame/port.json 644 961 2a6bceeb052ba096
 file datagame/datagame/setup.txt 644 274 e5aa25c21d44f308
 file datagame/datagame/setup/convert.json 644 178 f450d5570273898b
-file datagame/datagame/setup/patchscript 644 25648 37f8536c979d1352
-file datagame/datagame/setup/setup.env 644 761 d817636721f3788d
-file datagame/datagame/setup/update 644 4416 016dd8d137ed57e7
+file datagame/datagame/setup/patchscript 644 27146 cf077a9752d3a1bf
+file datagame/datagame/setup/setup.env 644 819 e7ef9de8f69e717a
 file datagame/package.sh 755 1268 f44c616d9aace70c
-file datagame/port.build.json 644 5506 f24d7786f25b63f5
-file datagame/port.toml 644 6774 79614974b4b87e93
-file datagame/testing_thread.txt 644 953 e9f569f612875547
-file datagame/the made up game.sh 644 7857 8c736df3de7c7962
+file datagame/port.build.json 644 5713 ba86f25a76acf914
+file datagame/port.toml 644 6680 9ddf6a2721ed0f1a
+file datagame/testing_thread.txt 644 874 0cc43eb87fc694f8
+file datagame/the made up game.sh 644 6866 cc190659a8b2299f

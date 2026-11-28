@@ -589,7 +589,7 @@ fn golden_text(base: &Path) -> String {
     }
     let cfg_text = ANDROID.replace("[[questions]]\nid = \"PICTURE\"", "[[questions]]\nid = \"PIC\"");
     put(&base.join("dump/cfg.toml"), &cfg_text);
-    for route in ["android", "apk", "mono-arm64"] {
+    for route in ["apk", "mono-arm64"] {
         let repo = port::Repo::new(wt());
         let user = port::config::load_config(&base.join("dump/cfg.toml").to_string_lossy()).unwrap();
         let mut cfg = port::config::build_config("mygame", &user);

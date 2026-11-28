@@ -13,15 +13,13 @@ use std::sync::OnceLock;
 /// stand-in for the NDK's x86-64 compilers and binutils.
 pub const NDK_CLANG: &str = include_str!("ndk-clang.sh");
 
-/// (il2cpp's architecture, the NDK's triple, the API level) of an ABI.
-pub fn abi_info(abi: &str) -> (&'static str, &'static str, u32) {
-    match abi {
-        "armeabi-v7a" => ("ARMv7", "arm-linux-androideabi", 19),
-        _ => ("ARM64", "aarch64-linux-android", 21),
-    }
+/// (il2cpp's architecture, the NDK's triple, the API level) of an ABI: arm64-v8a (armeabi-v7a went with
+/// armhf: tag last-armhf).
+pub fn abi_info(_abi: &str) -> (&'static str, &'static str, u32) {
+    ("ARM64", "aarch64-linux-android", 21)
 }
 
-pub const ABIS: [&str; 2] = ["arm64-v8a", "armeabi-v7a"];
+pub const ABIS: [&str; 1] = ["arm64-v8a"];
 pub const EDITOR_API: &str = "https://services.api.unity.com/unity/editor/release/v1/releases";
 pub const NDK_BASE: &str = "https://dl.google.com/android/repository/";
 /// (first Unity line, name, Pkg.Revision, zip)
@@ -70,13 +68,9 @@ fn editor_cdn(rev: &str, ver: &str) -> String {
     format!("https://download.unity3d.com/download_unity/{rev}/Windows64EditorInstaller/UnitySetup64-{ver}.exe")
 }
 
-/// api_level: 21 on arm64; on armv7 16 with NDK r13b / r16b, else 19.
-pub fn api_level(rev: &str, abi: &str) -> u32 {
-    if abi == "armeabi-v7a" && GNU_NDKS.contains(&rev) {
-        16
-    } else {
-        abi_info(abi).2
-    }
+/// api_level: 21 (arm64).
+pub fn api_level(_rev: &str, abi: &str) -> u32 {
+    abi_info(abi).2
 }
 
 /// ndk_apis: the API levels whose libraries are fetched (22 too for Bee's NDKs).
@@ -804,7 +798,6 @@ mod tests {
         ));
         assert!(editor_wanted("Mono/etc/mono/config", "Mono/lib/mono/2.0"));
         assert_eq!(ndk_apis("r23b", "arm64-v8a"), vec![21, 22]);
-        assert_eq!(ndk_apis("r16b", "armeabi-v7a"), vec![16]);
         let t = "aarch64-linux-android";
         let l = "toolchains/llvm/prebuilt/linux-x86_64/";
         assert!(ndk_wanted(
@@ -878,10 +871,6 @@ mod tests {
         assert_eq!(
             tool_version(&v, "arm64-v8a", None).unwrap().text,
             "2017.4.40f1"
-        );
-        assert_eq!(
-            tool_version(&v, "armeabi-v7a", None).unwrap().text,
-            "2017.4.9f1"
         );
         assert!(tool_version(&v, "arm64-v8a", Some("2018.4.1f1")).is_err());
         assert_eq!(

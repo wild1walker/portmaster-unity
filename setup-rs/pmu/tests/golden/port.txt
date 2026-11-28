@@ -1,110 +1,65 @@
 == android
 command 0: port new mygame --config cfg.toml --out port -> exit 0
-  out: port mygame (android route) -> <BASE>/work/port
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
+  out: port mygame (mono-arm64 route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: for a PortMaster submission (3; docs/porting.md, "Submitting to PortMaster"):
   out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
-command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build --submission -> exit 0
-  out: == donors: donor-2019.4.8f1-mono-armv7.apk
-  out: == ua_host
-  out: == pmu
-  out: == asmpatch
-  out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
-  out: PortMaster repository layout: <BASE>/work/port-rel/submission/mygame
-  out: for a PortMaster submission (3; docs/porting.md, "Submitting to PortMaster"):
-  out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
-  out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
+command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build --submission -> exit 1
+  out: == donors: donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
+  out: == donor/donor-2019.4.8f1-mono-armv7.apk: without its 32-bit player (3 files of lib/; aarch64 only)
+  out: == ua_host_arm64
+  out: == mono64
+  err: <BASE>/in/rt/tools/mono64/work/out/unity-2019.4-mbe: build Unity's Mono for 2019.4 first (tools/mono64/build-mono.sh 2019.4 <BASE>/in/rt/tools/mono64/work)
 command 2: port new mygame --config cfg.toml --out port --player <BASE>/in/player -> exit 0
-  out: port mygame (android route) -> <BASE>/work/port
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
+  out: port mygame (mono-arm64 route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: for a PortMaster submission (3; docs/porting.md, "Submitting to PortMaster"):
   out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 1894 e8500eaeb25c6a31
-file port-rel/mygame.zip 644 38581 3c1fdbc55df4196b zip 77 11bfbee2959c6b2d
-file port-rel/submission/mygame/My Game.sh 644 7790 fe2130f34283ce21
-file port-rel/submission/mygame/README.md 644 1811 43cb29e292920f55
-file port-rel/submission/mygame/gameinfo.xml 644 394 da3fe877d58c9995
-file port-rel/submission/mygame/mygame/README.md 644 2318 9e3aeb00ea212779
-file port-rel/submission/mygame/mygame/donor/donor-2019.4.8f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
-file port-rel/submission/mygame/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 484 d20445b4217790fa
-file port-rel/submission/mygame/mygame/licenses/LICENSE.dotnet-runtime.txt 644 33 030b07ff9139e41b
-file port-rel/submission/mygame/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
-file port-rel/submission/mygame/mygame/licenses/LICENSE.libvpx.txt 644 28 029e2579fd1ddd65
-file port-rel/submission/mygame/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e036
-file port-rel/submission/mygame/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
-file port-rel/submission/mygame/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
-file port-rel/submission/mygame/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
-file port-rel/submission/mygame/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
-file port-rel/submission/mygame/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
-file port-rel/submission/mygame/mygame/notes.txt 644 12 51a5b9f695844186
-file port-rel/submission/mygame/mygame/port.env 644 949 c369d096dbd4ffc8
-file port-rel/submission/mygame/mygame/setup.txt 644 543 97eaa0ceeaaf6148
-file port-rel/submission/mygame/mygame/setup/asmpatch 755 3064 d920b61413994e50
-file port-rel/submission/mygame/mygame/setup/convert.json 644 235 4ffc04cd54698df5
-file port-rel/submission/mygame/mygame/setup/files/Patch.dll 644 8 f41d211115cdeb58
-file port-rel/submission/mygame/mygame/setup/files/animclips.py 644 28 c7837b3225c94799
-file port-rel/submission/mygame/mygame/setup/files/notes.txt 644 12 51a5b9f695844186
-file port-rel/submission/mygame/mygame/setup/files/tweaks.json 644 14 844d9da1c11ff9a0
-file port-rel/submission/mygame/mygame/setup/hooks/game 644 14 dd39f56741878766
-file port-rel/submission/mygame/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file port-rel/submission/mygame/mygame/setup/pmu 755 3064 d920b61413994e50
-file port-rel/submission/mygame/mygame/setup/questions.lua 644 482 1d2f74d08e849ac0
-file port-rel/submission/mygame/mygame/setup/setup.env 644 1228 af920368e739c74f
-file port-rel/submission/mygame/mygame/setup/update 644 4416 016dd8d137ed57e7
-file port-rel/submission/mygame/mygame/ua_host 755 3064 869b4522d89f2a0c
-file port-rel/submission/mygame/mygame/uaflipbook.dll 644 12 9edbd7da03213d19
-file port-rel/submission/mygame/port.json 644 1259 ec1bfe9895b36729
-file port-rel/testing_thread.txt 644 994 4fcdc2cf387cf38b
-file port-rel/zip/My Game.sh 644 7790 fe2130f34283ce21
-file port-rel/zip/mygame/README.md 644 2318 9e3aeb00ea212779
-file port-rel/zip/mygame/donor/donor-2019.4.8f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
+file port-rel/zip/My Game.sh 644 6808 89dcb60719c32b1f
+file port-rel/zip/mygame/README.md 644 2260 3a096d36c6a82cc4
+file port-rel/zip/mygame/donor/donor-2019.4.8f1-il2cpp-arm64.apk 644 9592 9e3a2aec19b0863f zip 6 53afb2bb3cd16a87
+file port-rel/zip/mygame/donor/donor-2019.4.8f1-mono-armv7.apk 644 53267 13f381fef31a879d zip 6 82f6367ab398cffc
 file port-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 484 d20445b4217790fa
 file port-rel/zip/mygame/gameinfo.xml 644 394 da3fe877d58c9995
-file port-rel/zip/mygame/licenses/LICENSE.dotnet-runtime.txt 644 33 030b07ff9139e41b
 file port-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
-file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 28 029e2579fd1ddd65
-file port-rel/zip/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e036
-file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
+file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
-file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/notes.txt 644 12 51a5b9f695844186
 file port-rel/zip/mygame/port.env 644 949 c369d096dbd4ffc8
-file port-rel/zip/mygame/port.json 644 1259 ec1bfe9895b36729
+file port-rel/zip/mygame/port.json 644 1238 1bd82ae18aeeace9
+file port-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port-rel/zip/mygame/setup.txt 644 543 97eaa0ceeaaf6148
-file port-rel/zip/mygame/setup/asmpatch 755 3064 d920b61413994e50
 file port-rel/zip/mygame/setup/convert.json 644 235 4ffc04cd54698df5
-file port-rel/zip/mygame/setup/files/Patch.dll 644 8 f41d211115cdeb58
+file port-rel/zip/mygame/setup/files/Patch.dll 755 8 f41d211115cdeb58
 file port-rel/zip/mygame/setup/files/animclips.py 644 28 c7837b3225c94799
 file port-rel/zip/mygame/setup/files/notes.txt 644 12 51a5b9f695844186
 file port-rel/zip/mygame/setup/files/tweaks.json 644 14 844d9da1c11ff9a0
 file port-rel/zip/mygame/setup/hooks/game 644 14 dd39f56741878766
-file port-rel/zip/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file port-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
+file port-rel/zip/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
 file port-rel/zip/mygame/setup/questions.lua 644 482 1d2f74d08e849ac0
-file port-rel/zip/mygame/setup/setup.env 644 1228 af920368e739c74f
-file port-rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
-file port-rel/zip/mygame/ua_host 755 3064 869b4522d89f2a0c
+file port-rel/zip/mygame/setup/setup.env 644 1239 bd45991bceb7df6d
+file port-rel/zip/mygame/ua_host 755 3064 d920b61413994e50
 file port-rel/zip/mygame/uaflipbook.dll 644 12 9edbd7da03213d19
 file port/.gitignore 644 260 b65b22e3a900afb4
-file port/.port_files 644 495 dd1bce0c49531feb
-file port/My Game.sh 644 7790 fe2130f34283ce21
-file port/README.md 644 1811 43cb29e292920f55
-file port/mygame/README.md 644 2318 9e3aeb00ea212779
+file port/.port_files 644 475 40b5c954abb561e7
+file port/My Game.sh 644 6808 89dcb60719c32b1f
+file port/README.md 644 1859 2980b1960388a02c
+file port/mygame/README.md 644 2260 3a096d36c6a82cc4
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 484 d20445b4217790fa
 file port/mygame/gameinfo.xml 644 394 da3fe877d58c9995
 file port/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port/mygame/notes.txt 644 12 51a5b9f695844186
 file port/mygame/port.env 644 949 c369d096dbd4ffc8
-file port/mygame/port.json 644 1259 ec1bfe9895b36729
+file port/mygame/port.json 644 1238 1bd82ae18aeeace9
 file port/mygame/setup.txt 644 543 97eaa0ceeaaf6148
 file port/mygame/setup/convert.json 644 235 4ffc04cd54698df5
 file port/mygame/setup/files/Patch.dll 755 8 f41d211115cdeb58
@@ -112,17 +67,17 @@ file port/mygame/setup/files/animclips.py 644 28 c7837b3225c94799
 file port/mygame/setup/files/notes.txt 644 12 51a5b9f695844186
 file port/mygame/setup/files/tweaks.json 644 14 844d9da1c11ff9a0
 file port/mygame/setup/hooks/game 644 14 dd39f56741878766
-file port/mygame/setup/patchscript 644 25648 37f8536c979d1352
+file port/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
 file port/mygame/setup/questions.lua 644 482 1d2f74d08e849ac0
-file port/mygame/setup/setup.env 644 1228 af920368e739c74f
-file port/mygame/setup/update 644 4416 016dd8d137ed57e7
+file port/mygame/setup/setup.env 644 1239 bd45991bceb7df6d
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 4709 36e032b866793469
-file port/testing_thread.txt 644 994 4fcdc2cf387cf38b
+file port/port.build.json 644 4834 de785c0063d0418c
+file port/testing_thread.txt 644 915 4219847bee59c35a
 == images
 command 0: port new mygame --config cfg.toml --out port -> exit 0
-  out: port mygame (android route) -> <BASE>/work/port
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
+  out: port mygame (mono-arm64 route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: for a PortMaster submission (5; docs/porting.md, "Submitting to PortMaster"):
   out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
   out:   - port.thanks is empty: the README starts with "Thanks to [Studio & Co](https://example.com/dev) for creating My Game."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
@@ -130,112 +85,60 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port new mygame --config cfg.toml --out port -> exit 0
-  out: port mygame (android route) -> <BASE>/work/port
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
+  out: port mygame (mono-arm64 route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: for a PortMaster submission (3; docs/porting.md, "Submitting to PortMaster"):
   out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
   out:   - port.thanks is empty: the README starts with "Thanks to [Studio & Co](https://example.com/dev) for creating My Game."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
-command 2: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build --submission -> exit 0
-  out: == donors: donor-2019.4.8f1-mono-armv7.apk
-  out: == ua_host
-  out: == pmu
-  out: == asmpatch
-  out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
-  out: PortMaster repository layout: <BASE>/work/port-rel/submission/mygame
-  out: for a PortMaster submission (3; docs/porting.md, "Submitting to PortMaster"):
-  out:   - an em dash in the port's texts: PortMaster's reviewers ask for a comma, colon or parentheses
-  out:   - port.thanks is empty: the README starts with "Thanks to [Studio & Co](https://example.com/dev) for creating My Game."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
-  out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
+command 2: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build --submission -> exit 1
+  out: == donors: donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
+  out: == donor/donor-2019.4.8f1-mono-armv7.apk: without its 32-bit player (3 files of lib/; aarch64 only)
+  out: == ua_host_arm64
+  out: == mono64
+  err: <BASE>/in/rt/tools/mono64/work/out/unity-2019.4-mbe: build Unity's Mono for 2019.4 first (tools/mono64/build-mono.sh 2019.4 <BASE>/in/rt/tools/mono64/work)
 file cfg.toml 644 1863 26508d151c45ad36
-file port-rel/mygame.zip 644 40663 7fdf3267341e5705 zip 83 eed9d6db70cd08be
-file port-rel/submission/mygame/My Game.sh 644 7790 fe2130f34283ce21
-file port-rel/submission/mygame/README.md 644 1896 2a38afd348376962
-file port-rel/submission/mygame/cover.png 644 3595 9e22c636d1f68dab
-file port-rel/submission/mygame/gameinfo.xml 644 389 23f80040a27a4d64
-file port-rel/submission/mygame/mygame/README.md 644 2354 7c22182f1b9eb50b
-file port-rel/submission/mygame/mygame/donor/donor-2019.4.8f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
-file port-rel/submission/mygame/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 484 d20445b4217790fa
-file port-rel/submission/mygame/mygame/licenses/LICENSE.dotnet-runtime.txt 644 33 030b07ff9139e41b
-file port-rel/submission/mygame/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
-file port-rel/submission/mygame/mygame/licenses/LICENSE.libvpx.txt 644 28 029e2579fd1ddd65
-file port-rel/submission/mygame/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e036
-file port-rel/submission/mygame/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
-file port-rel/submission/mygame/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/submission/mygame/mygame/licenses/LICENSE.port.txt 644 9 bfae429af78bd276
-file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
-file port-rel/submission/mygame/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
-file port-rel/submission/mygame/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
-file port-rel/submission/mygame/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
-file port-rel/submission/mygame/mygame/notes.txt 644 12 51a5b9f695844186
-file port-rel/submission/mygame/mygame/port.env 644 949 c369d096dbd4ffc8
-file port-rel/submission/mygame/mygame/setup.txt 644 543 97eaa0ceeaaf6148
-file port-rel/submission/mygame/mygame/setup/asmpatch 755 3064 d920b61413994e50
-file port-rel/submission/mygame/mygame/setup/convert.json 644 235 4ffc04cd54698df5
-file port-rel/submission/mygame/mygame/setup/files/Patch.dll 644 8 f41d211115cdeb58
-file port-rel/submission/mygame/mygame/setup/files/animclips.py 644 28 c7837b3225c94799
-file port-rel/submission/mygame/mygame/setup/files/notes.txt 644 12 51a5b9f695844186
-file port-rel/submission/mygame/mygame/setup/files/tweaks.json 644 14 844d9da1c11ff9a0
-file port-rel/submission/mygame/mygame/setup/hooks/game 644 14 dd39f56741878766
-file port-rel/submission/mygame/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file port-rel/submission/mygame/mygame/setup/pmu 755 3064 d920b61413994e50
-file port-rel/submission/mygame/mygame/setup/questions.lua 644 482 1d2f74d08e849ac0
-file port-rel/submission/mygame/mygame/setup/setup.env 644 1228 af920368e739c74f
-file port-rel/submission/mygame/mygame/setup/update 644 4416 016dd8d137ed57e7
-file port-rel/submission/mygame/mygame/ua_host 755 3064 869b4522d89f2a0c
-file port-rel/submission/mygame/mygame/uaflipbook.dll 644 12 9edbd7da03213d19
-file port-rel/submission/mygame/port.json 644 1259 ec1bfe9895b36729
-file port-rel/submission/mygame/screenshot.png 644 8097 0453e28fa9eea1e2
-file port-rel/testing_thread.txt 644 947 667096ddbe0b807b
-file port-rel/zip/My Game.sh 644 7790 fe2130f34283ce21
-file port-rel/zip/mygame/README.md 644 2354 7c22182f1b9eb50b
-file port-rel/zip/mygame/cover.png 644 3595 9e22c636d1f68dab
-file port-rel/zip/mygame/donor/donor-2019.4.8f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
+file port-rel/zip/My Game.sh 644 6808 89dcb60719c32b1f
+file port-rel/zip/mygame/README.md 644 2296 f9f73c4ea87b93be
+file port-rel/zip/mygame/donor/donor-2019.4.8f1-il2cpp-arm64.apk 644 9592 9e3a2aec19b0863f zip 6 53afb2bb3cd16a87
+file port-rel/zip/mygame/donor/donor-2019.4.8f1-mono-armv7.apk 644 53267 13f381fef31a879d zip 6 82f6367ab398cffc
 file port-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 484 d20445b4217790fa
 file port-rel/zip/mygame/gameinfo.xml 644 389 23f80040a27a4d64
-file port-rel/zip/mygame/licenses/LICENSE.dotnet-runtime.txt 644 33 030b07ff9139e41b
 file port-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
-file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 28 029e2579fd1ddd65
-file port-rel/zip/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e036
-file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
+file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.port.txt 644 9 bfae429af78bd276
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
-file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/notes.txt 644 12 51a5b9f695844186
 file port-rel/zip/mygame/port.env 644 949 c369d096dbd4ffc8
-file port-rel/zip/mygame/port.json 644 1259 ec1bfe9895b36729
-file port-rel/zip/mygame/screenshot.png 644 8097 0453e28fa9eea1e2
+file port-rel/zip/mygame/port.json 644 1238 1bd82ae18aeeace9
+file port-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port-rel/zip/mygame/setup.txt 644 543 97eaa0ceeaaf6148
-file port-rel/zip/mygame/setup/asmpatch 755 3064 d920b61413994e50
 file port-rel/zip/mygame/setup/convert.json 644 235 4ffc04cd54698df5
-file port-rel/zip/mygame/setup/files/Patch.dll 644 8 f41d211115cdeb58
+file port-rel/zip/mygame/setup/files/Patch.dll 755 8 f41d211115cdeb58
 file port-rel/zip/mygame/setup/files/animclips.py 644 28 c7837b3225c94799
 file port-rel/zip/mygame/setup/files/notes.txt 644 12 51a5b9f695844186
 file port-rel/zip/mygame/setup/files/tweaks.json 644 14 844d9da1c11ff9a0
 file port-rel/zip/mygame/setup/hooks/game 644 14 dd39f56741878766
-file port-rel/zip/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file port-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
+file port-rel/zip/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
 file port-rel/zip/mygame/setup/questions.lua 644 482 1d2f74d08e849ac0
-file port-rel/zip/mygame/setup/setup.env 644 1228 af920368e739c74f
-file port-rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
-file port-rel/zip/mygame/ua_host 755 3064 869b4522d89f2a0c
+file port-rel/zip/mygame/setup/setup.env 644 1239 bd45991bceb7df6d
+file port-rel/zip/mygame/ua_host 755 3064 d920b61413994e50
 file port-rel/zip/mygame/uaflipbook.dll 644 12 9edbd7da03213d19
 file port/.gitignore 644 260 b65b22e3a900afb4
-file port/.port_files 644 495 dd1bce0c49531feb
+file port/.port_files 644 475 40b5c954abb561e7
 file port/LICENSE.md 644 9 bfae429af78bd276
-file port/My Game.sh 644 7790 fe2130f34283ce21
-file port/README.md 644 1896 2a38afd348376962
+file port/My Game.sh 644 6808 89dcb60719c32b1f
+file port/README.md 644 1944 1cd819363ca450bb
 file port/cover.png 644 3595 9e22c636d1f68dab
-file port/mygame/README.md 644 2354 7c22182f1b9eb50b
+file port/mygame/README.md 644 2296 f9f73c4ea87b93be
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 484 d20445b4217790fa
 file port/mygame/gameinfo.xml 644 389 23f80040a27a4d64
 file port/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port/mygame/notes.txt 644 12 51a5b9f695844186
 file port/mygame/port.env 644 949 c369d096dbd4ffc8
-file port/mygame/port.json 644 1259 ec1bfe9895b36729
+file port/mygame/port.json 644 1238 1bd82ae18aeeace9
 file port/mygame/setup.txt 644 543 97eaa0ceeaaf6148
 file port/mygame/setup/convert.json 644 235 4ffc04cd54698df5
 file port/mygame/setup/files/Patch.dll 755 8 f41d211115cdeb58
@@ -243,17 +146,17 @@ file port/mygame/setup/files/animclips.py 644 28 c7837b3225c94799
 file port/mygame/setup/files/notes.txt 644 12 51a5b9f695844186
 file port/mygame/setup/files/tweaks.json 644 14 844d9da1c11ff9a0
 file port/mygame/setup/hooks/game 644 14 dd39f56741878766
-file port/mygame/setup/patchscript 644 25648 37f8536c979d1352
+file port/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
 file port/mygame/setup/questions.lua 644 482 1d2f74d08e849ac0
-file port/mygame/setup/setup.env 644 1228 af920368e739c74f
-file port/mygame/setup/update 644 4416 016dd8d137ed57e7
+file port/mygame/setup/setup.env 644 1239 bd45991bceb7df6d
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 4708 c9ea09821d60d5b2
+file port/port.build.json 644 4833 44e0769ae764ed19
 file port/screenshot.png 644 8097 0453e28fa9eea1e2
-file port/testing_thread.txt 644 947 667096ddbe0b807b
+file port/testing_thread.txt 644 868 a4d46f356015a9cc
 == aarch64-only
 command 0: port new mygame --config cfg.toml --out port -> exit 0
-  out: port.aarch64_only: the mono-arm64 route (Unity's arm64 player, the game's code on Unity's Mono for aarch64) instead of the android route's armv7 player
+  out: port.aarch64_only: dropped (every release is aarch64 only; armhf was removed, tag last-armhf)
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
   out: port mygame (mono-arm64 route) -> <BASE>/work/port
   out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
@@ -276,8 +179,8 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out: == ua_host_arm64
   out: == mono64
   out: == pmu
-  out: build.outputs: pmhwdec/libpmhwdec.so.1 not shipped: armhf, and the port is aarch64 only
-  out: build.outputs: tools: tools/helper32 not shipped: armhf, and the port is aarch64 only
+  out: build.outputs: pmhwdec/libpmhwdec.so.1 not shipped: armhf (every release is aarch64 only)
+  out: build.outputs: tools: tools/helper32 not shipped: armhf (every release is aarch64 only)
   out: aarch64 only: no armhf file in the release
   out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
@@ -295,7 +198,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
 file cfg.toml 644 531 0f7fc14ae8a8bfd8
 file port-rel/build/a32 644 3064 869b4522d89f2a0c
 file port-rel/build/x 644 1 af63f54c86021707
-file port-rel/mygame.zip 644 35370 9e29a57e0f688576 zip 78 7948ad0793f7571c
+file port-rel/mygame.zip 644 35314 c6f876bb821e20be zip 78 92837798031b22eb
 file port-rel/testing_thread.txt 644 868 bc8295a92e9c156f
 file port-rel/zip/My Game.sh 644 6808 05db5aeecc7c6035
 file port-rel/zip/mygame/README.md 644 2296 46b985e86ae847cd
@@ -309,7 +212,7 @@ file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/zip/mygame/licenses/LICENSE.mono-2019.4.txt 644 19 caafae6ba20f6299
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/licenses/LICENSE.x.txt 644 1 af63f54c86021707
@@ -334,7 +237,7 @@ file port-rel/zip/mygame/uaflipbook.dll 644 12 9edbd7da03213d19
 file port/.gitignore 644 260 b65b22e3a900afb4
 file port/.port_files 644 286 a8da3b005284abb8
 file port/My Game.sh 644 6808 05db5aeecc7c6035
-file port/README.md 644 1845 466657715f8a821a
+file port/README.md 644 1838 f6aae78c20311d91
 file port/arm32.so 644 3064 869b4522d89f2a0c
 file port/arm64.so 644 3064 d920b61413994e50
 file port/mygame/README.md 644 2296 46b985e86ae847cd
@@ -348,7 +251,7 @@ file port/mygame/setup/convert.json 644 119 9b747d9590464036
 file port/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
 file port/mygame/setup/setup.env 644 788 f7f2fe1be63992bd
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 3298 cd3a7f0dd9e6da6e
+file port/port.build.json 644 3273 765e606dd5b0b466
 file port/testing_thread.txt 644 868 bc8295a92e9c156f
 file port/tools/helper32 644 3064 869b4522d89f2a0c
 file port/tools/helper64 644 3064 d920b61413994e50
@@ -372,6 +275,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out: == pmu
   out: == asmpatch
   out: == pmhlslcc
+  out: aarch64 only: no armhf file in the release
   out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
   out: for a PortMaster submission (10; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.desc is empty (port.json says "Other Title on Unity's 64-bit Android player (its code compiled with IL2CPP on the handheld)."): describe the game in a sentence or two
@@ -385,9 +289,9 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.json 644 317 632cfd1940c86ef1
-file port-rel/mygame.zip 644 27697 af57e7aecf915a61 zip 50 d5bea724fd47f92d
+file port-rel/mygame.zip 644 27636 ef91900ebe9abf70 zip 50 aa3c260680a31c54
 file port-rel/testing_thread.txt 644 937 e2f5ba1e6625a1c3
-file port-rel/zip/Other Title.sh 644 6758 06efed87d25d522e
+file port-rel/zip/Other Title.sh 644 6747 c6ca414dfb4b22f9
 file port-rel/zip/mygame/README.md 644 2283 55a31dee790d2982
 file port-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 502 940690b8ea0a5b76
 file port-rel/zip/mygame/gameinfo.xml 644 298 371e249009cadd86
@@ -398,7 +302,7 @@ file port-rel/zip/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e0
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
 file port-rel/zip/mygame/licenses/LICENSE.pmhlslcc-HLSLcc.txt 644 11 933a0225bdb82910
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
@@ -407,15 +311,15 @@ file port-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port-rel/zip/mygame/setup.txt 644 269 d991fff745270451
 file port-rel/zip/mygame/setup/asmpatch 755 3064 d920b61413994e50
 file port-rel/zip/mygame/setup/convert.json 644 164 33de0997b2b3b579
-file port-rel/zip/mygame/setup/patchscript 644 24907 b209609c2c369481
+file port-rel/zip/mygame/setup/patchscript 644 24895 fb08efc8fa686d14
 file port-rel/zip/mygame/setup/pmhlslcc 755 3064 d920b61413994e50
 file port-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
 file port-rel/zip/mygame/setup/setup.env 644 722 a03cf5b3c4fdb7eb
 file port-rel/zip/mygame/ua_host 755 3064 d920b61413994e50
 file port/.gitignore 644 260 b65b22e3a900afb4
 file port/.port_files 644 290 ab45744edbb0e8b4
-file port/Other Title.sh 644 6758 06efed87d25d522e
-file port/README.md 644 2090 ab2946d4d6e1ee6a
+file port/Other Title.sh 644 6747 c6ca414dfb4b22f9
+file port/README.md 644 2083 61896c6dbea8e521
 file port/mygame/README.md 644 2283 55a31dee790d2982
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 502 940690b8ea0a5b76
 file port/mygame/gameinfo.xml 644 298 371e249009cadd86
@@ -424,18 +328,19 @@ file port/mygame/port.env 644 185 b5d3a3c6cb138934
 file port/mygame/port.json 644 1033 8fc3c3bccaf60ce6
 file port/mygame/setup.txt 644 269 d991fff745270451
 file port/mygame/setup/convert.json 644 164 33de0997b2b3b579
-file port/mygame/setup/patchscript 644 24907 b209609c2c369481
+file port/mygame/setup/patchscript 644 24895 fb08efc8fa686d14
 file port/mygame/setup/setup.env 644 722 a03cf5b3c4fdb7eb
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 2892 fa90e36b442188b6
+file port/port.build.json 644 2866 d7006e74fa491f07
 file port/testing_thread.txt 644 937 e2f5ba1e6625a1c3
 == windows-android
 command 0: port new mygame --config cfg.toml --out port -> exit 0
-  out: port mygame (android route) -> <BASE>/work/port
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2022.2.17f1-mono-armv7.apk
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
+  out: port mygame (mono-arm64 route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2022.2.17f1-il2cpp-arm64.apk, donor-2022.2.17f1-mono-armv7.apk
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
-  out:   - port.desc is empty (port.json says "Win on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.desc is empty (port.json says "Win on Unity's 64-bit Android player (its own code on Unity's Mono, shipped with the port)."): describe the game in a sentence or two
   out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
   out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
   out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
@@ -445,76 +350,57 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
-command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build -> exit 0
-  out: == donors: donor-2022.2.17f1-mono-armv7.apk
-  out: == ua_host
-  out: == pmu
-  out: == pmhlslcc
-  out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
-  out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
-  out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
-  out:   - port.desc is empty (port.json says "Win on Unity's Android player."): describe the game in a sentence or two
-  out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
-  out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
-  out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
-  out:   - game.release_date is empty: gameinfo.xml gives the frontend the game's release date (YYYY-MM-DD)
-  out:   - port.thanks is empty: the README starts with "Thanks to the makers of Win for creating it."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
-  out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
-  out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
-  out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
-  out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
+command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build -> exit 1
+  out: == donors: donor-2022.2.17f1-il2cpp-arm64.apk, donor-2022.2.17f1-mono-armv7.apk
+  out: == donor/donor-2022.2.17f1-mono-armv7.apk: without its 32-bit player (3 files of lib/; aarch64 only)
+  out: == ua_host_arm64
+  out: == mono64
+  err: <BASE>/in/rt/tools/mono64/work/out/unity-2022.2-mbe: build Unity's Mono for 2022.2 first (tools/mono64/build-mono.sh 2022.2 <BASE>/in/rt/tools/mono64/work)
 file cfg.toml 644 114 24a47c9ee982e2ef
-file port-rel/mygame.zip 644 35238 8c103654480cf771 zip 59 0f648ad07f44e95a
-file port-rel/testing_thread.txt 644 917 480cf568ecfcb867
-file port-rel/zip/Win.sh 644 7706 46f722055d0f1d93
-file port-rel/zip/mygame/README.md 644 2414 ccc83f7f0011569d
-file port-rel/zip/mygame/donor/donor-2022.2.17f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
+file port-rel/zip/Win.sh 644 6728 975ddf260211e46f
+file port-rel/zip/mygame/README.md 644 2356 e62698c5c52420c4
+file port-rel/zip/mygame/donor/donor-2022.2.17f1-il2cpp-arm64.apk 644 9592 9e3a2aec19b0863f zip 6 53afb2bb3cd16a87
+file port-rel/zip/mygame/donor/donor-2022.2.17f1-mono-armv7.apk 644 53267 13f381fef31a879d zip 6 82f6367ab398cffc
 file port-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 576 3e509a3b551e67e9
-file port-rel/zip/mygame/gameinfo.xml 644 219 557ea9663caea521
+file port-rel/zip/mygame/gameinfo.xml 644 280 618d7a6a616b2179
 file port-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
-file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 28 029e2579fd1ddd65
-file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
+file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.pmhlslcc-HLSLcc.txt 644 11 933a0225bdb82910
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
-file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
-file port-rel/zip/mygame/port.json 644 865 ef9383cf5b65daee
+file port-rel/zip/mygame/port.json 644 897 9d5c3ae6178f00f8
+file port-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port-rel/zip/mygame/setup.txt 644 261 174b5f5fac77339b
 file port-rel/zip/mygame/setup/convert.json 644 164 33de0997b2b3b579
-file port-rel/zip/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file port-rel/zip/mygame/setup/pmhlslcc 755 3064 d920b61413994e50
-file port-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
-file port-rel/zip/mygame/setup/setup.env 644 714 6926ecc7cf8d1593
-file port-rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
-file port-rel/zip/mygame/ua_host 755 3064 869b4522d89f2a0c
+file port-rel/zip/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
+file port-rel/zip/mygame/setup/setup.env 644 754 7feba4d59cdceded
+file port-rel/zip/mygame/ua_host 755 3064 d920b61413994e50
 file port/.gitignore 644 260 b65b22e3a900afb4
-file port/.port_files 644 302 3664f35a2a98f2fc
-file port/README.md 644 1993 cf6be8e6d0928f0e
-file port/Win.sh 644 7706 46f722055d0f1d93
-file port/mygame/README.md 644 2414 ccc83f7f0011569d
+file port/.port_files 644 282 a8f3479019736bd0
+file port/README.md 644 2041 4fb4b83ef6f867a1
+file port/Win.sh 644 6728 975ddf260211e46f
+file port/mygame/README.md 644 2356 e62698c5c52420c4
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 576 3e509a3b551e67e9
-file port/mygame/gameinfo.xml 644 219 557ea9663caea521
+file port/mygame/gameinfo.xml 644 280 618d7a6a616b2179
 file port/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port/mygame/port.env 644 185 b5d3a3c6cb138934
-file port/mygame/port.json 644 865 ef9383cf5b65daee
+file port/mygame/port.json 644 897 9d5c3ae6178f00f8
 file port/mygame/setup.txt 644 261 174b5f5fac77339b
 file port/mygame/setup/convert.json 644 164 33de0997b2b3b579
-file port/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file port/mygame/setup/setup.env 644 714 6926ecc7cf8d1593
-file port/mygame/setup/update 644 4416 016dd8d137ed57e7
+file port/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
+file port/mygame/setup/setup.env 644 754 7feba4d59cdceded
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 2842 5eaa49190ee8aae4
-file port/testing_thread.txt 644 917 480cf568ecfcb867
+file port/port.build.json 644 3020 2e359f4348f079c5
+file port/testing_thread.txt 644 838 c1b403da172e3758
 == vulkan-own-plugin
 command 0: port new mygame --config cfg.toml --out port -> exit 0
-  out: port mygame (android route) -> <BASE>/work/port
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2021.3.4f1-mono-armv7.apk
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
+  out: port mygame (mono-arm64 route) -> <BASE>/work/port
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2021.3.4f1-il2cpp-arm64.apk, donor-2021.3.4f1-mono-armv7.apk
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
-  out:   - port.desc is empty (port.json says "Vk on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.desc is empty (port.json says "Vk on Unity's 64-bit Android player (its own code on Unity's Mono, shipped with the port)."): describe the game in a sentence or two
   out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
   out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
   out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
@@ -528,24 +414,23 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   err: the setup's tools (pmu) do not do what this port needs: shaders from gles, the port's converter plugins (mystep.py); the setup's Python that did is retired (docs/porting.md)
 file cfg.toml 644 157 86d9f60cc8267f8d
 file port/.gitignore 644 260 b65b22e3a900afb4
-file port/.port_files 644 330 afa16a7bf0c6a4e3
-file port/README.md 644 1908 22c4ccc9cea1bae8
-file port/Vk.sh 644 7753 8f2ce7a6c712629b
-file port/mygame/README.md 644 2347 ac43b2226132b7df
+file port/.port_files 644 310 4f64002f27519bdf
+file port/README.md 644 1956 099b0b213ba9009d
+file port/Vk.sh 644 6776 b4730496b9fb2e9e
+file port/mygame/README.md 644 2289 63a5e8ad5873bd50
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 482 c906640c03264915
-file port/mygame/gameinfo.xml 644 216 09d24d10c4c932d8
+file port/mygame/gameinfo.xml 644 277 4f2e2288a6bbdbee
 file port/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port/mygame/port.env 644 185 b5d3a3c6cb138934
-file port/mygame/port.json 644 896 d6ede0b90dd4d9c7
+file port/mygame/port.json 644 928 0e70ec240354fbd1
 file port/mygame/setup.txt 644 260 38528cba401d7b52
 file port/mygame/setup/convert.json 644 161 51444e76cd60d60c
 file port/mygame/setup/files/mystep.py 644 11 1cdf32cfeb510d41
-file port/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file port/mygame/setup/setup.env 644 751 f547d5a40d6e6a79
-file port/mygame/setup/update 644 4416 016dd8d137ed57e7
+file port/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
+file port/mygame/setup/setup.env 644 790 a4c42a59bc467891
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 2931 ac6da2c450438805
-file port/testing_thread.txt 644 950 11138a6488584ab2
+file port/port.build.json 644 3108 c7d453e197d8394c
+file port/testing_thread.txt 644 871 496d91e005447eeb
 == apk
 command 0: port new mygame --config cfg.toml --out port -> exit 0
   out: port mygame (apk route) -> <BASE>/work/port
@@ -562,9 +447,9 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build --submission -> exit 0
-  out: == ua_host
   out: == ua_host64
   out: == pmu
+  out: aarch64 only: no armhf file in the release
   out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
   out: PortMaster repository layout: <BASE>/work/port-rel/submission/mygame
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
@@ -594,9 +479,9 @@ command 2: port new mygame --config v7.toml --out port2 -> exit 0
   out:   - no screenshot (<BASE>/work/port2/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 3: port package port2 --out port2-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build -> exit 0
-  out: == ua_host
   out: == ua_host64
   out: == pmu
+  out: aarch64 only: no armhf file in the release
   out: built <BASE>/work/port2-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
@@ -611,6 +496,7 @@ command 3: port package port2 --out port2-rel --runtime <BASE>/in/rt --donors <B
   out:   - no screenshot (<BASE>/work/port2/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 4: port new mygame --config v7only.toml --out port3 -> exit 0
+  out: port.aarch64_only: dropped (every release is aarch64 only; armhf was removed, tag last-armhf)
   out: port mygame (apk route) -> <BASE>/work/port3
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
@@ -642,140 +528,137 @@ command 5: port package port3 --out port3-rel --runtime <BASE>/in/rt --donors <B
   out:   - no screenshot (<BASE>/work/port3/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 227 cd6fc800141165bb
-file port-rel/mygame.zip 644 23662 1b1682d7e3547036 zip 40 7448608b10f246f0
-file port-rel/submission/mygame/My Game.sh 644 7600 51fcf7876cf20fbc
-file port-rel/submission/mygame/README.md 644 2072 3bdc9907f934ca43
+file port-rel/mygame.zip 644 22830 7d4b4ad7e30b5943 zip 38 5483ee4103228980
+file port-rel/submission/mygame/My Game.sh 644 7019 ab84350946fb5f3e
+file port-rel/submission/mygame/README.md 644 1749 28bba33dddb65340
 file port-rel/submission/mygame/gameinfo.xml 644 267 32eef5e1ac1059f2
-file port-rel/submission/mygame/mygame/README.md 644 2930 a1d56f2a3ce94ed8
+file port-rel/submission/mygame/mygame/README.md 644 2590 8a559fc36dc4182f
 file port-rel/submission/mygame/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 498 2645ec7330d2c772
 file port-rel/submission/mygame/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
-file port-rel/submission/mygame/mygame/licenses/LICENSE.libvpx.txt 644 77 0983770c5a50ec68
+file port-rel/submission/mygame/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/submission/mygame/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/submission/mygame/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port-rel/submission/mygame/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/submission/mygame/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/submission/mygame/mygame/port.env 644 185 b5d3a3c6cb138934
 file port-rel/submission/mygame/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port-rel/submission/mygame/mygame/setup.txt 644 265 d7323f2f73dd9d11
-file port-rel/submission/mygame/mygame/setup/patchscript 644 14462 73961eb41f212c6d
+file port-rel/submission/mygame/mygame/setup/patchscript 644 13732 0345dba7a7e224c4
 file port-rel/submission/mygame/mygame/setup/pmu 755 3064 d920b61413994e50
-file port-rel/submission/mygame/mygame/setup/setup.env 644 531 f0aec6093a398efd
-file port-rel/submission/mygame/mygame/ua_host 755 3064 869b4522d89f2a0c
+file port-rel/submission/mygame/mygame/setup/setup.env 644 536 16fd47a6738c7fdc
 file port-rel/submission/mygame/mygame/ua_host64 755 3064 d920b61413994e50
 file port-rel/submission/mygame/port.json 644 862 fe03e37076921092
-file port-rel/testing_thread.txt 644 955 78e506d16c6356d0
-file port-rel/zip/My Game.sh 644 7600 51fcf7876cf20fbc
-file port-rel/zip/mygame/README.md 644 2930 a1d56f2a3ce94ed8
+file port-rel/testing_thread.txt 644 837 acb67e6a146945bd
+file port-rel/zip/My Game.sh 644 7019 ab84350946fb5f3e
+file port-rel/zip/mygame/README.md 644 2590 8a559fc36dc4182f
 file port-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 498 2645ec7330d2c772
 file port-rel/zip/mygame/gameinfo.xml 644 267 32eef5e1ac1059f2
 file port-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
-file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 77 0983770c5a50ec68
+file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
 file port-rel/zip/mygame/port.json 644 862 fe03e37076921092
 file port-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port-rel/zip/mygame/setup.txt 644 265 d7323f2f73dd9d11
-file port-rel/zip/mygame/setup/patchscript 644 14462 73961eb41f212c6d
+file port-rel/zip/mygame/setup/patchscript 644 13732 0345dba7a7e224c4
 file port-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
-file port-rel/zip/mygame/setup/setup.env 644 531 f0aec6093a398efd
-file port-rel/zip/mygame/ua_host 755 3064 869b4522d89f2a0c
+file port-rel/zip/mygame/setup/setup.env 644 536 16fd47a6738c7fdc
 file port-rel/zip/mygame/ua_host64 755 3064 d920b61413994e50
 file port/.gitignore 644 260 b65b22e3a900afb4
 file port/.port_files 644 260 c3b8ed7f8473246c
-file port/My Game.sh 644 7600 51fcf7876cf20fbc
-file port/README.md 644 2072 3bdc9907f934ca43
-file port/mygame/README.md 644 2930 a1d56f2a3ce94ed8
+file port/My Game.sh 644 7019 ab84350946fb5f3e
+file port/README.md 644 1749 28bba33dddb65340
+file port/mygame/README.md 644 2590 8a559fc36dc4182f
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 498 2645ec7330d2c772
 file port/mygame/gameinfo.xml 644 267 32eef5e1ac1059f2
 file port/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port/mygame/port.env 644 185 b5d3a3c6cb138934
 file port/mygame/port.json 644 862 fe03e37076921092
 file port/mygame/setup.txt 644 265 d7323f2f73dd9d11
-file port/mygame/setup/patchscript 644 14462 73961eb41f212c6d
-file port/mygame/setup/setup.env 644 531 f0aec6093a398efd
+file port/mygame/setup/patchscript 644 13732 0345dba7a7e224c4
+file port/mygame/setup/setup.env 644 536 16fd47a6738c7fdc
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 4177 0c73e523f759a3ee
-file port/testing_thread.txt 644 955 78e506d16c6356d0
-file port2-rel/mygame.zip 644 23696 baaebb013319ab76 zip 40 4aeb483976f5d3d2
-file port2-rel/testing_thread.txt 644 1094 6b2aedd3e01bfb45
-file port2-rel/zip/V7.sh 644 7550 57316651b58e8fdc
-file port2-rel/zip/mygame/README.md 644 2910 9bafdc77f556a10e
+file port/port.build.json 644 3776 feb50bc1e9fb0850
+file port/testing_thread.txt 644 837 acb67e6a146945bd
+file port2-rel/mygame.zip 644 22845 1f0d98fbd67229b3 zip 38 476a81e7870c1e70
+file port2-rel/testing_thread.txt 644 936 4527fb50a3da6f90
+file port2-rel/zip/V7.sh 644 6969 bd7e0456062a36b8
+file port2-rel/zip/mygame/README.md 644 2570 1667ba5d9f120265
 file port2-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 483 da635ee6c3de46a9
 file port2-rel/zip/mygame/gameinfo.xml 644 252 6b31017dbf68000d
 file port2-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
-file port2-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 77 0983770c5a50ec68
+file port2-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port2-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port2-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port2-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port2-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port2-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port2-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port2-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
-file port2-rel/zip/mygame/port.json 644 991 616ab073864fb681
+file port2-rel/zip/mygame/port.json 644 951 f1cacb07aca02de5
 file port2-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port2-rel/zip/mygame/setup.txt 644 260 3c2992b71f821a0e
-file port2-rel/zip/mygame/setup/patchscript 644 14462 73961eb41f212c6d
+file port2-rel/zip/mygame/setup/patchscript 644 13732 0345dba7a7e224c4
 file port2-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
-file port2-rel/zip/mygame/setup/setup.env 644 481 f8002a4ff29fb3a0
-file port2-rel/zip/mygame/ua_host 755 3064 869b4522d89f2a0c
+file port2-rel/zip/mygame/setup/setup.env 644 486 1bc72c5c1bc65407
 file port2-rel/zip/mygame/ua_host64 755 3064 d920b61413994e50
 file port2/.gitignore 644 260 b65b22e3a900afb4
 file port2/.port_files 644 255 017703b1b2523c77
-file port2/README.md 644 2263 5f8a7f7520524073
-file port2/V7.sh 644 7550 57316651b58e8fdc
-file port2/mygame/README.md 644 2910 9bafdc77f556a10e
+file port2/README.md 644 1900 625909fa2b776940
+file port2/V7.sh 644 6969 bd7e0456062a36b8
+file port2/mygame/README.md 644 2570 1667ba5d9f120265
 file port2/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 483 da635ee6c3de46a9
 file port2/mygame/gameinfo.xml 644 252 6b31017dbf68000d
 file port2/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port2/mygame/port.env 644 185 b5d3a3c6cb138934
-file port2/mygame/port.json 644 991 616ab073864fb681
+file port2/mygame/port.json 644 951 f1cacb07aca02de5
 file port2/mygame/setup.txt 644 260 3c2992b71f821a0e
-file port2/mygame/setup/patchscript 644 14462 73961eb41f212c6d
-file port2/mygame/setup/setup.env 644 481 f8002a4ff29fb3a0
+file port2/mygame/setup/patchscript 644 13732 0345dba7a7e224c4
+file port2/mygame/setup/setup.env 644 486 1bc72c5c1bc65407
 file port2/package.sh 755 1266 0c4794ba0bbacc96
-file port2/port.build.json 644 4082 1e47612917d91d38
-file port2/testing_thread.txt 644 1094 6b2aedd3e01bfb45
-file port3-rel/mygame.zip 644 23448 a3949322565f829b zip 38 f597dd1165df53ee
-file port3-rel/testing_thread.txt 644 953 cb35801d64402d5e
-file port3-rel/zip/V7only.sh 644 7590 567d712f871de8e4
-file port3-rel/zip/mygame/README.md 644 2926 eacd2fe1dba897e6
+file port2/port.build.json 644 3700 27eacc067b40cf52
+file port2/testing_thread.txt 644 936 4527fb50a3da6f90
+file port3-rel/mygame.zip 644 22799 6fb96d81efb60381 zip 38 cd417f95f1ab8538
+file port3-rel/testing_thread.txt 644 835 2a7da77c54b112bf
+file port3-rel/zip/V7only.sh 644 7009 77f48b0ec32d0540
+file port3-rel/zip/mygame/README.md 644 2586 364eec5cc2cd8101
 file port3-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 495 15c869b8ac3a57f7
 file port3-rel/zip/mygame/gameinfo.xml 644 264 aedc9aa00f955c03
 file port3-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
 file port3-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port3-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port3-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port3-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port3-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port3-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port3-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port3-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
 file port3-rel/zip/mygame/port.json 644 858 c7947f6716f6d900
 file port3-rel/zip/mygame/relayout/0123abcd.txt 644 21 ed0093df0833749a
 file port3-rel/zip/mygame/setup.txt 644 264 5468d0c077e29d44
-file port3-rel/zip/mygame/setup/patchscript 644 14462 73961eb41f212c6d
+file port3-rel/zip/mygame/setup/patchscript 644 13732 0345dba7a7e224c4
 file port3-rel/zip/mygame/setup/pmu 755 3064 d920b61413994e50
-file port3-rel/zip/mygame/setup/setup.env 644 475 3a5431bb648b8a93
+file port3-rel/zip/mygame/setup/setup.env 644 480 b6d0d9cb577db436
 file port3-rel/zip/mygame/ua_host64 755 3064 d920b61413994e50
 file port3/.gitignore 644 260 b65b22e3a900afb4
 file port3/.port_files 644 259 d7bbc07c3b6747c1
-file port3/README.md 644 1970 191bd317a1b39647
-file port3/V7only.sh 644 7590 567d712f871de8e4
-file port3/mygame/README.md 644 2926 eacd2fe1dba897e6
+file port3/README.md 644 1746 62c7a46b7b46f91f
+file port3/V7only.sh 644 7009 77f48b0ec32d0540
+file port3/mygame/README.md 644 2586 364eec5cc2cd8101
 file port3/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 495 15c869b8ac3a57f7
 file port3/mygame/gameinfo.xml 644 264 aedc9aa00f955c03
 file port3/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port3/mygame/port.env 644 185 b5d3a3c6cb138934
 file port3/mygame/port.json 644 858 c7947f6716f6d900
 file port3/mygame/setup.txt 644 264 5468d0c077e29d44
-file port3/mygame/setup/patchscript 644 14462 73961eb41f212c6d
-file port3/mygame/setup/setup.env 644 475 3a5431bb648b8a93
+file port3/mygame/setup/patchscript 644 13732 0345dba7a7e224c4
+file port3/mygame/setup/setup.env 644 480 b6d0d9cb577db436
 file port3/package.sh 755 1266 0c4794ba0bbacc96
-file port3/port.build.json 644 4098 fc625ddb9dc1b4cb
-file port3/testing_thread.txt 644 953 cb35801d64402d5e
+file port3/port.build.json 644 3717 11dba7d5dd1482ae
+file port3/testing_thread.txt 644 835 2a7da77c54b112bf
 file v7.toml 644 154 264ac04ccb126813
 file v7only.toml 644 179 51790d7ac130fcc6
 == box64
@@ -795,6 +678,7 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build -> exit 0
   out: == pmu
+  out: aarch64 only: no armhf file in the release
   out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
@@ -809,7 +693,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 102 7791b7c54a934a80
-file port-rel/mygame.zip 644 22453 f3dd83e04829e7e1 zip 46 381559a66e38f577
+file port-rel/mygame.zip 644 22397 c37ec1384fcdf59a zip 46 2bba8988579f5aa2
 file port-rel/testing_thread.txt 644 865 a7452ed185425eb1
 file port-rel/zip/Box.sh 644 7349 bd510f6b18a66ea3
 file port-rel/zip/mygame/README.md 644 1950 f70a32eb56d38b3d
@@ -823,7 +707,7 @@ file port-rel/zip/mygame/gl4es/libGL.so.1 755 3064 d920b61413994e50
 file port-rel/zip/mygame/glxes/libGL.so.1 755 3064 d920b61413994e50
 file port-rel/zip/mygame/licenses/LICENSE.box64.txt 644 10 42c5417fa2fa9148
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/port.env 644 587 7df0b57cc594a010
@@ -850,7 +734,7 @@ file port/mygame/setup/gles.json 644 428 1ac69b00e00ff198
 file port/mygame/setup/patchscript 644 10095 0d8337b8ecef27ba
 file port/mygame/setup/setup.env 644 705 99055b5fffe6ee5a
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 2701 46afb452a5de5661
+file port/port.build.json 644 2675 1f0e80f7f8f04bc0
 file port/testing_thread.txt 644 865 a7452ed185425eb1
 == mono-arm64-own-toml
 command 0: port new mono --out port --force -> exit 0
@@ -871,9 +755,12 @@ command 0: port new mono --out port --force -> exit 0
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build --mono64-work <BASE>/in/mono64 -> exit 0
   out: == donors: donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk, donor-2019.4.40f1-il2cpp-arm64.apk, donor-2019.4.40f1-mono-armv7.apk
+  out: == donor/donor-2019.4.8f1-mono-armv7.apk: without its 32-bit player (3 files of lib/; aarch64 only)
+  out: == donor/donor-2019.4.40f1-mono-armv7.apk: without its 32-bit player (3 files of lib/; aarch64 only)
   out: == ua_host_arm64
   out: == mono64
   out: == pmu
+  out: aarch64 only: no armhf file in the release
   out: built <BASE>/work/port-rel/mono.zip (0.0 MB): unzip it into the handheld's ports folder
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
@@ -887,14 +774,14 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
-file port-rel/mono.zip 644 40771 1c1cbfcdadef0869 zip 92 26452198c26f3505
+file port-rel/mono.zip 644 40421 e5ce9faf6d644c07 zip 80 b0c6baa2126cc60c
 file port-rel/testing_thread.txt 644 871 a5247d942334d02a
 file port-rel/zip/Mono.sh 644 6795 d84b57ed4b7156f4
 file port-rel/zip/mono/README.md 644 2300 b15cdd5c49afe68a
 file port-rel/zip/mono/donor/donor-2019.4.40f1-il2cpp-arm64.apk 644 9592 9e3a2aec19b0863f zip 6 53afb2bb3cd16a87
-file port-rel/zip/mono/donor/donor-2019.4.40f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
+file port-rel/zip/mono/donor/donor-2019.4.40f1-mono-armv7.apk 644 53267 13f381fef31a879d zip 6 82f6367ab398cffc
 file port-rel/zip/mono/donor/donor-2019.4.8f1-il2cpp-arm64.apk 644 9592 9e3a2aec19b0863f zip 6 53afb2bb3cd16a87
-file port-rel/zip/mono/donor/donor-2019.4.8f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
+file port-rel/zip/mono/donor/donor-2019.4.8f1-mono-armv7.apk 644 53267 13f381fef31a879d zip 6 82f6367ab398cffc
 file port-rel/zip/mono/gamedata/PUT_GAME_FILES_HERE.txt 644 488 47236864668cce7e
 file port-rel/zip/mono/gameinfo.xml 644 281 01755f3159228b6d
 file port-rel/zip/mono/licenses/LICENSE.bdwgc-2019.4.txt 644 6 0cbf5dc5764ced74
@@ -903,7 +790,7 @@ file port-rel/zip/mono/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/zip/mono/licenses/LICENSE.mono-2019.4.txt 644 19 caafae6ba20f6299
 file port-rel/zip/mono/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mono/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mono/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port-rel/zip/mono/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port-rel/zip/mono/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mono/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mono/mono.ini 644 483 3b8d6ee4c6f53a0b
@@ -922,7 +809,7 @@ file port-rel/zip/mono/ua_host 755 3064 d920b61413994e50
 file port/.gitignore 644 260 b65b22e3a900afb4
 file port/.port_files 644 261 5c869418f6536944
 file port/Mono.sh 644 6795 d84b57ed4b7156f4
-file port/README.md 644 1839 321aac18eb137b37
+file port/README.md 644 1832 885acb29abe5795a
 file port/mono/README.md 644 2300 b15cdd5c49afe68a
 file port/mono/gamedata/PUT_GAME_FILES_HERE.txt 644 488 47236864668cce7e
 file port/mono/gameinfo.xml 644 281 01755f3159228b6d
@@ -934,7 +821,7 @@ file port/mono/setup/convert.json 644 119 9b747d9590464036
 file port/mono/setup/patchscript 644 27146 cf077a9752d3a1bf
 file port/mono/setup/setup.env 644 871 dd35b5ee1e1ad57e
 file port/package.sh 755 1264 9fdf7da98b6ac107
-file port/port.build.json 644 3102 eeb9e6f3a8678d30
+file port/port.build.json 644 3076 c639d862dac50773
 file port/port.toml 644 128 c46a24b0e8b3ada7
 file port/testing_thread.txt 644 871 a5247d942334d02a
 == mono-arm64-net35-own
@@ -972,9 +859,11 @@ command 1: port new mygame --config cfg.toml --out port -> exit 0
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 2: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build --mono64-work <BASE>/in/mono64 -> exit 0
   out: == donors: donor-2017.4.40f1-il2cpp-arm64.apk, donor-2017.4.40f1-mono-armv7.apk
+  out: == donor/donor-2017.4.40f1-mono-armv7.apk: without its 32-bit player (3 files of lib/; aarch64 only)
   out: == ua_host_arm64
   out: == mono64
   out: == pmu
+  out: aarch64 only: no armhf file in the release
   out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
   out: for a PortMaster submission (13; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
@@ -991,12 +880,12 @@ command 2: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - the launcher does not start with PortMaster's standard lines (#!/bin/bash, the PORTMASTER line, then the controlfolder block, source control.txt, the firmware's mod_${CFW_NAME}.txt, get_controls)
   out:   - the launcher never calls pm_finish
 file cfg.toml 644 188 c4582cb045462b6c
-file port-rel/mygame.zip 644 32769 4872922073099407 zip 82 b023462a7e3ff430
+file port-rel/mygame.zip 644 32566 19f0be54fc8214ce zip 76 7c22754218dde19d
 file port-rel/testing_thread.txt 644 861 21f9d9f7d2b26bdd
 file port-rel/zip/Old.sh 644 24 0cf0d85f4cc30b5a
 file port-rel/zip/mygame/README.md 644 2282 972e52fc1604ea55
 file port-rel/zip/mygame/donor/donor-2017.4.40f1-il2cpp-arm64.apk 644 9592 9e3a2aec19b0863f zip 6 53afb2bb3cd16a87
-file port-rel/zip/mygame/donor/donor-2017.4.40f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
+file port-rel/zip/mygame/donor/donor-2017.4.40f1-mono-armv7.apk 644 53267 13f381fef31a879d zip 6 82f6367ab398cffc
 file port-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 473 68a4c9e69475d75b
 file port-rel/zip/mygame/gameinfo.xml 644 280 a7d7f98293f84c0c
 file port-rel/zip/mygame/licenses/LICENSE.bdwgc-2017.4.txt 644 6 0cbf5dc5764ced74
@@ -1006,7 +895,7 @@ file port-rel/zip/mygame/licenses/LICENSE.mono-2017.4.txt 644 19 caafae6ba20f629
 file port-rel/zip/mygame/licenses/LICENSE.mono-class-libraries-2017.4.txt 644 20 2cf918c3c2a65edc
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
@@ -1029,7 +918,7 @@ file port-rel/zip/mygame/ua_host 755 3064 d920b61413994e50
 file port/.gitignore 644 260 b65b22e3a900afb4
 file port/.port_files 644 282 ba449a5218493a67
 file port/Old.sh 644 24 0cf0d85f4cc30b5a
-file port/README.md 644 1834 15aec82a1d1b4abd
+file port/README.md 644 1827 ecfee28f3a262014
 file port/mygame/README.md 644 2282 972e52fc1604ea55
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 473 68a4c9e69475d75b
 file port/mygame/gameinfo.xml 644 280 a7d7f98293f84c0c
@@ -1041,7 +930,7 @@ file port/mygame/setup/convert.json 644 119 9b747d9590464036
 file port/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
 file port/mygame/setup/setup.env 644 798 5b077b83934a3fb4
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 3123 f45b90b534c5c6d0
+file port/port.build.json 644 3097 c86e0ec326408c0f
 file port/testing_thread.txt 644 861 21f9d9f7d2b26bdd
 == net35-true
 command 0: port new mygame --config cfg.toml --out port -> exit 0
@@ -1061,9 +950,11 @@ command 0: port new mygame --config cfg.toml --out port -> exit 0
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BASE>/in/donors --pmu <BASE>/in/pmu-out --no-build --mono64-work <BASE>/in/mono64 -> exit 0
   out: == donors: donor-2017.4.40f1-il2cpp-arm64.apk, donor-2017.4.40f1-mono-armv7.apk
+  out: == donor/donor-2017.4.40f1-mono-armv7.apk: without its 32-bit player (3 files of lib/; aarch64 only)
   out: == ua_host_arm64
   out: == mono64
   out: == pmu
+  out: aarch64 only: no armhf file in the release
   out: built <BASE>/work/port-rel/mygame.zip (0.0 MB): unzip it into the handheld's ports folder
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
@@ -1078,12 +969,12 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 115 45542d6f2cf26d71
-file port-rel/mygame.zip 644 36815 3a6dd2d4c3665fff zip 94 60d740f2b9da186b
+file port-rel/mygame.zip 644 36612 448d8e4c647a06a2 zip 88 d0acb60a07c394a0
 file port-rel/testing_thread.txt 644 861 21f9d9f7d2b26bdd
 file port-rel/zip/Old.sh 644 6774 e86215093e0ff886
 file port-rel/zip/mygame/README.md 644 2282 972e52fc1604ea55
 file port-rel/zip/mygame/donor/donor-2017.4.40f1-il2cpp-arm64.apk 644 9592 9e3a2aec19b0863f zip 6 53afb2bb3cd16a87
-file port-rel/zip/mygame/donor/donor-2017.4.40f1-mono-armv7.apk 644 53776 54d73d123c69b40c zip 12 7613e2720286c536
+file port-rel/zip/mygame/donor/donor-2017.4.40f1-mono-armv7.apk 644 53267 13f381fef31a879d zip 6 82f6367ab398cffc
 file port-rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 473 68a4c9e69475d75b
 file port-rel/zip/mygame/gameinfo.xml 644 280 a7d7f98293f84c0c
 file port-rel/zip/mygame/licenses/LICENSE.bdwgc-2017.4.txt 644 6 0cbf5dc5764ced74
@@ -1093,7 +984,7 @@ file port-rel/zip/mygame/licenses/LICENSE.mono-2017.4.txt 644 19 caafae6ba20f629
 file port-rel/zip/mygame/licenses/LICENSE.mono-class-libraries-2017.4.txt 644 20 2cf918c3c2a65edc
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 21989 bfff2a8e233e13f9
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
@@ -1122,7 +1013,7 @@ file port-rel/zip/mygame/ua_host 755 3064 d920b61413994e50
 file port/.gitignore 644 260 b65b22e3a900afb4
 file port/.port_files 644 282 ba449a5218493a67
 file port/Old.sh 644 6774 e86215093e0ff886
-file port/README.md 644 1834 15aec82a1d1b4abd
+file port/README.md 644 1827 ecfee28f3a262014
 file port/mygame/README.md 644 2282 972e52fc1604ea55
 file port/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 473 68a4c9e69475d75b
 file port/mygame/gameinfo.xml 644 280 a7d7f98293f84c0c
@@ -1134,27 +1025,31 @@ file port/mygame/setup/convert.json 644 119 9b747d9590464036
 file port/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
 file port/mygame/setup/setup.env 644 798 5b077b83934a3fb4
 file port/package.sh 755 1266 0c4794ba0bbacc96
-file port/port.build.json 644 3041 4605aba261a786bf
+file port/port.build.json 644 3015 77f1ea8fbc8a83b4
 file port/testing_thread.txt 644 861 21f9d9f7d2b26bdd
 == errors
 command 0: port new mygame --config bad.toml --out p1 -> exit 1
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
   err:   game.release_date '29/09/2017': YYYY-MM-DD
 command 1: port new mygame --config noversion.toml --out p2 -> exit 1
   err: --data <game> (or a config with game.unity_versions) is needed
 command 2: port new mygame --config a64box.toml --out p3 -> exit 1
-  err: port.aarch64_only: the nope route has no aarch64-only release (routes: mono-arm64, il2cpp-arm64, box64, apk)
+  out: port.aarch64_only: dropped (every release is aarch64 only; armhf was removed, tag last-armhf)
+  err: the nope route has no aarch64 release (routes: mono-arm64, il2cpp-arm64, box64, apk; armhf was removed, tag last-armhf)
 command 3: port new mygame --config noroute.toml --out p4 -> exit 1
-  err: route 'nope' has no templates (templates/nope/route.json; routes with templates: android, apk, box64, il2cpp-arm64, mono-arm64)
+  err: the nope route has no aarch64 release (routes: mono-arm64, il2cpp-arm64, box64, apk; armhf was removed, tag last-armhf)
 command 4: port new mygame --config mc.toml --out p5 -> exit 1
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
   err:   files.own: 'port.toml' must be a path in the port's source folder (not port.toml or port.build.json)
 command 5: port new mygame --config ok.toml --out other -> exit 1
   err: <BASE>/work/other exists and is not a port made by `port new` (--force to write into it)
 command 6: port new mygame --config ok.toml --out clone -> exit 0
-  out: port mygame (android route) -> <BASE>/work/clone
-  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-mono-armv7.apk
+  out: route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android route's armv7 player was removed with armhf)
+  out: port mygame (mono-arm64 route) -> <BASE>/work/clone
+  out: donors the release ships (Unity's player; `port package --donors DIR`, built with tools/donor/build.sh): donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk
   out: for a PortMaster submission (11; docs/porting.md, "Submitting to PortMaster"):
   out:   - port.porter is empty: port.json names the porters (as on PortMaster's Discord)
-  out:   - port.desc is empty (port.json says "X on Unity's Android player."): describe the game in a sentence or two
+  out:   - port.desc is empty (port.json says "X on Unity's 64-bit Android player (its own code on Unity's Mono, shipped with the port)."): describe the game in a sentence or two
   out:   - port.genres is empty: one or more of action, adventure, arcade, casino/card, fps, platformer, puzzle, racing, rhythm, rpg, simulation, sports, strategy, visual novel, other
   out:   - game.developer is empty: gameinfo.xml gives the frontend the game's developer
   out:   - game.publisher is empty: gameinfo.xml gives the frontend the game's publisher
@@ -1165,222 +1060,48 @@ command 6: port new mygame --config ok.toml --out clone -> exit 0
   out:   - no screenshot (<BASE>/work/clone/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 command 7: port package clone --out rel --runtime <BASE>/in/rt --pmu <BASE>/in/pmu-out --no-build -> exit 1
-  err: this port's setup takes Unity's player from donors, and no donor folder was given: --donors DIR (or $DONORS) with donor-2019.4.8f1-mono-armv7.apk (donor-2019.4.8f1-mono-armv7.apk: tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <dir>; docs/porting.md, "Donors")
+  err: this port's setup takes Unity's player from donors, and no donor folder was given: --donors DIR (or $DONORS) with donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk (donor-2019.4.8f1-il2cpp-arm64.apk: tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <dir>; donor-2019.4.8f1-mono-armv7.apk: tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <dir>; docs/porting.md, "Donors")
 command 8: port package clone --out rel --runtime <BASE>/in/rt --donors <BASE>/in --pmu <BASE>/in/pmu-out --no-build -> exit 1
-  err: <BASE>/in has no donor-2019.4.8f1-mono-armv7.apk: the release would ship no player for them (donor-2019.4.8f1-mono-armv7.apk: tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <dir>; docs/porting.md, "Donors")
+  err: <BASE>/in has no donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk: the release would ship no player for them (donor-2019.4.8f1-il2cpp-arm64.apk: tools/donor/build.sh <Unity 2019.4.8f1 editor> Il2cppArm64 <dir>; donor-2019.4.8f1-mono-armv7.apk: tools/donor/build.sh <Unity 2019.4.8f1 editor> MonoArmv7 <dir>; docs/porting.md, "Donors")
 command 9: port package other --out rel -> exit 1
   err: <BASE>/work/other: no port.build.json (make the port with `pmu port new` first)
 file a64box.toml 644 93 3e8f70a6673bd649
 file bad.toml 644 224 6b008be2335091bd
 file clone/._LICENSE 644 1 af63f54c86021707
 file clone/.gitignore 644 260 b65b22e3a900afb4
-file clone/.port_files 644 300 5e2b98a5885bf416
+file clone/.port_files 644 280 f500ab69ddf7983e
 file clone/LICENSE 644 1 af63f54c86021707
-file clone/README.md 644 1772 ea58ce7551134f1c
-file clone/X.sh 644 7730 1005cf01d414c0b7
-file clone/mygame/README.md 644 2330 379760f11b8e4174
+file clone/README.md 644 1820 8037f8942ece6395
+file clone/X.sh 644 6754 ad0f71a57cdedea5
+file clone/mygame/README.md 644 2272 c2b6eb38303629c5
 file clone/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 466 35a59e38ca352c54
-file clone/mygame/gameinfo.xml 644 213 5672885c75be28ab
+file clone/mygame/gameinfo.xml 644 274 72835c7a85994b87
 file clone/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file clone/mygame/port.env 644 185 b5d3a3c6cb138934
-file clone/mygame/port.json 644 879 94aa69631dde8f6f
+file clone/mygame/port.json 644 911 4155d697c02c3e2b
 file clone/mygame/setup.txt 644 259 e38f1216bdaee9d1
 file clone/mygame/setup/convert.json 644 119 9b747d9590464036
-file clone/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file clone/mygame/setup/setup.env 644 730 bc29719d420bb5a9
-file clone/mygame/setup/update 644 4416 016dd8d137ed57e7
+file clone/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
+file clone/mygame/setup/setup.env 644 769 798f20a6c69ef8b5
 file clone/package.sh 755 1266 0c4794ba0bbacc96
-file clone/port.build.json 644 2797 8acda8dc8b300969
-file clone/testing_thread.txt 644 935 97d8a6393d0d3af2
+file clone/port.build.json 644 2974 f7ed704cecef9c6e
+file clone/testing_thread.txt 644 856 c323699150181fab
 file mc.toml 644 127 4876204ddd2cd224
 file noroute.toml 644 73 be1a4ba227b000de
 file noversion.toml 644 19 84d1786b25279a37
 file ok.toml 644 58 f31407c78567b606
 file other/notes.txt 644 1 af63f54c86021707
-file rel/zip/X.sh 644 7730 1005cf01d414c0b7
-file rel/zip/mygame/README.md 644 2330 379760f11b8e4174
+file rel/zip/X.sh 644 6754 ad0f71a57cdedea5
+file rel/zip/mygame/README.md 644 2272 c2b6eb38303629c5
 file rel/zip/mygame/gamedata/PUT_GAME_FILES_HERE.txt 644 466 35a59e38ca352c54
-file rel/zip/mygame/gameinfo.xml 644 213 5672885c75be28ab
+file rel/zip/mygame/gameinfo.xml 644 274 72835c7a85994b87
 file rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
-file rel/zip/mygame/port.json 644 879 94aa69631dde8f6f
+file rel/zip/mygame/port.json 644 911 4155d697c02c3e2b
 file rel/zip/mygame/setup.txt 644 259 e38f1216bdaee9d1
 file rel/zip/mygame/setup/convert.json 644 119 9b747d9590464036
-file rel/zip/mygame/setup/patchscript 644 25648 37f8536c979d1352
-file rel/zip/mygame/setup/setup.env 644 730 bc29719d420bb5a9
-file rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
-== dump_toml android
-  # port.toml: a PortMaster port made with `pmu port new` (docs/porting.md).
-  # Edit, then run `port new <name> --data <game>` again to regenerate the port folder.
-  
-  # the port: its folder in ports/ (name), the menu entry and launcher "<title>.sh" (title), the
-  # route (port check recommends one), the patcher's time estimate, and PortMaster's listing
-  # (port.json): porter, desc and inst (plain text; desc_md, inst_md: Markdown for the website),
-  # genres (action adventure arcade casino/card fps platformer puzzle racing rhythm rpg simulation
-  # sports strategy "visual novel" other), availability (free | paid | demo | full), store =
-  # [{name, gameurl, developerurl}], reqs (more device capabilities: "!lowres", "2gb", "power"),
-  # exp (true only to hide a released port); thanks = the README's first sentence; screenshot and
-  # cover = image files (relative to the port folder) the release takes; aarch64_only = true: a
-  # release with nothing for armhf (a Mono game on the mono-arm64 route: Unity's arm64 player and
-  # Unity's Mono for aarch64; no 32-bit ua_host, libraries or player in the zip or on the handheld)
-  [port]
-  name = "mygame"
-  title = "My Game"
-  route = "android"
-  porter = ["someone", "else"]
-  desc = "A game, café style — with a dash."
-  desc_md = "**A game**"
-  inst = ""
-  inst_md = ""
-  genres = ["Platformer", "visual novel"]
-  availability = "paid"
-  store = [{name = "Steam", gameurl = "https://example.com/app/1", developerurl = "https://example.com/dev"}]
-  reqs = ["2gb", "!lowres", "armhf"]
-  setup_time = "about an hour"
-  exp = false
-  ready_marker = ".setup_done"
-  thanks = "Thanks to the makers."
-  screenshot = "screenshot.png"
-  cover = "cover.png"
-  aarch64_only = false
-  
-  # what the player provides: the data folder the setup looks for (data, a glob), the build
-  # kind (linux | macos | windows), the Unity versions the setup accepts (empty: any the
-  # converter supports), how READMEs and messages describe it (what), its size in MB; and for
-  # gameinfo.xml (the frontend's game list): developer, publisher, release_date (YYYY-MM-DD),
-  # genre (default: the first of port.genres), description (default: port.desc), url (its page)
-  [game]
-  data = "My Game_Data"
-  build = "linux"
-  unity_versions = ["2019.4.8f1"]
-  what = "the Linux build of My Game (Unity 2019.4.8f1): its folder, the archive it came in (.zip, .7z, .tar.gz) or GOG's installer (.sh)"
-  size_mb = 450
-  setup_space_mb = 0
-  developer = "Studio & Co"
-  publisher = "Pub <x>"
-  release_date = "2017-09-29"
-  genre = ""
-  url = "https://example.com/g"
-  description = ""
-  
-  # the game's controls for the README and the testing thread, as the handheld labels its buttons
-  # (most have A right, B bottom), one row each, in order: e.g. "D-Pad" = "Move", B = "Jump".
-  # PortMaster's exit hotkey (Select + Start) is added. Leave out buttons that do nothing
-  # (drafted by `port new` from the game's default pad bindings, asmpatch --survey: reword them
-  # and check them on a handheld)
-  [controls]
-  D-Pad = "Move"
-  "B (bottom)" = "Jump | climb"
-  
-  # Unity's Android player: backend/abi; sha256 = {"<file>" = "<hash>"} checked after the setup unpacks
-  # it from the port's donors; donors = the donor APKs the release ships in donor/ (written by `port new`
-  # from the route and game.unity_versions; names added here are shipped too). The handheld never
-  # downloads Unity's player: `port package --donors DIR` takes the donors from DIR (tools/donor)
-  [player]
-  backend = "mono"
-  abi = "armeabi-v7a"
-  sha256 = {"libunity.so" = "ab", "libmain.so" = "cd"}
-  # donors port new ships for the route and game.unity_versions: donor-2019.4.8f1-mono-armv7.apk
-  donors = []
-  
-  # pmu convert's config (each step's DEFAULTS); "textures" re-encodes BC/DXT as ASTC
-  # (less memory, a longer setup, slightly different pixels: off unless you add it)
-  [convert]
-  steps = ["shaders", "settings", "audio", "quality", "textures"]
-  [convert.settings]
-  graphics_apis = [11]
-  [convert.textures]
-  quality = "medium"
-  scale = 0.375
-  [convert.shaders]
-  grab_fetch = "always"
-  
-  # pmu android-data: asmpatch = auto (run tools/asmpatch; it changes only what it
-  # finds: Rewired, the Input System package; PlayMaker's exact optimizations) | off |
-  # ["patch", ...]; streaming_assets = obb |
-  # both | loose (code that reads StreamingAssets as files: also/only beside the APK,
-  # docs/android-data.md); data_path = true (files read or written at Application.dataPath);
-  # winbcl = auto (the setup takes Unity's class libraries a build lacks for the player from the
-  # port's Mono donor: a Windows 2021.2+ build's Unix ones, facades such as netstandard.dll) | off;
-  # name = the APK's, package (keep it: it names the PlayerPrefs file); args = more options
-  [android_data]
-  asmpatch = ["auto", "hk-blur"]
-  video_shader = true
-  swappy = "off"
-  streaming_assets = "both"
-  data_path = false
-  winbcl = "auto"
-  name = "MyGame"
-  package = "com.pmunity.mygame"
-  args = ["--rewired-joysticks", "2", "it's"]
-  
-  # a Wwise game's soundbanks (banks: their folder, relative to the game's data folder), which the setup
-  # converts once for ua_host's own Wwise player (pmu wwise; docs/wwise-player.md); empty: silent
-  [wwise]
-  banks = "StreamingAssets/Audio/GeneratedSoundBanks/Linux"
-  
-  # ua_host's environment (docs/runtime.md, docs/input.md), written to port.env:
-  # e.g. UA_POINTER = "1", UA_POINTER_CURSOR = "0", UA_KEYMAP = "start:escape", UA_PAD_NAME,
-  # UA_OSK = "done" (the on-screen keyboard answers every soft keyboard at once), UA_KEYBOARD = "1",
-  # UA_DPAD_STICK = "auto" (the d-pad drives the left stick on handhelds without sticks)
-  [runtime]
-  UA_POINTER = "1"
-  UA_KEYMAP = "start:escape,x:space"
-  UA_FLIPBOOK = ""
-  
-  # the Low picture: more of the environment on every handheld (no setup question offers another;
-  # UA_PICTURE=high set by hand at the top of port.env skips it): reductions of the picture,
-  # never of the game play (docs/porting.md, "The Low picture at launch"), e.g.
-  # ASMPATCH_HK_BLUR = "off", UA_RENDER_PIXELS = "560000", UA_PREFS_DEFAULTS (the game's own options)
-  [runtime_low]
-  UA_RENDER_PIXELS = "560000"
-  
-  # more of the environment, only on handhelds with 1 GB of RAM or less (port.env sets it there
-  # unless set already), with either picture: what spares memory at a price a bigger handheld
-  # need not pay; speedups go in [runtime], for every handheld (docs/porting.md, "Small handhelds")
-  [runtime_lowmem]
-  UA_X = "a b"
-  
-  # the porter's own files (paths relative to this file), copied into setup/: converter plugins
-  # (--plugin), managed = assemblies shipped into the game (--managed-file), assembly_patches =
-  # [{name, command, files}] ({setup} = the setup folder), hooks = {game|pre_convert|post_convert|
-  # post_pack|post_install = "x.sh"} sourced by the setup, extra = files for the port folder,
-  # own = files of the port's source folder `port new` leaves as they are (e.g. "<title>.sh", a
-  # hand-made launcher or "<name>/setup/patchscript"; the template's version is not written)
-  [files]
-  plugins = ["../in/files/animclips.py", "../in/files/tweaks.json"]
-  managed = ["../in/files/Patch.dll"]
-  assembly_patches = [{name = "Assembly-CSharp.dll", command = "{setup}/files/patch {managed} {out}", files = ["../in/files/notes.txt"]}]
-  hooks = {game = "../in/files/game.sh"}
-  extra = ["../in/files/notes.txt"]
-  own = []
-  
-  # commands `port package` runs in this folder first (env PMUNITY, PORT_SRC, BUILD), the files
-  # they make put into the port folder (outputs = {"setup/files/x" = "{build}/x"}), and their licences
-  # (licenses = {"LICENSE.x.txt" = "path" or "{build}/path"})
-  [build]
-  commands = []
-  outputs = {}
-  licenses = {}
-  
-  [[questions]]
-  id = "TEXTURE_QUALITY"
-  question = "Texture quality? \"High\" is tested."
-  options = [["medium", "High (recommended)"], ["fast", "Low"]]
-  default = "medium"
-  convert_set = "textures.quality"
-  
-  [[questions]]
-  id = "CURSOR"
-  question = "Cursor?"
-  options = [["1", "On"], ["0"]]
-  env = "UA_POINTER_CURSOR"
-  
-  [[questions]]
-  id = "PIC"
-  question = "Picture?"
-  options = [["high", "High"]]
-  convert_set = "quality.profile"
+file rel/zip/mygame/setup/patchscript 644 27146 cf077a9752d3a1bf
+file rel/zip/mygame/setup/setup.env 644 769 798f20a6c69ef8b5
 == dump_toml apk
   # port.toml: a PortMaster port made with `pmu port new` (docs/porting.md).
   # Edit, then run `port new <name> --data <game>` again to regenerate the port folder.
@@ -1392,9 +1113,8 @@ file rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
   # sports strategy "visual novel" other), availability (free | paid | demo | full), store =
   # [{name, gameurl, developerurl}], reqs (more device capabilities: "!lowres", "2gb", "power"),
   # exp (true only to hide a released port); thanks = the README's first sentence; screenshot and
-  # cover = image files (relative to the port folder) the release takes; aarch64_only = true: a
-  # release with nothing for armhf (a Mono game on the mono-arm64 route: Unity's arm64 player and
-  # Unity's Mono for aarch64; no 32-bit ua_host, libraries or player in the zip or on the handheld)
+  # cover = image files (relative to the port folder) the release takes (every release is aarch64
+  # only: nothing for armhf in the zip or on the handheld)
   [port]
   name = "mygame"
   title = "My Game"
@@ -1414,7 +1134,6 @@ file rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
   thanks = "Thanks to the makers."
   screenshot = "screenshot.png"
   cover = "cover.png"
-  aarch64_only = false
   
   # what the player provides: the files the setup takes from gamedata/ (data: globs; .obb files
   # always), the build kind (android), the Unity versions and the Android package the setup accepts
@@ -1433,13 +1152,10 @@ file rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
   url = "https://example.com/g"
   description = ""
   
-  # the player in the APK: backend (from the APK); abis = the APK's ABIs the port runs, and so
-  # the runtimes the release ships (armeabi-v7a: ua_host, 32-bit; arm64-v8a: ua_host64); abi = the
-  # one taken where the system runs both: auto = armeabi-v7a where the system has a 32-bit
-  # userland, else arm64-v8a; arm64-v8a = the 64-bit one wherever the APK has it; il2cpp = true
-  # (a Mono build, armeabi-v7a only): where the system has no 32-bit userland, the setup compiles
-  # the build's code with Unity's IL2CPP for Unity's arm64 IL2CPP player (hours on the handheld,
-  # Wi-Fi, about 1.6 GB free; the release also ships ua_host64)
+  # the player in the APK: backend (from the APK); abis = the APK's ABIs the port runs
+  # (arm64-v8a: ua_host64; 32-bit armhf was removed); abi = arm64-v8a; il2cpp = true (a Mono
+  # build, armeabi-v7a only): the setup compiles the build's code with Unity's IL2CPP for Unity's
+  # arm64 IL2CPP player (hours on the handheld, Wi-Fi, about 1.6 GB free)
   [player]
   backend = "mono"
   abi = "armeabi-v7a"
@@ -1501,9 +1217,8 @@ file rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
   # sports strategy "visual novel" other), availability (free | paid | demo | full), store =
   # [{name, gameurl, developerurl}], reqs (more device capabilities: "!lowres", "2gb", "power"),
   # exp (true only to hide a released port); thanks = the README's first sentence; screenshot and
-  # cover = image files (relative to the port folder) the release takes; aarch64_only = true: a
-  # release with nothing for armhf (a Mono game on the mono-arm64 route: Unity's arm64 player and
-  # Unity's Mono for aarch64; no 32-bit ua_host, libraries or player in the zip or on the handheld)
+  # cover = image files (relative to the port folder) the release takes (every release is aarch64
+  # only: nothing for armhf in the zip or on the handheld)
   [port]
   name = "mygame"
   title = "My Game"
@@ -1523,7 +1238,6 @@ file rel/zip/mygame/setup/update 644 4416 016dd8d137ed57e7
   thanks = "Thanks to the makers."
   screenshot = "screenshot.png"
   cover = "cover.png"
-  aarch64_only = false
   
   # what the player provides: the data folder the setup looks for (data, a glob), the build
   # kind (linux | macos | windows), the Unity versions the setup accepts (empty: any the

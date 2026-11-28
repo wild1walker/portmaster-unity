@@ -662,18 +662,11 @@ fn apk_port_new(ctx: &mut NewCtx) -> Result<()> {
         return Ok(());
     };
     let pl = ctx.cfg.dict("player");
-    let abis: Vec<Val> = match pl.get("abis") {
-        Some(v) if v.truthy() => v.as_list().map(<[Val]>::to_vec).unwrap_or_default(),
-        _ => Val::strs(&["arm64-v8a", "armeabi-v7a"]).as_list().unwrap().to_vec(),
-    };
     let il2cpp = pl.truthy("il2cpp");
     let what = s(ctx.cfg.dict("game"), "what");
     {
         let a = pj.as_dict_mut().unwrap().table("attr");
-        let only_v7 = abis.len() == 1 && abis[0].eq(&Val::s("armeabi-v7a"));
-        let mut reqs: Vec<Val> = if only_v7 && !il2cpp { vec![Val::s("armhf")] } else { vec![] };
-        reqs.extend(a.list("reqs").iter().filter(|r| !r.eq(&Val::s("armhf"))).cloned());
-        a.set("reqs", Val::List(reqs));
+        no_armhf(a);
         if !p.truthy("desc") {
             a.set("desc", Val::Str(format!("{}: the game's own Android build, run on the handheld by ua_host.", s(&p, "title"))));
         }
@@ -684,7 +677,7 @@ fn apk_port_new(ctx: &mut NewCtx) -> Result<()> {
                 Val::Str(if !il2cpp {
                     format!("Requires {what}: put it in ports/{name}/gamedata. The first launch installs it ({t}; nothing is downloaded).")
                 } else {
-                    format!("Requires {what}: put it in ports/{name}/gamedata. The first launch installs it ({t}); on a handheld without a 32-bit userland it also compiles the game's code with Unity's IL2CPP (one to a few hours; about 1.6 GB free; Wi-Fi for Unity's and Debian's files).")
+                    format!("Requires {what}: put it in ports/{name}/gamedata. The first launch installs it ({t}); it also compiles the game's code with Unity's IL2CPP (one to a few hours; about 1.6 GB free; Wi-Fi for Unity's and Debian's files).")
                 }),
             );
         }

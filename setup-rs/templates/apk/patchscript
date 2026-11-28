@@ -5,11 +5,8 @@
 #   1. the build: its APK (and the .obb files that come with it), split APKs, or the .xapk / .apks /
 #      .aab (or a .zip of them) put there; `pmu apk`
 #      checks it (Unity version, graphics APIs, IL2CPP metadata, OBBs) and lays it out for
-#      ua_host, with the player this system runs: the
-#      build's armeabi-v7a one where the system has a 32-bit (armhf) userland (ua_host), else its
-#      arm64-v8a one (ua_host64); with player.il2cpp (PLAYER_IL2CPP=1), a Mono build (armeabi-v7a
-#      only) on a system without a 32-bit userland: its code compiled with Unity's IL2CPP here on the
-#      handheld for Unity's arm64 IL2CPP player (`pm apk --il2cpp --on-device`: Unity's IL2CPP
+#      ua_host64 with the build's arm64-v8a player; with player.il2cpp (PLAYER_IL2CPP=1), a Mono
+#      build (armeabi-v7a only): its code compiled with Unity's IL2CPP here on the handheld for Unity's arm64 IL2CPP player (`pm apk --il2cpp --on-device`: Unity's IL2CPP
 #      and player by range reads, compilers from Debian and .NET from Microsoft, pinned by checksum;
 #      one to a few hours, Wi-Fi; an interrupted build continues)
 #   2. installing: lib/ (that player's libraries), the APK and the OBBs under the names the player
@@ -58,18 +55,10 @@ mark() { sync; touch "$W/.step_$1" || nowrite "the setup's progress"; }   # mark
 mkdir -p "$W" || fail "Cannot write to ports/$PORT_NAME/gamedata."
 echo "RAM $(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, swap $(awk '/SwapTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null) MB, free on the card $(free_mb) MB"
 
-# ---- which of the build's players this system runs, in order: the 32-bit one where there is a
-# 32-bit userland and the port has ua_host, the 64-bit one where it has ua_host64 (any aarch64
-# system); port.toml's player.abi (PLAYER_ABI) puts arm64-v8a first
-t32=; [ -e /lib/ld-linux-armhf.so.3 ] && [ -f "$GAMEDIR/ua_host" ] && t32=armhf
-t64=; [ -f "$GAMEDIR/ua_host64" ] && t64=arm64
-case "$PLAYER_ABI" in arm64-v8a) TARGETS="$t64 $t32";; *) TARGETS="$t32 $t64";; esac
-TARGETS=$(echo $TARGETS | tr ' ' ,)
-if [ -z "$TARGETS" ]; then
-  [ -f "$GAMEDIR/ua_host" ] && fail "$PORT_TITLE runs the game's 32-bit player, which needs a 32-bit (armhf) userland, and this system has none (no /lib/ld-linux-armhf.so.3)."
-  fail "This copy of the port has no ua_host: install it again."
-fi
-echo "the players this system runs, in this order: $TARGETS"
+# ---- the build's player this system runs: the 64-bit one, with ua_host64 (32-bit armhf was removed)
+TARGETS=; [ -f "$GAMEDIR/ua_host64" ] && TARGETS=arm64
+[ -n "$TARGETS" ] || fail "This copy of the port has no ua_host64: install it again."
+echo "the player this system runs: $TARGETS"
 
 IL2CPP_ARGS=(); need_il2cpp=0
 if [ "${PLAYER_IL2CPP:-0}" = 1 ]; then

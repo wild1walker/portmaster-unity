@@ -228,34 +228,10 @@ fn decide_routes(repo: &Repo, rep: &mut Dict) -> port::Result<()> {
     if !v.is_empty() {
         needs.push(donor_need(&v, "mono", "armeabi-v7a"));
     }
-    routes.push(route_entry("android", why.is_empty(), None, &why, &needs));
-    // IL2CPP to arm64 (64-bit only systems): the game's code compiled on the handheld in the setup
-    let mut why: Vec<String> = if mono { Vec::new() } else { vec!["needs a Mono build (an IL2CPP desktop build is compiled for its own system)".into()] };
-    let mix = vv.as_ref().and_then(il2cpp::mix::refusal);
-    if vv.as_ref().is_some_and(|x| x.line() < (2017, 4)) {
-        why.push(format!("Unity {v}: the arm64 IL2CPP players start with 2017.4"));
-    } else if let Some(m) = mix {
-        why.push(m);
-    } else if !v.is_empty() && !supported {
-        why.push(unsupported.clone());
-    }
-    if gl.is_none() {
-        why.push("no shader programs the converter translates".into());
-    }
-    why.extend(hdrp.clone());
-    let mut needs = Vec::new();
-    if why.is_empty() {
-        needs.push("the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to \
-                    a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools \
-                    and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries \
-                    (the one route whose setup downloads)".to_string());
-        needs.push("tested to the title in the arm64 rig with Unity 2017.4 - 2022.3".into());
-        if vv.as_ref().is_some_and(il2cpp::mix::needed) {
-            needs.push("Unity 2023.1+: its own il2cpp is a native program; Unity 2022.3's .NET il2cpp converts the game's code \
-                        for this version's libil2cpp and player (docs/il2cpp.md, \"Unity 2023.1+\"; about 8 MB more downloads)".into());
-        }
-    }
-    routes.push(route_entry("il2cpp-arm64", why.is_empty(), Some(available(repo, "il2cpp-arm64")), &why, &needs));
+    // (the armv7 Mono player's route itself is gone with armhf: listed for what it would need, never taken)
+    why.push("the android route (Unity's armv7 Mono player on a 32-bit userland) was removed with armhf (tag last-armhf): \
+              mono-arm64 runs such games on Unity's arm64 player".into());
+    routes.push(route_entry("android", false, None, &why, &needs));
     // Mono on the arm64 player
     let mut why: Vec<String> = if mono { Vec::new() } else { vec!["needs a Mono build".into()] };
     let rt = rep.get("scripting_runtime").filter(|x| x.truthy()).map(Val::py_str).unwrap_or_default();
@@ -273,7 +249,7 @@ fn decide_routes(repo: &Repo, rep: &mut Dict) -> port::Result<()> {
     if gl.is_none() {
         why.push("no shader programs the converter translates".into());
     }
-    why.extend(hdrp);
+    why.extend(hdrp.clone());
     let mut needs = Vec::new();
     if why.is_empty() {
         needs.push("the release ships Unity's Mono for the game's Unity line, built for aarch64 Linux (`pmu port package` \
@@ -289,6 +265,33 @@ fn decide_routes(repo: &Repo, rep: &mut Dict) -> port::Result<()> {
         }
     }
     routes.push(route_entry("mono-arm64", why.is_empty(), Some(available(repo, "mono-arm64")), &why, &needs));
+    // IL2CPP to arm64 (after mono-arm64, which compiles nothing on the handheld): the game's code compiled on the handheld in the setup
+    let mut why: Vec<String> = if mono { Vec::new() } else { vec!["needs a Mono build (an IL2CPP desktop build is compiled for its own system)".into()] };
+    let mix = vv.as_ref().and_then(il2cpp::mix::refusal);
+    if vv.as_ref().is_some_and(|x| x.line() < (2017, 4)) {
+        why.push(format!("Unity {v}: the arm64 IL2CPP players start with 2017.4"));
+    } else if let Some(m) = mix {
+        why.push(m);
+    } else if !v.is_empty() && !supported {
+        why.push(unsupported.clone());
+    }
+    if gl.is_none() {
+        why.push("no shader programs the converter translates".into());
+    }
+    why.extend(hdrp);
+    let mut needs = Vec::new();
+    if why.is_empty() {
+        needs.push("the setup compiles the game's code with Unity's IL2CPP on the handheld (`pmu il2cpp --on-device`): one to \
+                    a few hours on a Cortex-A53, about 1.6 GB free, about 500 - 700 MB of memory, and Wi-Fi: Unity's IL2CPP tools \
+                    and its arm64 IL2CPP player (with its static libraries), Debian's compilers and .NET, which no donor carries \
+                    (the one route whose setup downloads)".to_string());
+        needs.push("tested to the title in the arm64 rig with Unity 2017.4 - 2022.3".into());
+        if vv.as_ref().is_some_and(il2cpp::mix::needed) {
+            needs.push("Unity 2023.1+: its own il2cpp is a native program; Unity 2022.3's .NET il2cpp converts the game's code \
+                        for this version's libil2cpp and player (docs/il2cpp.md, \"Unity 2023.1+\"; about 8 MB more downloads)".into());
+        }
+    }
+    routes.push(route_entry("il2cpp-arm64", why.is_empty(), Some(available(repo, "il2cpp-arm64")), &why, &needs));
     // box64: the game's own x86-64 Linux player
     let mut why = Vec::new();
     let arch = rep.get("arch").map_or("None".to_string(), Val::py_str);

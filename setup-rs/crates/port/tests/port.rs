@@ -137,19 +137,32 @@ fn stub_pmu(t: &Path) -> String {
 }
 
 /// The runtime's stand-ins (ua_host with the flip-book stand-in beside it, the decoders' and
-/// libhybris's licences) and package()'s options.
+/// libhybris's licences; for the mono-arm64 route, Unity's Mono of 2019.4 and the bridge) and
+/// package()'s options.
 fn release_parts(t: &Path) -> (String, PackOpts) {
     let rt = t.join("rt");
-    put(&rt.join("runtime/host/out/ua_host"), "host");
+    put(&rt.join("runtime/host/out/arm64/ua_host"), "host");
     put(&rt.join("runtime/host/out/uaflipbook.dll"), "MZ flip-book");
-    put(&rt.join("runtime/media/out/licenses/libvpx.copyright"), "BSD");
+    put(&rt.join("runtime/media/out/arm64/licenses/libvpx.copyright"), "BSD");
     put(&rt.join("runtime/thirdparty/libhybris/LICENSE.Apache2"), "Apache 2.0");
+    let w = t.join("mono64");
+    for line in ["2019.4", "2022.2"] {
+        for n in ["libmonobdwgc-2.0.so", "libMonoPosixHelper.so"] {
+            put(&w.join(format!("out/unity-{line}-mbe/{n}")), "mono");
+        }
+        for n in ["LICENSE", "PATENTS.TXT", "external/bdwgc/README.QUICK"] {
+            put(&w.join(format!("src/unity-{line}-mbe")).join(n), "MIT");
+        }
+    }
+    put(&t.join("bridge.so"), "bridge");
     let opts = PackOpts {
         out: Some(port::ps(&t.join("rel"))),
         runtime: Some(port::ps(&rt)),
         donors: Some(port::ps(&t.join("donors"))),
         no_build: true,
         pmu: Some(stub_pmu(t)),
+        mono64_work: Some(port::ps(&w)),
+        mono64_bridge: Some(port::ps(&t.join("bridge.so"))),
         ..Default::default()
     };
     (port::ps(&rt), opts)
@@ -337,7 +350,7 @@ fn new_files() {
     let out = make(&t.0, "");
     let files: Vec<String> = read(&out.join(".port_files")).split('\n').filter(|x| !x.is_empty()).map(String::from).collect();
     for f in [
-        "My Game.sh", "mygame/setup/patchscript", "mygame/setup/update", "mygame/setup/setup.env", "mygame/setup/convert.json",
+        "My Game.sh", "mygame/setup/patchscript", "mygame/setup/setup.env", "mygame/setup/convert.json",
         "mygame/setup/questions.lua", "mygame/setup.txt", "mygame/port.json", "mygame/port.env", "mygame/README.md",
         "mygame/gamedata/PUT_GAME_FILES_HERE.txt", "mygame/mygame.ini", "mygame/gameinfo.xml", "README.md", "package.sh",
         "port.build.json", "testing_thread.txt",
@@ -369,16 +382,14 @@ fn new_files() {
     assert_eq!(heads, ["## Notes", "## Controls", "## Compile"]);
     assert!(readme.contains("| Select + Start | Quit |"));
     assert!(readme.contains("runtime/build.sh"));
-    assert!(readme.contains("32-bit (armhf) userland"));
+    assert!(!readme.contains("armhf"));
     assert!(!readme.contains("tools/asmpatch/build.sh"));
     assert!(!readme.contains('\u{2014}'));
     let pr = read(&out.join("mygame/README.md"));
     assert!(pr.contains("| Select + Start | Quit |"));
     assert!(pr.contains("or GOG's Linux installer `.sh`"));
-    assert!(pr.contains("runs on Unity's own Android player, run natively on the handheld's 32-bit userland by\n"));
-    assert!(pr.contains(
-        "- A handheld with a 32-bit (armhf) userland and GLES 3 (e.g. Knulli on Allwinner H700 devices),\n  and a 64-bit (aarch64) system for the setup's tools."
-    ));
+    assert!(pr.contains("runs on Unity's 64-bit (arm64) Android player, its own code on Unity's Mono for 64-bit ARM, run natively by\n"));
+    assert!(pr.contains("- A 64-bit (aarch64) handheld with GLES 3 (no 32-bit userland needed)."));
     let gi = read(&out.join("mygame/gameinfo.xml"));
     assert!(gi.contains("<path>./My Game.sh</path>"));
     assert!(gi.contains("<image>./mygame/screenshot.png</image>"));
@@ -424,7 +435,7 @@ fn pmu_covers() {
     ] {
         assert_eq!(text::pmu_covers(&over(o)), (false, vec![why.to_string()]));
     }
-    for route in ["android", "mono-arm64", "box64", "apk", "il2cpp-arm64"] {
+    for route in ["mono-arm64", "box64", "apk", "il2cpp-arm64"] {
         let r = port::routes::route(&repo(), route).unwrap().unwrap();
         assert!(r.list("package").iter().any(|x| x.eq(&Val::s("pmu"))), "{route}");
         for p in ["pmu?", "pmunity?", "pybundle?"] {
@@ -462,7 +473,8 @@ fn windows_and_vulkan_ports() {
         put(&bin, "elf");
         opts.pmhlslcc_bin = Some(port::ps(&bin));
         opts.pmspirvcross_bin = Some(port::ps(&bin));
-        assert!(err_text(package(&repo(), &port::ps(&out), &opts, &mut quiet())).contains(&format!("{tool}.LICENSE.txt")));
+        let e = err_text(package(&repo(), &port::ps(&out), &opts, &mut quiet()));
+        assert!(e.contains(&format!("{tool}.LICENSE.txt")), "{e}");
         put(&bin.with_file_name(format!("{tool}.LICENSE.txt")), "the tool's licence");
         let z = Zip::open(&package(&repo(), &port::ps(&out), &opts, &mut quiet()).unwrap());
         assert_eq!(z.read(&format!("mygame/licenses/{lic}")), b"the tool's licence");
@@ -494,7 +506,7 @@ fn il2cpp_and_mono_arm64_routes() {
     assert!(a.str("inst").contains("IL2CPP"));
     let readme = read(&out.join("README.md"));
     assert!(readme.contains("64-bit (aarch64) handheld") && readme.contains("Unity's IL2CPP on the handheld"));
-    assert!(readme.contains("ARCH=arm64 runtime/build.sh") && !readme.contains("armhf"));
+    assert!(readme.contains("runtime/build.sh") && !readme.contains("armhf"));
     assert!(read(&out.join("testing_thread.txt")).contains("Needs a 64-bit (aarch64) handheld."));
     assert!(read(&out.join("mygame/gameinfo.xml")).contains("<desc>My Game on Unity's 64-bit Android player"));
     // a player set in port.toml wins over the route's default
@@ -619,13 +631,13 @@ fn package_pmu() {
     let out = make(&t.0, "");
     let cfg = build_cfg(&out);
     assert_eq!(text::pmu_covers(&cfg), (true, vec![]));
-    assert!(cfg.dict("player").get("donors").unwrap().eq(&Val::strs(&["donor-2019.4.8f1-mono-armv7.apk"])));
+    assert!(cfg.dict("player").get("donors").unwrap().eq(&Val::strs(&["donor-2019.4.8f1-il2cpp-arm64.apk", "donor-2019.4.8f1-mono-armv7.apk"])));
     let env = read(&out.join("mygame/setup/setup.env"));
-    assert!(env.contains("DONORS=donor-2019.4.8f1-mono-armv7.apk") && !env.contains("PLAYER_URL"));
+    assert!(env.contains("DONORS='donor-2019.4.8f1-il2cpp-arm64.apk donor-2019.4.8f1-mono-armv7.apk'") && !env.contains("PLAYER_URL"));
     let (_, opts) = release_parts(&t.0);
     for (donors, says) in [
-        (None, "no donor folder was given: --donors DIR (or $DONORS) with donor-2019.4.8f1-mono-armv7.apk"),
-        (Some(port::ps(&t.0.join("none"))), "has no donor-2019.4.8f1-mono-armv7.apk"),
+        (None, "no donor folder was given: --donors DIR (or $DONORS) with donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk"),
+        (Some(port::ps(&t.0.join("none"))), "has no donor-2019.4.8f1-il2cpp-arm64.apk, donor-2019.4.8f1-mono-armv7.apk"),
     ] {
         if std::env::var_os("DONORS").is_some() && donors.is_none() {
             continue;
@@ -668,11 +680,12 @@ fn elf(machine: u16) -> Vec<u8> {
 
 #[test]
 fn aarch64_only() {
+    // every release: the android route's game on mono-arm64, no aarch64_only key, no armhf in port.json
     let t = tmp("a64off");
     let out = make(&t.0, "");
-    assert!(read(&out.join("mygame/setup/setup.env")).contains("PORT_ROUTE=android"));
-    assert!(build_cfg(&out).dict("port").get("aarch64_only").unwrap().eq(&Val::Bool(false)));
-    assert!(read(&out.join("mygame/port.json")).contains("\"armhf\""));
+    assert!(read(&out.join("mygame/setup/setup.env")).contains("PORT_ROUTE=mono-arm64"));
+    assert!(build_cfg(&out).dict("port").get("aarch64_only").is_none());
+    assert!(!read(&out.join("mygame/port.json")).contains("\"armhf\""));
     drop(t);
     let t = tmp("a64on");
     let out = make(
@@ -737,7 +750,6 @@ tools = "tools"
     let rt = PathBuf::from(rt);
     put(&rt.join("runtime/host/out/arm64/ua_host"), elf(package::EM_AARCH64));
     put(&rt.join("runtime/media/out/arm64/licenses/libvpx.copyright"), "BSD");
-    put(&rt.join("runtime/host/out/ua_host"), elf(package::EM_ARM));
     put(&rt.join("runtime/relayout/0123abcd.txt"), "# a code layout list\n");
     put(&rt.join("runtime/relayout/README.md"), "# not shipped\n");
     let w = t.0.join("mono64");
@@ -864,7 +876,7 @@ fn package_zip() {
     assert_eq!(z.names[1..], sorted[..]);
     let want: BTreeMap<&str, u32> = [
         ("My Game.sh", 0o644), ("mygame/ua_host", 0o755), ("mygame/setup/pmu", 0o755), ("mygame/setup/patchscript", 0o644),
-        ("mygame/setup/update", 0o644), ("mygame/libthing.so", 0o755), ("mygame/table.bin", 0o644), ("mygame/notes.txt", 0o644),
+        ("mygame/libthing.so", 0o755), ("mygame/table.bin", 0o644), ("mygame/notes.txt", 0o644),
         ("mygame/port.json", 0o644), ("mygame/uaflipbook.dll", 0o644), ("mygame/donor/donor-2019.4.8f1-mono-armv7.apk", 0o644),
         ("mygame/licenses/LICENSE.musl.txt", 0o644),
     ]
@@ -1021,25 +1033,25 @@ abis = ["arm64-v8a", "armeabi-v7a"]
     bash_n(&out.join("My Game.sh"));
     bash_n(&out.join("mygame/setup/patchscript"));
     let env = read(&out.join("mygame/setup/setup.env"));
-    for x in ["PORT_ROUTE=apk", "GAME_PACKAGE=com.test.game", "PLAYER_ABI=auto", "GAME_BUILD=android", "GAME_DATA='*.apk *.xapk *.apks *.aab *.zip'", "UNITY_VERSIONS=2021.3.4f1"] {
+    for x in ["PORT_ROUTE=apk", "GAME_PACKAGE=com.test.game", "PLAYER_ABI=arm64-v8a", "GAME_BUILD=android", "GAME_DATA='*.apk *.xapk *.apks *.aab *.zip'", "UNITY_VERSIONS=2021.3.4f1"] {
         assert!(env.contains(x), "{x}");
     }
     assert!(!env.contains("PACKAGE=com.pmunity"));
     let launcher = read(&out.join("My Game.sh"));
     assert!(text::launcher_warnings(&launcher).is_empty());
-    for x in ["./ua_host64 \"$GAMEDIR\"", "/lib/ld-linux-armhf.so.3", "\"abi\""] {
+    for x in ["./ua_host64 \"$GAMEDIR\"", "\"abi\""] {
         assert!(launcher.contains(x), "{x}");
     }
+    assert!(!launcher.contains("armhf") && !launcher.contains("lib32"));
     let pj = pyjson::loads(&read(&out.join("mygame/port.json"))).unwrap();
     let at = pj.as_dict().unwrap().dict("attr").clone();
     assert!(at.list("reqs").is_empty() && at.str("inst").contains("nothing is downloaded"));
-    assert!(read(&out.join("README.md")).contains("ARCH=arm64 runtime/build.sh"));
-    // the release: both runtimes, each with its licences; the setup's pmu
+    assert!(read(&out.join("README.md")).contains("runtime/build.sh"));
+    assert!(build_cfg(&out).dict("player").get("abis").unwrap().eq(&Val::strs(&["arm64-v8a"])));
+    // the release: the 64-bit runtime with its licences; the setup's pmu
     let rt = t.0.join("rt");
-    for arch in ["", "arm64/"] {
-        put(&rt.join(format!("runtime/host/out/{arch}ua_host")), format!("host {arch}"));
-        put(&rt.join(format!("runtime/media/out/{arch}licenses/libvpx.copyright")), format!("BSD {arch}"));
-    }
+    put(&rt.join("runtime/host/out/arm64/ua_host"), "host arm64/");
+    put(&rt.join("runtime/media/out/arm64/licenses/libvpx.copyright"), "BSD arm64/");
     put(&rt.join("runtime/thirdparty/libhybris/LICENSE.Apache2"), "Apache 2.0");
     let opts = PackOpts {
         out: Some(port::ps(&t.0.join("rel"))),
@@ -1052,9 +1064,7 @@ abis = ["arm64-v8a", "armeabi-v7a"]
     assert_eq!(z.read("mygame/ua_host64"), b"host arm64/");
     assert!(z.read("mygame/licenses/LICENSE.libvpx.txt").ends_with(b"BSD arm64/"));
     assert!(!z.has("mygame/licenses/LICENSE.libvpx.ua_host64.txt"));
-    for n in ["mygame/ua_host", "mygame/setup/pmu"] {
-        assert!(z.has(n));
-    }
+    assert!(z.has("mygame/setup/pmu") && !z.has("mygame/ua_host"));
     assert!(!z.has("mygame/setup/python.tar.gz"));
     // port new again from port.toml alone: the same setup
     let mut env_before = env;
@@ -1065,15 +1075,11 @@ abis = ["arm64-v8a", "armeabi-v7a"]
     new(&repo(), &a2, &mut quiet()).unwrap();
     assert_eq!(read(&out.join("mygame/setup/setup.env")), env_before);
     env_before.clear();
-    // an armeabi-v7a-only build: a 32-bit userland (port.json), ua_host alone
+    // an armeabi-v7a-only build: refused (its 32-bit player is not run; a Mono build takes player.il2cpp)
     put(&cp, read(&cp).replace("abis = [\"arm64-v8a\", \"armeabi-v7a\"]", "abis = [\"armeabi-v7a\"]"));
     let a3 = NewArgs { name: "v7game".into(), config: Some(port::ps(&cp)), out: Some(port::ps(&t.0.join("port2"))), ..Default::default() };
-    let out2 = new(&repo(), &a3, &mut quiet()).unwrap();
-    let pj = pyjson::loads(&read(&out2.join("v7game/port.json"))).unwrap();
-    assert!(pj.as_dict().unwrap().dict("attr").get("reqs").unwrap().eq(&Val::strs(&["armhf"])));
-    assert!(!read(&out2.join("README.md")).contains("ARCH=arm64"));
-    let z = Zip::open(&package(&repo(), &port::ps(&out2), &PackOpts { out: Some(port::ps(&t.0.join("rel2"))), ..opts }, &mut quiet()).unwrap());
-    assert!(z.has("v7game/ua_host") && !z.has("v7game/ua_host64"));
+    assert!(err_text(new(&repo(), &a3, &mut quiet())).contains("no arm64-v8a player"));
+    let _ = opts;
     // player.il2cpp is for the apk route with a Mono build
     put(&cp, read(&cp) + "il2cpp = true\n");
     assert!(err_text(new(&repo(), &a3, &mut quiet())).contains("player.il2cpp"));
@@ -1084,7 +1090,7 @@ abis = ["arm64-v8a", "armeabi-v7a"]
 #[test]
 fn templates() {
     let rts = port::routes::routes(&repo()).unwrap();
-    assert!(rts.iter().any(|(n, _)| n == "android"));
+    assert!(!rts.iter().any(|(n, _)| n == "android") && rts.iter().any(|(n, _)| n == "mono-arm64"));
     for (_, r) in &rts {
         for (_, spec) in r.dict("files").iter() {
             let n = match spec {
@@ -1153,7 +1159,7 @@ fn port_json() {
     assert!(a.get("inst_md").unwrap().eq(&Val::Null) && a.str("desc_md") == "**bold**");
     assert_eq!(pyjson::dumps(a.get("store").unwrap(), None, true), r#"[{"name": "Steam", "gameurl": "https://example.com/app/1", "developerurl": ""}]"#);
     assert_eq!(a.str("availability"), "paid");
-    assert!(a.get("reqs").unwrap().eq(&Val::strs(&["armhf", "2gb", "!lowres"])));
+    assert!(a.get("reqs").unwrap().eq(&Val::strs(&["2gb", "!lowres"])));
     assert!(matches!(a.get("exp"), Some(Val::Bool(false))) && matches!(a.get("rtr"), Some(Val::Bool(false))));
     assert_eq!(mcfg("").dict("port").str("availability"), "free");
     assert_eq!(mcfg("[port]\navailability = 'demo'").dict("port").str("availability"), "demo");
@@ -1211,7 +1217,7 @@ fn testing_thread() {
     let tt = text::testing_thread_txt(&cfg, "Requires the game.");
     for part in [
         "mygame.zip", "harbourmaster install", "Title: My Game", "URL: https://example.com/g",
-        "Instructions:\nRequires the game.\nNeeds a handheld with a 32-bit (armhf) userland", "| A | Jump |", "| Select + Start | Quit |",
+        "Instructions:\nRequires the game.\n", "| A | Jump |", "| Select + Start | Quit |",
         "ROCKNIX\n-> [ ] Libmali", "[ ] Knulli", "[ ] 640x480",
     ] {
         assert!(tt.contains(part), "{part}");
@@ -1267,8 +1273,8 @@ fn launchers() {
             assert!(text::launcher_warnings(&t).is_empty(), "{name}");
         }
     }
-    let android = &rts.iter().find(|(n, _)| n == "android").unwrap().1;
-    let good = port::routes::read_text(&port::routes::template_path(&repo(), android, "launcher.sh").unwrap()).unwrap();
+    let mono = &rts.iter().find(|(n, _)| n == "mono-arm64").unwrap().1;
+    let good = port::routes::read_text(&port::routes::template_path(&repo(), mono, "launcher.sh").unwrap()).unwrap();
     let bad = good.replace("\nget_controls\n", "\n").replace("$GPTOKEYB2 \"ua_host\"", "\"$GPTOKEYB2\" \"ua_host\"").replace("pm_finish", "true")
         + "export SDL_VIDEODRIVER=kmsdrm\n";
     let w = text::launcher_warnings(&bad).join("\n");
@@ -1397,6 +1403,6 @@ fn box64_port_new_hook() {
 #[test]
 fn route_and_pmunity_repo_found() {
     let r = Repo::find(&[PathBuf::from(env!("CARGO_MANIFEST_DIR"))]).unwrap();
-    assert!(r.templates().join("android/route.json").is_file());
+    assert!(r.templates().join("mono-arm64/route.json").is_file());
     let _ = Read::bytes(&b""[..]);
 }

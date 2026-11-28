@@ -1,8 +1,8 @@
 #!/bin/bash
 # First-run setup on the handheld, run by the launcher through PortMaster's patcher (made with
 # `pmu port new`, il2cpp-arm64 route): builds the game for Unity's 64-bit (arm64) IL2CPP
-# Android player from the player's own copy in ports/<port>/gamedata/, for systems without a 32-bit
-# userland (Unity's Android Mono players are 32-bit only):
+# Android player from the player's own copy in ports/<port>/gamedata/ (no 32-bit userland needed;
+# Unity's Android Mono players are 32-bit only):
 #   1. the game: its data folder, from the folder or archive (.zip, .7z, .tar.*, macOS .pkg, GOG's
 #      Linux installer .sh: its zip is unpacked, the script never runs) put there
 #   2. the game's code compiled with Unity's IL2CPP here on the handheld (pmu il2cpp

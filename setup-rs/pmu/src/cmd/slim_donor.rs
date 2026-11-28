@@ -1,6 +1,6 @@
 //! `pmu slim-donor <apk> [out apk]` (pmu's own, no Python): a donor APK without its 32-bit player,
 //! for an aarch64-only release (crates/port package.rs `slim_donor`, which `pmu port package` runs on
-//! the donors of a port with `port.aarch64_only`): every entry but those in lib/<abi>/ for another
+//! every port's donors): every entry but those in lib/<abi>/ for another
 //! ABI than arm64-v8a, copied with the same bytes and compression. In place without [out apk].
 //! Prints how many files of lib/ were left out.
 use std::path::Path;

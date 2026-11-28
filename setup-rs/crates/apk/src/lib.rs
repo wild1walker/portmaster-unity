@@ -575,18 +575,9 @@ fn read_head(z: &Archive, name: &str, k: usize) -> Result<Vec<u8>, Fail> {
     Ok(v)
 }
 
-/// uname's machine (platform.machine()).
-fn machine() -> String {
-    let mut u: libc::utsname = unsafe { std::mem::zeroed() };
-    if unsafe { libc::uname(&mut u) } != 0 {
-        return String::new();
-    }
-    let m = unsafe { std::ffi::CStr::from_ptr(u.machine.as_ptr()) };
-    m.to_string_lossy().into_owned()
-}
-
 /// choose_abi: (ABI, why) for the build's ABIs `have`.
 fn choose_abi(have: &[String], target: &str, abi: Option<&str>) -> Result<(String, String), Fail> {
+    // the runtime runs arm64-v8a players only (32-bit armhf was removed; the last tree with it is the tag last-armhf)
     let arm: Vec<&str> = ABIS
         .iter()
         .copied()
@@ -601,100 +592,38 @@ fn choose_abi(have: &[String], target: &str, abi: Option<&str>) -> Result<(Strin
             };
             return refused(format!("--abi {abi}: the build has {list}"));
         }
+        if abi != "arm64-v8a" {
+            return refused(format!("--abi {abi}: the runtime runs arm64-v8a players only (armhf was removed)"));
+        }
         return Ok((abi.to_string(), format!("--abi {abi}")));
     }
     if arm.is_empty() {
         if have.iter().any(|a| OTHER_ABIS.contains(&a.as_str())) {
             return refused(format!(
-                "the build has native libraries only for {}: the runtime runs arm64-v8a or armeabi-v7a",
+                "the build has native libraries only for {}: the runtime runs arm64-v8a",
                 have.join(", ")
             ));
         }
         return refused(
             "the build has no native libraries (lib/<abi>/): not a Unity Android build, or its libraries \
-             are in a split APK (config.arm64_v8a / config.armeabi_v7a) that was not given",
+             are in a split APK (config.arm64_v8a) that was not given",
         );
     }
-    let t = if target.is_empty() { "auto" } else { target };
-    let mut targets: Vec<String> = t
-        .split(',')
-        .map(|x| py::strip(x).to_string())
-        .filter(|x| !x.is_empty())
-        .collect();
-    if targets.is_empty() {
-        targets = vec!["auto".into()];
+    let t = py::strip(if target.is_empty() { "auto" } else { target });
+    if t != "auto" && t != "arm64" {
+        return refused(format!("--target {target}: auto or arm64 (armhf was removed)"));
     }
-    let known = |x: &str| x == "arm64" || x == "armhf";
-    let bad = targets.iter().any(|x| !known(x) && x != "auto");
-    if bad || (targets.iter().any(|x| x == "auto") && targets.len() > 1) {
-        return refused(format!(
-            "--target {target}: auto, arm64, armhf, or a list of arm64 and armhf (the first the build has)"
-        ));
-    }
-    let why;
-    if targets == ["auto"] {
-        let m = machine().to_lowercase();
-        if cfg!(target_os = "linux")
-            && [
-                "aarch64", "arm64", "armv8l", "armv7l", "armhf", "armv7", "arm",
-            ]
-            .contains(&m.as_str())
-        {
-            // (this program is 64-bit)
-            let ptr = 8 * std::mem::size_of::<usize>();
-            targets = vec![if (m == "aarch64" || m == "arm64") && ptr == 64 {
-                "arm64".into()
-            } else {
-                "armhf".into()
-            }];
-            why = format!("this machine ({m}, {ptr}-bit userland)");
-        } else {
-            let pick = arm[0];
-            return Ok((
-                pick.to_string(),
-                if arm.len() > 1 {
-                    format!(
-                        "{pick} (the build has {}; --target armhf or --abi picks the 32-bit one)",
-                        arm.join(", ")
-                    )
-                } else {
-                    format!("{pick}, the only ARM ABI of the build")
-                },
-            ));
+    if arm.contains(&"arm64-v8a") {
+        let mut w = "arm64-v8a, the runtime's".to_string();
+        if arm.len() > 1 {
+            w += &format!(" (the build has {})", arm.join(", "));
         }
-    } else {
-        why = format!("--target {}", targets.join(","));
+        return Ok(("arm64-v8a".to_string(), w));
     }
-    for t in &targets {
-        let want = if t == "arm64" {
-            "arm64-v8a"
-        } else {
-            "armeabi-v7a"
-        };
-        if have.iter().any(|h| h == want) {
-            let mut w = format!("{want} for {why}");
-            if targets.len() > 1 {
-                w += &format!(" (the build has {})", arm.join(", "));
-            }
-            return Ok((want.to_string(), w));
-        }
-    }
-    if targets.len() > 1 {
-        return refused(format!(
-            "the build has {}, a player for none of {why}",
-            arm.join(", ")
-        ));
-    }
-    if targets == ["arm64"] {
-        return refused(format!(
-            "the build has only armeabi-v7a (Unity: Mono builds, and IL2CPP builds without ARM64), which needs a \
-             32-bit (armhf) userland; {why} is 64-bit. On a firmware with a 32-bit userland use --target armhf"
-        ));
-    }
-    refused(format!(
-        "the build has only arm64-v8a, which needs a 64-bit userland; {why} is 32-bit (--target arm64 for a \
-         64-bit firmware)"
-    ))
+    refused(
+        "the build has only armeabi-v7a (Unity: Mono builds, and IL2CPP builds without ARM64): its 32-bit player \
+         is not run (armhf was removed); a Mono build takes --il2cpp (its code compiled for the arm64 IL2CPP player)",
+    )
 }
 
 /// classify_obb: (main|patch, the name the player looks for, the versionCode the name has).
@@ -1009,7 +938,7 @@ fn run_in(
     if compile_il2cpp && backend != "mono" {
         return refused(
             "an IL2CPP build with only armeabi-v7a: its code is compiled for 32-bit ARM, and the build has no \
-             assemblies to compile again; it needs a 32-bit (armhf) userland",
+             assemblies to compile again (its 32-bit player is not run: armhf was removed)",
         );
     }
     log(&format!(
@@ -1143,7 +1072,7 @@ fn run_in(
     if compile_il2cpp {
         if let Some(why_not) = il2cpp::il2cpp_refusal(&ver) {
             return refused(format!(
-                "--il2cpp: {why_not}; this build needs a 32-bit (armhf) userland"
+                "--il2cpp: {why_not} (its 32-bit player is not run: armhf was removed)"
             ));
         }
     }
@@ -1543,14 +1472,7 @@ fn run_in(
         // (in base.apk and lib/ now)
         let _ = fs::remove_dir_all(py::join(out, il2cpp::IL2CPP_WORK));
     }
-    log(&format!(
-        "  android_package.json; run: ua_host ({} build) {out}",
-        if pick == "arm64-v8a" {
-            "aarch64"
-        } else {
-            "armhf"
-        }
-    ));
+    log(&format!("  android_package.json; run: ua_host {out}"));
     Ok(res)
 }
 

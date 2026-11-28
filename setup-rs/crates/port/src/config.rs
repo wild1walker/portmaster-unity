@@ -8,10 +8,6 @@ use crate::val::{Dict, Val};
 use crate::{exit, pyjson};
 use pkgzip::{io_at, Result};
 
-/// port.aarch64_only's default (docs/arm64.md, "Shipping aarch64 only"): false ships the armhf
-/// route where a port takes it; true makes every port's release aarch64 only.
-pub const AARCH64_ONLY_DEFAULT: bool = false;
-/// The routes whose releases carry nothing for armhf.
 /// The Unity lines whose .NET 3.5 games take the mono-arm64 route (Mono's 4.x class libraries).
 pub const MONO64_NET35_LINES: [&str; 1] = ["2017.4"];
 /// The class libraries such a release ships (player.mono64_classlibs = true).
@@ -19,6 +15,8 @@ pub const MONO64_CLASSLIBS: [&str; 8] = [
     "mscorlib.dll", "System.dll", "System.Core.dll", "System.Xml.dll", "Mono.Security.dll", "System.Configuration.dll",
     "System.Security.dll", "Mono.Posix.dll",
 ];
+/// The routes a release can take: all aarch64 only (32-bit armhf was removed; the last tree with it is the tag
+/// last-armhf).
 pub const AARCH64_ROUTES: [&str; 4] = ["mono-arm64", "il2cpp-arm64", "box64", "apk"];
 pub const DEFAULT_STEPS: [&str; 4] = ["shaders", "settings", "audio", "quality"];
 pub const HOOK_POINTS: [&str; 5] = ["game", "pre_convert", "post_convert", "post_pack", "post_install"];
@@ -47,7 +45,7 @@ pub fn defaults() -> Dict {
             "desc_md" => s(""), "inst" => s(""), "inst_md" => s(""), "genres" => list(), "availability" => s(""),
             "store" => list(), "reqs" => list(), "setup_time" => s(""), "exp" => Val::Bool(false),
             "ready_marker" => s(".setup_done"), "thanks" => s(""), "screenshot" => s("screenshot.png"),
-            "cover" => s("cover.png"), "aarch64_only" => Val::Bool(AARCH64_ONLY_DEFAULT),
+            "cover" => s("cover.png"),
         }),
         "game" => Val::Dict(dict! {
             "data" => s("*_Data"), "build" => s("linux"), "unity_versions" => list(), "what" => s(""),
@@ -110,9 +108,10 @@ pub fn load_config(path: &str) -> Result<Dict> {
     }
 }
 
-/// port.aarch64_only: the android route moves to mono-arm64 (the player's settings become the
-/// route's), an apk-route port keeps only its arm64-v8a player. Changes cfg (and user's player
-/// table) in place.
+/// Every release is aarch64 only (armhf was removed: tag last-armhf): the android route (the check's
+/// name for desktop data on Unity's Android player) moves to mono-arm64 (the player's settings become
+/// the route's), an apk-route port keeps only its arm64-v8a player. A port.toml's old
+/// `port.aarch64_only` is dropped. Changes cfg (and user's player table) in place.
 pub fn aarch64_only_route(cfg: &mut Dict, user: &mut Dict, log: &mut dyn FnMut(&str)) -> Result<()> {
     aarch64_only_route_rep(cfg, user, None, log)
 }
@@ -120,14 +119,18 @@ pub fn aarch64_only_route(cfg: &mut Dict, user: &mut Dict, log: &mut dyn FnMut(&
 /// aarch64_only_route with the check's report (`port new --data`): a game whose check says it
 /// cannot take the mono-arm64 route stops here.
 pub fn aarch64_only_route_rep(cfg: &mut Dict, user: &mut Dict, rep: Option<&Dict>, log: &mut dyn FnMut(&str)) -> Result<()> {
-    if !cfg.dict("port").truthy("aarch64_only") {
-        return Ok(());
+    let had = cfg.table("port").pop("aarch64_only");
+    if let Some(Val::Dict(up)) = user.get_mut("port") {
+        up.pop("aarch64_only");
+    }
+    if had.is_some() {
+        log("port.aarch64_only: dropped (every release is aarch64 only; armhf was removed, tag last-armhf)");
     }
     if cfg.dict("port").str("route") == "android" {
         let m = rep.and_then(|r| r.list("routes").iter().filter_map(Val::as_dict).find(|r| r.str("route") == "mono-arm64"));
         if let Some(m) = m.filter(|m| !m.truthy("ok")) {
             return Err(exit(format!(
-                "port.aarch64_only: this game cannot take the mono-arm64 route: {}",
+                "this game cannot take the mono-arm64 route (the android route's armv7 player was removed with armhf): {}",
                 m.list("why").iter().map(Val::py_str).collect::<Vec<_>>().join("; ")
             )));
         }
@@ -135,8 +138,8 @@ pub fn aarch64_only_route_rep(cfg: &mut Dict, user: &mut Dict, rep: Option<&Dict
     let route = cfg.dict("port").get("route").cloned().unwrap_or(Val::Null);
     match route.as_str() {
         Some("android") => {
-            log("port.aarch64_only: the mono-arm64 route (Unity's arm64 player, the game's code on Unity's Mono for \
-                 aarch64) instead of the android route's armv7 player");
+            log("route: mono-arm64 (Unity's arm64 player, the game's code on Unity's Mono for aarch64; the android \
+                 route's armv7 player was removed with armhf)");
             cfg.table("port").set("route", Val::s("mono-arm64"));
             let own = user.dict("player").clone();
             let abi = own.get("abi").cloned().unwrap_or(Val::s("armeabi-v7a"));
@@ -164,7 +167,7 @@ pub fn aarch64_only_route_rep(cfg: &mut Dict, user: &mut Dict, rep: Option<&Dict
                 pl.set("abis", Val::strs(&["arm64-v8a"]));
             } else if !pl.truthy("il2cpp") {
                 return Err(exit(
-                    "port.aarch64_only: the build has no arm64-v8a player (player.abis); a Mono build takes \
+                    "the build has no arm64-v8a player (player.abis); a Mono build takes \
                      player.il2cpp = true (its code compiled for the arm64 IL2CPP player)",
                 ));
             }
@@ -173,7 +176,7 @@ pub fn aarch64_only_route_rep(cfg: &mut Dict, user: &mut Dict, rep: Option<&Dict
             let r = route.py_str();
             if !AARCH64_ROUTES.contains(&r.as_str()) {
                 return Err(exit(format!(
-                    "port.aarch64_only: the {r} route has no aarch64-only release (routes: {})",
+                    "the {r} route has no aarch64 release (routes: {}; armhf was removed, tag last-armhf)",
                     AARCH64_ROUTES.join(", ")
                 )));
             }
@@ -470,8 +473,8 @@ pub fn validate(cfg: &Dict) -> Result<()> {
         && (p.str("route") != "apk" || !pl.get("backend").is_some_and(|b| b.eq(&Val::s("mono"))))
     {
         errs.push(
-            "player.il2cpp: for the apk route with a Mono build (its code compiled for the arm64 IL2CPP player where \
-             the system has no 32-bit userland); the il2cpp-arm64 route does this for desktop builds"
+            "player.il2cpp: for the apk route with a Mono build (its code compiled for the arm64 IL2CPP player); the \
+             il2cpp-arm64 route does this for desktop builds"
                 .into(),
         );
     }
@@ -634,9 +637,8 @@ pub fn config_doc(sec: &str) -> Option<&'static str> {
 # sports strategy \"visual novel\" other), availability (free | paid | demo | full), store =\n\
 # [{name, gameurl, developerurl}], reqs (more device capabilities: \"!lowres\", \"2gb\", \"power\"),\n\
 # exp (true only to hide a released port); thanks = the README's first sentence; screenshot and\n\
-# cover = image files (relative to the port folder) the release takes; aarch64_only = true: a\n\
-# release with nothing for armhf (a Mono game on the mono-arm64 route: Unity's arm64 player and\n\
-# Unity's Mono for aarch64; no 32-bit ua_host, libraries or player in the zip or on the handheld)",
+# cover = image files (relative to the port folder) the release takes (every release is aarch64\n\
+# only: nothing for armhf in the zip or on the handheld)",
         "game" => "# what the player provides: the data folder the setup looks for (data, a glob), the build\n\
 # kind (linux | macos | windows), the Unity versions the setup accepts (empty: any the\n\
 # converter supports), how READMEs and messages describe it (what), its size in MB; and for\n\

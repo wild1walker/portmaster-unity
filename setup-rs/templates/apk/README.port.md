@@ -9,8 +9,7 @@ nothing of the game is converted. @@ROUTE_NEEDS@@
 
 The game runs on the Unity player inside its own APK, through
 [portmaster-unity](https://github.com/wild1walker/portmaster-unity)'s `ua_host` (its @@ROUTE@@
-route): the APK's 32-bit (armeabi-v7a) player with `ua_host` where the handheld has a 32-bit
-userland, its 64-bit (arm64-v8a) player with `ua_host64` elsewhere. The game's Java code (Google
+route): the APK's 64-bit (arm64-v8a) player with `ua_host64`. The game's Java code (Google
 Play services, ads, purchases) does not run. Saves and settings are in `ports/@@PORTDIR@@/data/`;
 the game's options are in `ports/@@PORTDIR@@/port.env`.
 

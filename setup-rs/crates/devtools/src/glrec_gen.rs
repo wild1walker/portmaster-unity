@@ -1,6 +1,6 @@
 //! `pmu-dev glrec-gen <dir with gl32.h and gl2ext.h> > glrec_gen.h`: runtime/host/glrec_gen.h
 //! (runtime/host/glrec.c's wrappers and replay) from Khronos' GLES headers (was runtime/host/glrec_gen.py;
-//! the same header but its first line). The ua-host-armhf image has them: /usr/include/GLES3/gl32.h,
+//! the same header but its first line). The ua-build-arm64 image has them: /usr/include/GLES3/gl32.h,
 //! /usr/include/GLES2/gl2ext.h (a folder with both: `cp` them side by side, or pass /usr/include and
 //! the tool looks in GLES3/ and GLES2/ too).
 //!
@@ -520,13 +520,12 @@ pub fn generate(core: Vec<Func>, ext: Vec<Func>) -> String {
     w += "#define TRC(f, ...) do { if (g_tr) tr_##f(__VA_ARGS__); } while (0)\n\n";
     for f in &funcs {
         let (name, ps, ret) = (f.name.as_str(), &f.ps, f.ret.as_str());
-        let hasf = ps.iter().any(|p| FLOAT_TYPES.contains(&base(&p.0).as_str()) && !is_ptr(&p.0));
         let decl = {
             let d = decl_of(ps);
             if d.is_empty() { "void".to_string() } else { d }
         };
         let args = ps.iter().map(|p| p.1.as_str()).collect::<Vec<_>>().join(", ");
-        let abi = if hasf { "" } else { "" };
+        let abi = "";   // (the 32-bit player's SO_ABI on float-taking wrappers went with armhf)
         let c = classes[name];
         let rv = if ret != "void" { "return " } else { "" };
         let mut tra = vec![name.to_string()];

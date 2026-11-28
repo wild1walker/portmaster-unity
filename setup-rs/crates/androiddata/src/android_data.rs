@@ -2345,10 +2345,7 @@ pub fn write_plugin_map(ctx: &mut Ctx, survey: &Survey, where_: &str) -> Result<
     let p = py::join(where_, "plugins.map");
     fs::write(&p, &txt).map_err(io_at(&p))?;
     let n = txt.lines().filter(|l| l.starts_with("map ")).count();
-    let s = txt.lines().filter(|l| l.starts_with("sig ")).count();
-    ctx.log(&format!(
-        "plugins.map: {n} libraries, {s} float signatures -> {where_}"
-    ));
+    ctx.log(&format!("plugins.map: {n} libraries -> {where_}"));
     Ok(())
 }
 

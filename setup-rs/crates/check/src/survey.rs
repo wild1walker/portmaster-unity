@@ -422,7 +422,7 @@ pub fn gfx_name(a: i64) -> String {
 
 const KNOWN_PLUGINS: [(&str, &str); 9] = [
     (r"(?i)steam_api", "Steamworks: the runtime has a stub (Steam not running: SteamAPI_Init fails, most games go on)"),
-    (r"(?i)fmod", "FMOD: needs an ARM (armhf) build of FMOD; without it the game is silent or stops"),
+    (r"(?i)fmod", "FMOD: needs an ARM (aarch64) build of FMOD; without it the game is silent or stops"),
     (r"(?i)_burst_generated", "Burst: falls back to the managed code (slower, same results)"),
     (r"(?i)discord", "Discord: not on the handheld (calls fail)"),
     (r"(?i)galaxy", "GOG Galaxy: not on the handheld (the game must go on without it)"),

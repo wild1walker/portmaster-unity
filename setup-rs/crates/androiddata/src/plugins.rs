@@ -46,7 +46,7 @@ end-of-event callbacks reach the game): ua_host's own Wwise player (wwplay) play
 converted into the port's wwise/ folder (pmu wwise, UA_WWISE_DATA), else it is silent; an ARM \
 AkSoundEngine of the game's Wwise version in lib/ plays the sound instead"),
     ("sqlite", r"(e_)?sqlite3?", "SQLite", "host", None,
-     "the system's libsqlite3.so.0 (32-bit for the armv7 player), or an ARM build in lib/"),
+     "the system's libsqlite3.so.0, or an aarch64 build in lib/"),
     ("standalonefilebrowser", r"standalonefilebrowser", "StandaloneFileBrowser (native file dialogs)", "none", None,
      "no file dialogs on a handheld: DllNotFoundException when the game opens one"),
     ("xinput", r"xinputinterface(32|64)?", "XInputDotNet", "none", None, "Windows-only"),
@@ -913,7 +913,7 @@ fn fmod_info(
     );
     android.set(
         "abi",
-        "armeabi-v7a for the armv7 Mono player, arm64-v8a for an arm64 player".into(),
+        "arm64-v8a (the arm64 player)".into(),
     );
     android.set(
         "from",
@@ -940,7 +940,7 @@ fn fmod_info(
     linux.set(
         "from",
         format!(
-            "FMOD Engine {v} for Linux (fmodstudioapi{vv}linux.tar.gz): api/core/lib/arm/ (armhf) or arm64/, api/studio/lib/arm/ or arm64/"
+            "FMOD Engine {v} for Linux (fmodstudioapi{vv}linux.tar.gz): api/core/lib/arm64/, api/studio/lib/arm64/"
         )
         .into(),
     );
@@ -951,7 +951,7 @@ fn fmod_info(
     );
     linux.set(
         "note",
-        "alternative: output through ALSA/PulseAudio (not the runtime's audio path); on the armv7 player calls with float arguments go through ua_host's softfp thunks (sig lines)"
+        "alternative: output through ALSA/PulseAudio (not the runtime's audio path)"
             .into(),
     );
     let mut supply = Json::obj();
@@ -1401,7 +1401,6 @@ pub fn map_text(rep: &Survey, pmap: &Json) -> Result<String, String> {
     let mut lines: Vec<String> = vec![
         "# plugins.map (pmu android-data; docs/plugins.md): what the runtime gives each DllImport name".into(),
         "#   map <name> lib <file in lib/> | stub <id> | host <system library> | none".into(),
-        "#   sig <name> <entry> <result> <args>: argument classes for the softfp thunks of glibc libraries".into(),
     ];
     let items = pmap.as_obj().cloned().unwrap_or_default();
     let mut sorted: Vec<&(String, Json)> = items.iter().collect();
@@ -1444,26 +1443,7 @@ pub fn map_text(rep: &Survey, pmap: &Json) -> Result<String, String> {
             lines.push(format!("map {name} none"));
         }
     }
-    let libs: BTreeSet<&str> = items
-        .iter()
-        // (the built-in FMOD too: a glibc FMOD dropped into lib/ wins over it and needs the thunks)
-        .filter(|(_, e)| {
-            matches!(e.get("use").and_then(Json::as_str), Some("lib" | "host"))
-                || e.get("stub").and_then(Json::as_str) == Some("fmod")
-        })
-        .map(|(n, _)| n.as_str())
-        .collect();
-    for (name, entry, ret, params) in &rep.sigs {
-        if re().space.is_match(&format!("{name}{entry}")) || !libs.contains(name.as_str()) {
-            continue;
-        }
-        let ps = if params.is_empty() {
-            "-".to_string()
-        } else {
-            params.join(",")
-        };
-        lines.push(format!("sig {name} {entry} {ret} {ps}"));
-    }
+    // (no `sig` lines: the softfp thunks they fed were the 32-bit player's, removed with armhf)
     let stubbed: BTreeSet<&str> = items
         .iter()
         .filter(|(n, e)| {
@@ -1637,7 +1617,7 @@ mod tests {
         let m = merge_map(&rep, &pm).unwrap();
         let t = map_text(&rep, &m).unwrap();
         assert!(t.ends_with(
-            "map SDL2 host libSDL2-2.0.so.0\nmap steam_api stub steam\nsig SDL2 SDL_SetGamma i f,f\n"
+            "map SDL2 host libSDL2-2.0.so.0\nmap steam_api stub steam\n"
         ));
         assert!(merge_map(
             &rep,

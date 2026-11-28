@@ -1270,27 +1270,12 @@ fn fast_il2cpp(g: &mut Game) -> R<()> {
     })
 }
 
-fn rig_android(g: &mut Game) -> R<()> {
-    let rep = g.check()?;
-    let src = g.source()?;
-    let cfg = g.convert_config(rep.as_ref());
-    let conv = g.shaders(&src, &cfg, true)?;
-    g.settings(&src, &conv, &cfg)?;
-    let v = g.version.clone();
-    let pkg = g.player_pkg(&v)?;
-    let out = g.android_data(&src, &conv, rep.as_ref(), "all", None, Some(pkg.clone()))?;
-    rmtree(&Path::new(&out).join("Game")); // the zip folder has it all now
-    rmtree(&g.work.join("view"));
-    let runtime = g.values.get("pack").map(|p| s(p, "scripting_runtime")).unwrap_or_default();
-    let root = g.emu_root(&pkg, "mono", "armeabi-v7a", &runtime, None)?;
-    let env = suggest_env(g, rep.as_ref());
-    g.rig_run(&root, &format!("{out}/zip"), "armhf", &env)
+fn rig_android(_g: &mut Game) -> R<()> {
+    skip("the android route's rig ran Unity's armv7 player on the armhf rig: removed with armhf (tag last-armhf)")
 }
 
 fn rig_apk(g: &mut Game) -> R<()> {
-    let a = g.g.get("apk").cloned().unwrap_or(json!({}));
-    let default = if a.get("target").map_or("arm64".into(), show) != "armhf" { "arm64" } else { "armhf" };
-    let arch = g.g.get("rig").and_then(|r| r.get("arch")).map_or(default.to_string(), show);
+    let arch = "arm64".to_string();
     let (zipdir, _) = fast_apk(g)?;
     let root = g.work.join("emu");
     rmtree(&root);
@@ -1337,7 +1322,7 @@ fn rig_il2cpp(g: &mut Game) -> R<()> {
     rmtree(&g.work.join("view"));
     let root = g.emu_root(&pkg, "il2cpp", &abi, "", Some(&lib))?;
     let env = suggest_env(g, rep.as_ref());
-    g.rig_run(&root, &format!("{adir}/zip"), if abi == "arm64-v8a" { "arm64" } else { "armhf" }, &env)
+    g.rig_run(&root, &format!("{adir}/zip"), "arm64", &env)
 }
 
 /// A game packaged before (its zip folder and lib/ from the local config's [prebuilt.<slug>]): the
@@ -1358,7 +1343,7 @@ fn rig_prebuilt(g: &mut Game) -> R<()> {
         let _ = fs::copy(&f, root.join(Path::new(&f).file_name().unwrap_or_default()));
     }
     let env = g.g.get("env").and_then(Value::as_object).cloned().unwrap_or_default();
-    let arch = pb.get("arch").map_or("armhf".into(), show);
+    let arch = pb.get("arch").map_or("arm64".into(), show);
     g.rig_run(&root, &zipdir, &arch, &env)
 }
 

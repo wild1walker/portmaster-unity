@@ -17,9 +17,8 @@ source $controlfolder/control.txt
 [ -f "${controlfolder}/mod_${CFW_NAME}.txt" ] && source "${controlfolder}/mod_${CFW_NAME}.txt"
 get_controls
 
-# @@TITLE@@'s own Android build, run natively by portmaster-unity's ua_host: its 32-bit
-# (armeabi-v7a) player with ua_host where the system has a 32-bit userland, its 64-bit (arm64-v8a)
-# one with ua_host64 elsewhere. On the first launch the setup installs your copy from
+# @@TITLE@@'s own Android build, run natively by portmaster-unity's ua_host: its 64-bit
+# (arm64-v8a) player with ua_host64. On the first launch the setup installs your copy from
 # ports/@@PORTDIR@@/gamedata/ (see README.md there). Made with `pmu port new` (@@ROUTE@@ route).
 
 GAMEDIR="/$directory/ports/@@PORTDIR@@"
@@ -82,20 +81,15 @@ if [ ! -f "$GAMEDIR/@@READY@@" ]; then
   fi
 fi
 
-# which of the game's players the setup installed (android_package.json: "abi"), and so which ua_host
+# the game's player the setup installed (android_package.json: "abi"): the 64-bit one, run by ua_host64
 ABI=$(sed -n 's/^ *"abi": *"\([^"]*\)".*/\1/p' "$GAMEDIR/android_package.json" 2>/dev/null | head -1)
-if [ "$ABI" = arm64-v8a ]; then
-  UA_HOST=ua_host64
-else
-  UA_HOST=ua_host
-  # the 32-bit player needs the 32-bit userland (e.g. Knulli's /lib32): a card moved to a system
-  # without one needs the setup again, for the game's 64-bit player (it takes the installed APK)
-  if [ ! -e /lib/ld-linux-armhf.so.3 ]; then
-    pm_message "@@TITLE@@ was set up for its 32-bit player, and this system has no 32-bit (armhf) userland. To set it up for this one: install the port again, delete ports/@@PORTDIR@@/@@READY@@ and launch."
-    sleep 8
-    pm_finish
-    exit 1
-  fi
+UA_HOST=ua_host64
+if [ "$ABI" != arm64-v8a ]; then
+  # a setup made by an older release, for the 32-bit player: the setup again
+  pm_message "@@TITLE@@ was set up for its 32-bit player, which this release no longer runs. To set it up again: install the port again, delete ports/@@PORTDIR@@/@@READY@@ and launch."
+  sleep 8
+  pm_finish
+  exit 1
 fi
 echo "the game's $ABI player, $UA_HOST"
 
@@ -108,8 +102,7 @@ done
 # the built-in pad reaches the game as an Android gamepad (ua_host: SDL GameController ->
 # KeyEvent and MotionEvent)
 export SDL_GAMECONTROLLERCONFIG="${SDL_GAMECONTROLLERCONFIG:-$sdl_controllerconfig}"
-# audio: SDL's own choice, else (no device SDL can open, e.g. a sound server without the client
-# libraries of a 32-bit program) raw PCM piped into pw-cat / pacat / aplay (ANDROID_SLES_OUTPUT)
+# audio: SDL's own choice, else (no device SDL can open) raw PCM piped into pw-cat / pacat / aplay (ANDROID_SLES_OUTPUT)
 # frame pacing: the Android build's own (ua_host keeps UA_FRAME_RATE=android for imported builds)
 export UA_FPS=${UA_FPS:-10}                     # a line of frame statistics every 10 s in log.txt
 # the game's options (port.env), and the setup's answers that apply when the game runs
@@ -134,12 +127,7 @@ chmod +x "$GAMEDIR/$UA_HOST"
 $GPTOKEYB2 "$UA_HOST" -c "$GAMEDIR/@@PORTDIR@@.ini" &   # exit hotkey only
 pm_platform_helper "$GAMEDIR/$UA_HOST"
 
-if [ "$UA_HOST" = ua_host ]; then
-  # the 32-bit libraries first (Knulli: /lib32, /usr/lib32)
-  LD_LIBRARY_PATH=/lib32:/usr/lib32${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} ./ua_host "$GAMEDIR"
-else
-  ./ua_host64 "$GAMEDIR"
-fi
+./ua_host64 "$GAMEDIR"
 echo "game exited ($?)"
 
 pm_finish

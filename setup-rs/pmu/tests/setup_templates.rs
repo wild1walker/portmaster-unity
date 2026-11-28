@@ -32,7 +32,7 @@ fn routes() -> Vec<String> {
         .filter(|n| templates().join(n).join("patchscript").is_file())
         .collect();
     r.sort();
-    assert!(r.len() >= 5, "{r:?}");
+    assert!(r.len() >= 4, "{r:?}");
     r
 }
 
@@ -304,7 +304,8 @@ impl Fx {
         if game_folder {
             copytree(&game, &g.join("gamedata/My Game"));
         }
-        if extra.contains("\"mono-arm64\"") {
+        // (mono-arm64: named, or the default a Mono desktop game takes)
+        if extra.contains("\"mono-arm64\"") || !extra.contains("\"route\"") {
             // (the release's Mono runtime of the Unity line)
             for n in ["libmonobdwgc-2.0.so", "libil2cpp.so"] {
                 put(&g.join("setup/mono64/2019.4").join(n), "elf");
@@ -469,13 +470,13 @@ fn setup_no_donor() {
     let (_, r, log) = f.run_setup(&out, &[("NO_DONORS", "1")]);
     assert!(
         r.stdout.contains(
-            "PATCH_FAIL_MSG:This port ships no donor of Unity 2019.4.8f1 (mono, armeabi-v7a): donor/donor-2019.4.8f1-mono-armv7.apk is missing"
+            "PATCH_FAIL_MSG:This port ships no donor of Unity 2019.4.8f1 (il2cpp, arm64-v8a): donor/donor-2019.4.8f1-il2cpp-arm64.apk is missing"
         ),
         "{}",
         r.all()
     );
     assert!(!log.contains("pm player"));
-    for p in ["android", "mono-arm64"] {
+    for p in ["mono-arm64"] {
         let text = template(p, "patchscript");
         for net in ["curl", "wget", "player fetch", "player url", "SSL_CERT_FILE", "--installer"] {
             assert!(!text.contains(net), "{p}: {net}");
@@ -506,8 +507,8 @@ fn setup_folder() {
     assert!(log.contains("--name MyGame --package com.pmunity.mygame"));
     assert!(!log.contains("--asmpatch"));
     assert!(g.join(".setup_done").is_file());
-    // (the Mono of the game's scripting runtime: .NET 4.x, libmonobdwgc-2.0)
-    assert_eq!(listdir(&g.join("lib")), ["libMonoPosixHelper.so", "libmain.so", "libmonobdwgc-2.0.so", "libunity.so"]);
+    // (Unity's arm64 player with the bridge, and the Mono of the game's line: libmonobdwgc-2.0)
+    assert_eq!(listdir(&g.join("lib")), ["libil2cpp.so", "libmain.so", "libmonobdwgc-2.0.so", "libunity.so"]);
     assert!(g.join("MyGame.apk").is_file());
     assert_eq!(read(&g.join("answers.env")).trim(), "export UA_POINTER_CURSOR='0'");
     assert_eq!(listdir(&g.join("gamedata")), ["PUT_GAME_FILES_HERE.txt"]);
@@ -532,7 +533,7 @@ fn setup_compressed_build() {
         assert_eq!(r.code, 0, "{}", r.all());
         assert_eq!(count(&log, "pm unpack ./gamedata/My Game/My Game_Data --remove"), 1, "{left}: {log}");
     }
-    for p in ["android", "mono-arm64", "il2cpp-arm64"] {
+    for p in ["mono-arm64", "il2cpp-arm64"] {
         assert!(template(p, "patchscript").contains("\n  if [ -f \"$D/data.unity3d\" ]; then\n"), "{p}");
     }
 }
@@ -566,7 +567,7 @@ fn setup_convert_stopped() {
         }
         assert_eq!(count(&r.stdout, "it starts again where it stopped"), if *code == 0 { 2 } else { 0 }, "{env:?}");
     }
-    for p in ["android", "mono-arm64", "il2cpp-arm64", "box64"] {
+    for p in ["mono-arm64", "il2cpp-arm64", "box64"] {
         assert!(template(p, "patchscript").contains("pm_convert \"$"), "{p}");
     }
 }
@@ -598,7 +599,6 @@ fn setup_archive_and_checks() {
     assert_eq!(r.code, 0, "{}", r.all());
     assert!(log.contains("--asmpatch './setup/asmpatch'"), "{log}");
     assert!(log.contains("--set textures.quality=medium")); // (the default)
-    assert!(!listdir(&g.join("lib")).contains(&"libmonobdwgc-2.0.so".to_string()), "{:?}", listdir(&g.join("lib")));
     assert!(!z.is_file()); // (the archive is removed once built)
     assert!(read(&g.join("patchlog.txt")).contains("removing game-linux.zip: not needed to play"));
     assert!(read(&g.join("setup.txt")).contains("keep_installers=0"));
@@ -654,6 +654,9 @@ fn setup_windows_port() {
     let g = f.p("ports/mygame");
     copytree(&out.join("mygame"), &g);
     copytree(&game, &g.join("gamedata/My Game"));
+    for n in ["libmonobdwgc-2.0.so", "libil2cpp.so"] {
+        put(&g.join("setup/mono64/2022.2").join(n), "elf"); // (the release's Mono runtime of the line)
+    }
     exe(&g.join("setup/pmhlslcc"), "#!/bin/sh\n");
     let (_, r, log) = f.run_setup(&out, &[("STUB_VERSION", "2022.2.17f1"), ("STUB_WINBCL", "System.dll netstandard.dll")]);
     assert_eq!(r.code, 0, "{}", r.all());
@@ -672,6 +675,9 @@ fn setup_windows_port() {
     let (game, out) = f.make_as(r#"{"android_data": {"winbcl": "off"}}"#, "2022.2.17f1", "windows");
     copytree(&out.join("mygame"), &g);
     copytree(&game, &g.join("gamedata/My Game"));
+    for n in ["libmonobdwgc-2.0.so", "libil2cpp.so"] {
+        put(&g.join("setup/mono64/2022.2").join(n), "elf");
+    }
     fs::remove_file(f.p("pm.log")).unwrap();
     let (_, r, log) = f.run_setup(&out, &[("STUB_VERSION", "2022.2.17f1"), ("STUB_WINBCL", "System.dll")]);
     assert_eq!(r.code, 0, "{}", r.all());
@@ -718,7 +724,7 @@ fn setup_mono_arm64_net35() {
 /// game is whole, and the launcher starts it and removes what the setup left.
 #[test]
 fn setup_end_order() {
-    for route in ["android", "mono-arm64", "il2cpp-arm64"] {
+    for route in ["mono-arm64", "il2cpp-arm64"] {
         let cfg = format!(r#"{{"port": {{"route": "{route}"}}}}"#);
         {
             let f = Fx::new(&format!("end-{route}"));
@@ -746,9 +752,6 @@ fn setup_end_order() {
             assert!(g.join(x).is_file(), "{route}: {x}");
         }
         assert!(g.join("gamedata/.setup").is_dir());
-        if route == "android" {
-            continue; // (its launcher wants a 32-bit userland: not run here)
-        }
         exe(&g.join("ua_host"), "#!/bin/sh\necho \"ua_host $1\" >> \"$STUB_LOG\"\n");
         let Some((r, log)) = f.run_launcher(&out) else { continue };
         assert_eq!(r.code, 0, "{route}: {}", r.all());
@@ -826,7 +829,7 @@ fn setup_progress_files() {
     // the same helpers on every route; the mark, then the cleanup: never the other way round
     let (mark, step, ready, cleanup) =
         ("mark() { sync; touch \"$W/.step_$1\"", "touch \"$W/.step_", "touch \"$GAMEDIR/$READY\" || nowrite", ["rm", "-rf", "\"$W\"", "\"$S\""].join(" "));
-    for route in ["android", "mono-arm64", "il2cpp-arm64", "apk", "box64"] {
+    for route in ["mono-arm64", "il2cpp-arm64", "apk", "box64"] {
         let text = template(route, "patchscript");
         assert!(text.contains("nowrite() { fail \"Could not write $1 to the card: is the card full?"), "{route}");
         assert!(text.contains(&format!("{mark} || nowrite")), "{route}");
@@ -887,7 +890,7 @@ fn setup_tar_gz() {
     assert!(log.contains("7zz x -si -ttar -y -o"));
     assert!(!a.is_file());
     assert!(g.join(".setup_done").is_file());
-    for route in ["android", "mono-arm64", "il2cpp-arm64", "box64"] {
+    for route in ["mono-arm64", "il2cpp-arm64", "box64"] {
         let text = template(route, "patchscript");
         assert!(text.contains("( set -o pipefail; \"$SEVENZ\" x -so \"$a\" | \"$SEVENZ\" x -si -ttar -y -o"), "{route}");
         assert!(!text.contains("x -so \"$a\" 2>/dev/null"), "{route}");
@@ -978,11 +981,10 @@ fn launcher_not_set_up() {
         }
         assert!(g.join("gamedata/My Game").is_dir());
     }
-    // every route's launcher: both messages, and the leftovers of a set-up game removed (the android
-    // one after its update, which needs setup/ until it has run)
+    // every route's launcher: both messages, and the leftovers of a set-up game removed
     let leftovers = "for d in setup donor gamedata/.setup; do";
     let remove = ["rm", "-rf", "\"${GAMEDIR:?}/$d\""].join(" ");
-    for route in ["android", "apk", "box64", "il2cpp-arm64", "mono-arm64"] {
+    for route in ["apk", "box64", "il2cpp-arm64", "mono-arm64"] {
         let text = template(route, "launcher.sh");
         assert!(text.contains("is not set up and its setup files are missing. Install the port again (unzip it over your ports folder)"), "{route}");
         assert!(text.contains("if [ -f \"$GAMEDIR/setup/patchscript\" ]; then\n      pm_message \"@@TITLE@@ is not set up yet"), "{route}");
@@ -990,10 +992,6 @@ fn launcher_not_set_up() {
         assert!(text.contains(&remove), "{route}");
         assert!(text.find("pm_message \"@@TITLE@@ is not set up yet").unwrap() < text.find(leftovers).unwrap(), "{route}");
     }
-    assert!(template("android", "launcher.sh").contains(&format!("if [ ! -f \"$GAMEDIR/setup/update\" ]; then\n  {leftovers}")));
-    // (both of the update's ends)
-    let ends = ["rm", "-rf", "\"$S\"", "\"$GAMEDIR/gamedata/.setup\"", "\"$GAMEDIR/donor\""].join(" ");
-    assert_eq!(count(&template("android", "update"), &ends), 2);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1040,10 +1038,6 @@ fn apk_setup(f: &Fx, g: &Path, env: &[(&str, &str)]) -> Run {
     r
 }
 
-fn armhf_userland() -> bool {
-    Path::new("/lib/ld-linux-armhf.so.3").exists()
-}
-
 fn aarch64_linux() -> bool {
     cfg!(target_arch = "aarch64") && cfg!(target_os = "linux")
 }
@@ -1054,9 +1048,7 @@ fn apk_setup_installs() {
         eprintln!("apk_setup_installs: skipped (setup/pmu is this build of pmu: an aarch64 Linux is tested)");
         return;
     }
-    // (the 64-bit player is what is tested: where the system also has a 32-bit userland, the port
-    // as a release without the 32-bit ua_host, which the setup would take first)
-    let hosts: &[&str] = if armhf_userland() { &["ua_host64"] } else { &["ua_host", "ua_host64"] };
+    let hosts: &[&str] = &["ua_host64"];
     let f = Fx::new("apk");
     let a = made_apk(&f.p("src"), "game.apk", "com.test.game", "2021.3.4f1");
     let o = apkmade::obb(&f.p("src/game.main.obb"), BID);
@@ -1074,7 +1066,7 @@ fn apk_setup_installs() {
     assert_eq!(seen[i - 1], "setup work", "{seen:?}");
     assert_eq!(seen.last().unwrap(), "ready", "{seen:?}");
     assert!(seen.iter().all(|x| x.split(' ').any(|w| w == "setup") || x == "ready"), "{seen:?}");
-    assert!(r.stdout.contains("the players this system runs, in this order: arm64"), "{}", r.stdout);
+    assert!(r.stdout.contains("the player this system runs: arm64"), "{}", r.stdout);
     assert_eq!(listdir(&g.join("lib")), ["libil2cpp.so", "libmain.so", "libunity.so"]);
     assert_eq!(fs::read(g.join("lib/libunity.so")).unwrap(), b"\x7fELFarm64-v8a");
     for x in ["base.apk", "main.7.com.test.game.obb", ".setup_done", "answers.env"] {
@@ -1107,7 +1099,7 @@ fn apk_setup_checks() {
     let a = made_apk(&f.p("src"), "game.apk", "com.test.game", "2021.3.4f1");
     // another game's package; another Unity version; nothing in gamedata/
     let other = made_apk(&f.p("other"), "other.apk", "com.other.game", "2021.3.4f1");
-    let both = ["ua_host", "ua_host64"];
+    let both = ["ua_host64"];
     let g = apk_port(&f, &a, &[&other], &both, "", false);
     let r = apk_setup(&f, &g, &[]);
     assert!(r.stdout.contains("PATCH_FAIL_MSG:This port is made for My Game (com.test.game); your files are com.other.game"), "{}", r.all());
@@ -1123,11 +1115,9 @@ fn apk_setup_checks() {
     let r = apk_setup(&f, &g, &[]);
     assert!(r.stdout.contains("PATCH_FAIL_MSG:The game's files cannot run here:"), "{}", r.all());
     assert!(r.stdout.contains("not a zip archive"), "{}", r.all());
-    // the 32-bit player only, on a system without a 32-bit userland: said before anything else
-    if !armhf_userland() {
-        let g = apk_port(&f, &a, &[&a], &["ua_host"], "", false);
-        let r = apk_setup(&f, &g, &[]);
-        assert!(r.stdout.contains("needs a 32-bit (armhf) userland"), "{}", r.all());
-        assert!(!r.stdout.contains("unpacking the setup tools"));
-    }
+    // a release without ua_host64: said before anything else
+    let g = apk_port(&f, &a, &[&a], &[], "", false);
+    let r = apk_setup(&f, &g, &[]);
+    assert!(r.stdout.contains("This copy of the port has no ua_host64"), "{}", r.all());
+    assert!(!r.stdout.contains("unpacking the setup tools"));
 }

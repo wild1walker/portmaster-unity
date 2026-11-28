@@ -36,7 +36,7 @@ const fn choice(name: &'static str, choices: &'static [&'static str]) -> Opt {
     }
 }
 
-const ABIS: &[&str] = &["arm64-v8a", "armeabi-v7a"];
+const ABIS: &[&str] = &["arm64-v8a"];   // (armeabi-v7a went with armhf: tag last-armhf)
 
 struct Parser {
     prog: &'static str,
@@ -206,7 +206,7 @@ impl Parser {
     }
 }
 
-const USAGE: &str = "usage: pmu il2cpp [-h] [--abi {arm64-v8a,armeabi-v7a}] [--home HOME]
+const USAGE: &str = "usage: pmu il2cpp [-h] [--abi {arm64-v8a}] [--home HOME]
                       [--pkg PKG] [--jobs JOBS] [--image IMAGE] [--keep-cpp]
                       [--strip {low,none}] [--unity VERSION]
                       [--managed-file DLL] [--asmpatch COMMAND]
@@ -216,7 +216,7 @@ const USAGE: &str = "usage: pmu il2cpp [-h] [--abi {arm64-v8a,armeabi-v7a}] [--h
                       [--toolchain TOOLCHAIN]
                       data out";
 
-const FETCH_USAGE: &str = "usage: pmu il2cpp fetch [-h] [--abi {arm64-v8a,armeabi-v7a}]
+const FETCH_USAGE: &str = "usage: pmu il2cpp fetch [-h] [--abi {arm64-v8a}]
                             [--home HOME] [--pkg PKG] [--net {2,2subset,4}]
                             [--on-device] [--toolchain TOOLCHAIN]
                             version";

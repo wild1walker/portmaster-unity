@@ -11,9 +11,8 @@ your own copy, and the first launch installs it.
   (this port is made for @@UNITY_VERSIONS@@).
 - About as much free space on the card as the game takes, during the setup (on exFAT and FAT
   cards the files are copied; on ext4 they are linked).
-- A 64-bit (aarch64) handheld with GLES 3. The game's 32-bit (armeabi-v7a) player runs where the
-  system has a 32-bit (armhf) userland (e.g. Knulli), its 64-bit (arm64-v8a) player everywhere
-  else (e.g. ROCKNIX), as far as the APK has them.
+- A 64-bit (aarch64) handheld with GLES 3. The game's 64-bit (arm64-v8a) player runs (no 32-bit
+  userland needed).
 
 No Wi-Fi: nothing is downloaded and nothing of the game is converted.
 
@@ -36,10 +35,6 @@ is the last run's log.
 The game's Java code does not run: Google Play services, ads, purchases and other Java SDKs see a
 phone without them. Games made only for touch need the pointer mode (`UA_POINTER=touch` in
 `port.env`).
-
-Moved the card to a handheld without a 32-bit userland after a 32-bit setup? Install the port
-again, delete `ports/@@PORTDIR@@/@@READY@@` and launch: the setup takes the installed APK again,
-with its 64-bit player.
 
 ## Controls
 

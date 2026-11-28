@@ -61,7 +61,7 @@ fn get<'a>(j: &'a Json, k: &str) -> &'a Json {
 }
 
 #[test]
-fn il2cpp_arm64_and_armhf() {
+fn il2cpp_arm64() {
     let d = Dir::new("il2cpp");
     let mf = manifest(
         "com.test.game",
@@ -104,17 +104,9 @@ fn il2cpp_arm64_and_armhf() {
         .file_name()
         .to_string_lossy()
         .starts_with(".apk-")));
-    let r = run(&[&p], &out, "armhf").unwrap();
-    assert_eq!(get(&r, "abi"), &Json::str("armeabi-v7a"));
-    assert_eq!(
-        fs::read(out.join("lib/libunity.so")).unwrap(),
-        b"\x7fELFarmeabi-v7a"
-    );
-    // the list's first player the build has
-    assert_eq!(
-        get(&run(&[&p], &out, "armhf,arm64").unwrap(), "abi"),
-        &Json::str("armeabi-v7a")
-    );
+    // the arm64 player whatever the target names (auto); armhf was removed
+    assert_eq!(get(&run(&[&p], &out, "auto").unwrap(), "abi"), &Json::str("arm64-v8a"));
+    refused(run(&[&p], &out, "armhf"), "armhf was removed");
     refused(run(&[&p], &out, "x86"), "--target x86");
 }
 
@@ -131,12 +123,8 @@ fn mono_and_refusals() {
         true,
     );
     let out = d.p("out");
-    refused(run(&[&m], &out, "arm64"), "needs a 32-bit (armhf) userland");
-    let r = run(&[&m], &out, "armhf").unwrap();
-    assert_eq!(get(&r, "backend"), &Json::str("mono"));
-    assert!(out
-        .join("assets/bin/Data/Managed/etc/mono/config")
-        .is_file());
+    refused(run(&[&m], &out, "arm64"), "its 32-bit player is not run");
+    refused(run(&[&m], &out, "armhf"), "armhf was removed");
     // --il2cpp on a 64-bit target: the compile is the Python's
     let o = Opts {
         target: "arm64".into(),

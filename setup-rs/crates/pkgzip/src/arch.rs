@@ -1,6 +1,6 @@
-//! `pmu arch-check`: which ARM architectures a port release carries, and whether an aarch64-only
-//! release (port.toml `port.aarch64_only`, docs/arm64.md "Shipping aarch64 only") still has every
-//! piece its 64-bit route needs. Every ELF file is found by its header, in the release's folders and
+//! `pmu arch-check`: which ARM architectures a port release carries, and whether the release (every
+//! one is aarch64 only: armhf was removed, tag last-armhf; docs/arm64.md "Shipping aarch64 only")
+//! still has every piece its 64-bit route needs. Every ELF file is found by its header, in the release's folders and
 //! inside its zips (the donor APKs, an OBB): a 32-bit ARM file (`EM_ARM`) anywhere fails an
 //! aarch64-only release, a 32-bit player in a donor APK too. Read only.
 use std::fs::{self, File};
@@ -261,7 +261,7 @@ pub fn check_release(root: &Path) -> Result<Report> {
     if !AARCH64_ROUTES.contains(&r.route.as_str()) {
         missing.push(format!(
             "a 64-bit setup: {port}/setup/setup.env says PORT_ROUTE={} (an aarch64-only release is made \
-             on the {} route: `port new` again with port.aarch64_only = true)",
+             on the {} route: `port new` again)",
             if r.route.is_empty() { "nothing" } else { &r.route },
             AARCH64_ROUTES.join(" or ")
         ));
