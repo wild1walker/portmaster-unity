@@ -78,6 +78,7 @@
 #include "nativebeh.h"
 #include "unityjobs.h"
 #include "enginerw.h"
+#include "unityphys2d.h"
 
 enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 #define row uh_row
@@ -470,6 +471,7 @@ void unityhooks_frame(void)
     unityscripts_frame();                       // UA_SCRIPT_FIND
     nativebeh_frame();                          // UA_NATIVE_BEH, UA_NATIVE_BEH_STATS
     enginerw_frame();                           // UA_ENGINE_COUNT and the engine rewrites (enginerw.c)
+    unityphys2d_frame();                        // UA_PHYS2D
     if (!g_psync_set || ++frames != 2) return;       // (the device made, the game's own start-up settings applied)
     g_psync_set(g_psync_value);
     fprintf(stderr, "[unityhooks] UA_PRESENT_SYNC: the main thread waits for the last frame's present at the %s of its frame\n",
@@ -483,6 +485,7 @@ void unityhooks_on_load(so_module *m)
     uintptr_t base = so_base(m);
     size_t size = so_size(m);
     enginerw_on_load_match(base, size);         // enginerw.c: its rows checked before any hook changes libunity
+    unityphys2d_on_load(base, size);            // UA_PHYS2D (unityphys2d.c): its rows checked likewise
     unitypool_on_load(base, size);              // UA_GLES_POOL
     unityverts_on_load(base, size);             // UA_FAST_VERTS
     unitymath_on_load(base, size);              // UA_INV_MEMO
@@ -497,6 +500,7 @@ void unityhooks_on_load(so_module *m)
     nativebeh_on_load(base, size);              // UA_NATIVE_BEH (nativebeh.c): before UA_PREFETCH, whose `beh` sites it replaces
     unityprefetch_on_load(base, size);          // UA_PREFETCH (unityprefetch.c)
     enginerw_on_load_patch(base, size);         // UA_ENGINE_COUNT and the engine rewrites (enginerw.c)
+    unityphys2d_on_load_patch(base, size);      // UA_PHYS2D (unityphys2d.c)
     if (!unityhooks_gfx_jobs()) return;
     const struct row *r = find_row(g_adjust, sizeof g_adjust / sizeof *g_adjust, base, size);
     if (!r) {

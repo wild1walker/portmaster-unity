@@ -7,7 +7,8 @@
 # unityprefetch.c's (test_unityprefetch.c: its stubs, AArch64 only), nativebeh.c's (test_nativebeh.c: its loop
 # against a model of Unity's, AArch64 only), unityjobs.c's (test_unityjobs.c: its wait against a model of Unity
 # 2017.4's job queue) and enginerw.c's (test_anchorwalk.c, test_cullstep1.c: the anchor walk and the culling pass
-# against models of Unity's, AArch64 only).
+# against models of Unity's, AArch64 only) and unityphys2d.c's (test_unityphys2d.c: the contact-map flag and the
+# wake walk against models of Unity 2017.4's, AArch64 only).
 # ARCH=armhf (default): built in ua-host-armhf (Thumb-2, as ua_host: the jump's interworking), run in
 # an arm/v7 container; ARCH=arm64: ua-build-arm64. The binaries also run on the handheld.
 set -e
@@ -25,8 +26,9 @@ build='set -e; mkdir -p $O; $CC -O2 -g -Wall -Wextra -o $O/test_unityhooks test/
   $CC -O2 -g -Wall -Wextra -o $O/test_nativebeh test/test_nativebeh.c
   $CC -O2 -g -Wall -Wextra -o $O/test_unityjobs test/test_unityjobs.c -lpthread
   $CC -O2 -g -Wall -Wextra -o $O/test_anchorwalk test/test_anchorwalk.c unityprefetch.c
-  $CC -O2 -g -Wall -Wextra -o $O/test_cullstep1 test/test_cullstep1.c unityprefetch.c'
-run='$O/test_unityhooks && $O/test_unitypool && $O/test_unityverts && $O/test_unitymath && $O/test_unitybeh && $O/test_unityscripts && $O/test_unityicalls && $O/test_unitylayers && $O/test_unityprefetch && $O/test_nativebeh && $O/test_unityjobs && $O/test_anchorwalk && $O/test_cullstep1'
+  $CC -O2 -g -Wall -Wextra -o $O/test_cullstep1 test/test_cullstep1.c unityprefetch.c
+  $CC -O2 -g -Wall -Wextra -o $O/test_unityphys2d test/test_unityphys2d.c -lpthread'
+run='$O/test_unityhooks && $O/test_unitypool && $O/test_unityverts && $O/test_unitymath && $O/test_unitybeh && $O/test_unityscripts && $O/test_unityicalls && $O/test_unitylayers && $O/test_unityprefetch && $O/test_nativebeh && $O/test_unityjobs && $O/test_anchorwalk && $O/test_cullstep1 && $O/test_unityphys2d'
 if [ "$ARCH" = arm64 ]; then
   O=out/arm64/test
   docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=$O CC=gcc; $build; $run"

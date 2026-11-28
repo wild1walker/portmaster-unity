@@ -1938,7 +1938,7 @@ The run-and-gun level is the one below 60. UnityMain's items there, in ms a fram
 | # | what | ms | exact cut? |
 |---|---|---|---|
 | 1 | animation: `Animator::UpdateAvatars`, `DirectorManager` (`PreOrderPlayableTraverser::Traverse` 0.33, `Animator::BuildJobs` / `Prepare` 0.2 each, `PlayableOutput::GetSourcePlayable`) | 5.7 | Unity's own walk of the playable graphs; enginerw's `UA_DIRECTOR_PREWALK` and the `anim` prefetch site target it (2017.4 rows exist; measured on Hollow Knight: no gain) |
-| 2 | `LevelPlayerMotor.HandleRaycasts` -> `Physics2D.BoxCast`, whose `PhysicsQuery2D::BoxCast` first calls `PhysicsManager2D::SyncTransforms` (`autoSyncTransforms`): `FlagContactsForRecreate` 0.40, `Collider2D::WakeAllBodyContacts` 0.36 | 2.1 (1.7 of it the sync) | the sync applies the colliders that scripts moved since the last one; it is real work, not a repeat. A cut would have to batch the moves (game play: not exact by construction). Not built |
+| 2 | `LevelPlayerMotor.HandleRaycasts` -> `Physics2D.BoxCast`, whose `PhysicsQuery2D::BoxCast` first calls `PhysicsManager2D::SyncTransforms` (`autoSyncTransforms`): `FlagContactsForRecreate` 0.40, `Collider2D::WakeAllBodyContacts` 0.36 | 2.1 (1.7 of it the sync) | the sync applies the colliders that scripts moved since the last one; each rebuild is a real move, but three of its steps walk the whole scene's contacts and fixtures: built, `UA_PHYS2D` (below: the sync ~40 % shorter, FixedUpdate -1.0 - 1.2 ms) |
 | 3 | Physics2D step (`b2ContactManager::Collide`, `b2Distance` 0.31) | 3.3 | Box2D's own |
 | 4 | job system on UnityMain (`WaitForJobGroup` helping and waiting) | 2.8 | `UA_JOB_WORKERS` (exact, above) changes who runs these jobs: not measured on Cuphead |
 | 5 | memory (`UnityDefaultAllocator::AllocationPage` 0.40, `ThreadsafeLinearAllocator`) | 2.1 | the allocator's page lookup; a whole area, not one call site |
@@ -1966,6 +1966,56 @@ its `CalculateJobCount` answers before the freeze). The frozen-picture check (`U
 `UA_JOB_SPLIT`) does not apply to Cuphead: its picture keeps changing with the clock stopped (669 different pictures in
 1,117 frozen frames, from the film-grain overlay), and no split-dependent answer came while frozen. The exactness
 proof for 2017.4.40f1 above covers it (the same player). Verdict: exact, no gain; not a default for Cuphead.
+
+### Cuphead 64-bit: the moved colliders (`UA_PHYS2D`, 2026-11-28)
+
+The run-and-gun level's "BoxCast sync" (item 2 above) broken down (the same profile, 2017.4.40f1 arm64-v8a names, with
+`UA_PHYS2D=stats` counting on the same route): `LevelPlayerMotor.HandleRaycasts`' first `Physics2D.BoxCast` a
+FixedUpdate runs `PhysicsManager2D::SyncTransforms`, and 76 % of that is `Collider2D::RecreateCollider`: the level's
+colliders without a Rigidbody2D (moving platforms, enemies, projectiles) that scripts moved since the last sync are
+rebuilt whole, about 60 a frame. Unity already skips a collider whose transform is unchanged (`CompareApproximately` of
+the matrix and the scale), so each rebuild is a real move. But three steps of a rebuild walk the whole scene, because
+every such collider is on the world's one static ground body:
+
+| step (per rebuild) | what it walks | a frame (60 rebuilds) | share of the sync |
+|---|---|---|---|
+| `PhysicsManager2D::FlagContactsForRecreate` | every bucket of the contact map (512 - 1,024 buckets of 112 bytes) for the pairs holding the collider | ~30,000 buckets for ~10 hits | 19.6 % |
+| `Collider2D::WakeAllBodyContacts` | every contact of the ground body (~100), waking both bodies of each | ~6,000 contacts | 18.2 % |
+| `b2Body::DestroyFixture` | the ground body's fixture list from its head to the fixture (~50 steps), then all its contacts | ~3,000 steps + ~6,000 contacts | 7.2 % self |
+
+All three are replaced exactly (runtime.md `UA_PHYS2D`): an index from collider to contact-map buckets (Unity's test
+and stores on those buckets only), one wake walk per body per sync (the later ones store what is already there), the
+fixture's predecessor kept and a per-fixture contact count that skips the edge walk for a fixture without contacts.
+Proof: `UA_PHYS2D=verify` runs Unity's walks beside ours on the live state: on this level and FlyingGenie 0 buckets
+missed, 0 stores a skipped wake walk would have made, 0 differences in the unlink or in the contacts destroyed (66
+rebuilds a frame: 58 wake walks and 58 contact walks skipped, every unlink from the map); test_unityphys2d drives the
+three against models of Unity's code (inserts, erases, grows of the map; walks with contacts removed between them;
+fixtures and contacts made and destroyed), the state compared after every step. Lockstep cannot show it on 2017.4
+(two default replays already part) and the frozen-picture check does not apply to Cuphead (film grain).
+
+Speed (RG34XX-SP muOS, the census2 route: `CUPHEAD_TEST_LEVEL=Platforming_Level_1_2`, godmode, homing, `UA_PROF=200`
+20 s from 95 s, A B A B in one hold, cooled before each run):
+
+| | off | `UA_PHYS2D=1` |
+|---|---|---|
+| flag + wake only: fps | 40.2, 39.4 | 44.3, 42.3 |
+| the same: UnityMain's FixedUpdate, ms a frame | 4.00, 4.02 | 3.06, 2.92 |
+| the same: `SyncTransforms` on the stack, ms a frame | 2.8, 2.4 | 1.75, 1.7 |
+| all three (the second set): fps | 42.1, 40.7 | 40.6, 42.6 |
+| the same: FixedUpdate, ms a frame | 4.10, 4.33 | 3.08, 3.04 |
+| the same: `SyncTransforms` on the stack, ms a frame | 3.0, 3.1 | 1.8, 1.8 |
+| all four pairs: fps (mean) | 40.6 | 42.5 (+4.6 %) |
+
+UnityMain's FixedUpdate is 1.0 - 1.2 ms a frame shorter in every pair, the sync about 40 % shorter. The run's frame
+rate follows where the scripted run takes the player (3 - 7 fps between runs of one setting, above), so one pair can
+show nothing (the second set); over four pairs +1.9 fps. `DestroyFixture`'s part is the smallest (its self time 5 % of
+the sync -> under 2 %, ~0.1 ms). Not yet measured: the G350 (held by another test the whole session) and Blasphemous
+(the same player and so the same rows; its rooms use 2D physics too).
+
+What the sync still costs is Unity's own rebuild (shapes, broad-phase proxies out and in, the fixture's create and
+destroy) and the first wake walk of each sync, whose contacts are not in the cache. Making a moved static collider
+cheaper than a rebuild (Box2D's MoveProxy) would change the broad-phase tree and so the order queries and contacts come
+in: not exact, not built.
 
 ## Shader programs: compiles, links and Unity's binary cache
 
