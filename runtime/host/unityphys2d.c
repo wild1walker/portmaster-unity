@@ -1,11 +1,11 @@
 // unityphys2d.c: Unity 2017.4's 2D physics (Box2D inside libunity) without its per-collider scans (docs/runtime.md,
 // UA_PHYS2D; docs/profiling.md, "Cuphead 64-bit ... the moved colliders").
 //
-//   UA_PHYS2D=1        the two scans below and b2Body::DestroyFixture's two walks (further down) replaced by exact
+//   UA_PHYS2D=1        (the default; =0 off) the two scans below and b2Body::DestroyFixture's two walks (further down) replaced by exact
 //                      cheaper ones
 //   UA_PHYS2D=verify   the same, and every call checked against Unity's own scan on the live state
 //   UA_PHYS2D=stats    (a measurement: Unity's code runs) calls a frame and how much each scan visits
-//   UA_PHYS2D_POOL=1|verify  the contact reports' manifold buffers reused (ProcessContacts; further down)
+//   UA_PHYS2D_POOL=1|verify  (the default; =0 off) the contact reports' manifold buffers reused (ProcessContacts; further down)
 //
 // Where the time goes (Cuphead's run-and-gun level, muOS, 2017.4.40f1 arm64-v8a): a collider without a Rigidbody2D
 // that a script moves is rebuilt whole at the next sync of transforms (PhysicsManager2D::SyncTransforms, which every
@@ -584,12 +584,12 @@ static int g_ok[NROWS];
 
 void unityphys2d_on_load(uintptr_t base, size_t size)
 {
-    // unset or empty: off; quietly nothing on a libunity.so whose rows do not match
+    // on by default (unset or empty: 1; =0 off), on every handheld; quietly nothing on a libunity.so whose rows do not match
     const char *v = getenv("UA_PHYS2D"), *pv = getenv("UA_PHYS2D_POOL");
     int asked = (v && *v) || (pv && *pv);
     g_asked = asked;
-    if (!v || !*v) v = "0";
-    if (!pv || !*pv) pv = "0";
+    if (!v || !*v) v = "1";
+    if (!pv || !*pv) pv = "1";
     if (strcmp(v, "0")) g_mode = !strcmp(v, "verify") ? 2 : !strcmp(v, "stats") ? 3 : 1;
     if (strcmp(pv, "0")) g_pool_mode = !strcmp(pv, "verify") ? 2 : 1;
     if (!g_mode && !g_pool_mode) return;

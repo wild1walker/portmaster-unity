@@ -2041,6 +2041,9 @@ non-empty array, no block given back twice). Three A/B pairs, both sides `UA_PHY
 The 0.6 ms is steady; the fps is within the route's spread. `SendMessageAny`'s dispatch (the component walk and the
 script method lookup per message) is Unity's own and stays.
 
+Both switches are on by default since 2026-11-28 on every handheld (docs/porting.md, "Rules for every port"):
+exact, verify clean on both 2017.4.40f1 games, no loss on muOS; `=0` turns either off. Not measured on the G350.
+
 What the sync still costs is Unity's own rebuild (shapes, broad-phase proxies out and in, the fixture's create and
 destroy) and the first wake walk of each sync, whose contacts are not in the cache. Making a moved static collider
 cheaper than a rebuild (Box2D's MoveProxy) would change the broad-phase tree and so the order queries and contacts come
