@@ -130,6 +130,12 @@ loader's decoder are both ours: a library from the NDK's lld is still the real p
 ## Shipping aarch64 only
 The rule and which ports have passed it: [porting.md](porting.md), "Rules for every port".
 
+**Done (2026-11-28): armhf was removed.** Every piece of 32-bit code went (the armhf runtime and
+its images, the android route's armv7 player, the apk route's 32-bit player, the
+`port.aarch64_only` switch, which is now the only behaviour); the last tree with them is the tag
+`last-armhf`. What follows is the record of how the switch worked and where armhf was decided,
+kept for that history: nothing in it is a step to take now.
+
 The goal: Unity Mono ports with no armhf binaries, the 32-bit route dropped once the 64-bit one
 matches it on the handhelds (docs/mono-arm64.md, "32-bit or 64-bit only"). This section maps every
 place that picks, builds, packs or ships an armhf or aarch64 piece, and the switch that makes a

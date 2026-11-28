@@ -17,9 +17,8 @@ pmu android-data --src work/data --pkg <IL2CPP player package> --il2cpp out/il2c
     --out work/android --pack all                                     # APK + OBB with IL2CPP's metadata
 ```
 
-`--abi armeabi-v7a` builds the 32-bit variant the same way (it runs on the 32-bit runtime and
-the emulated armv7 rig; a Mono game does not need it there, but it is how the IL2CPP route is
-tested before a 64-bit runtime and handheld are at hand).
+(`--abi armeabi-v7a`, the 32-bit variant for the 32-bit runtime and the emulated armv7 rig, went
+with armhf on 2026-11-28: tag `last-armhf`. The armeabi-v7a results below are from before.)
 
 Options for ports: `--managed-file DLL` compiles that assembly instead of the data's copy of the
 same name (a port's patched `Assembly-CSharp.dll`, its helper assembly), `--assembly-patch NAME
@@ -370,8 +369,7 @@ pmu apk <game>.apk out/ --target arm64 --il2cpp [--home DIR] [--jobs N]   # PC: 
 pmu apk <game>.apk out/ --target arm64 --il2cpp --on-device --home DIR    # on the handheld
 ```
 
-`--il2cpp` acts only when the target needs arm64-v8a and the build is Mono with only armeabi-v7a
-(`--target armhf,arm64 --il2cpp` on a system with a 32-bit userland keeps the build's own player).
+`--il2cpp` acts only when the build is Mono with only armeabi-v7a.
 It runs `pmu il2cpp` on the APK's assemblies and `boot.config` (the version from its data:
 `globalgamemanagers` or `data.unity3d`) into `out/.il2cpp`, which a rerun continues, then writes the
 arm64 layout:
@@ -606,8 +604,8 @@ pm android-data --src ... --pkg "$W/il2cpp-home/$VERSION/player-arm64-v8a" --il2
 rm -rf "$W/il2cpp-home" "$W/il2cpp/.work"                          # the tools and build files, ~1 GB
 ```
 
-A firmware with a 32-bit userland keeps the Mono route (armeabi-v7a player); the IL2CPP route is
-for the 64-bit-only ones (no `/lib/ld-linux-armhf.so.3`).
+(Until 2026-11-28 a firmware with a 32-bit userland kept the Mono route's armeabi-v7a player; every
+release is aarch64 only now: mono-arm64 or this IL2CPP route.)
 
 So far run in the arm64 containers only: the 2018.4 game end to end (the same UnityLinker output
 as the PC route but for each assembly's MVID; 677 objects), the 2019.4 and 2020.3 games of the
@@ -648,8 +646,8 @@ IL2CPP compiles everything ahead of time; what Mono does at run time instead fai
 
 Free Linux (Mono, .NET 4.x) builds of the test corpus, one per line; `pmu convert` (shaders,
 settings) and `android-data --il2cpp --pack all`, then the emulated rigs (`tools/emu`:
-`EMU_ARCH=arm64` runs the aarch64 `ua_host` natively on an Apple-silicon Mac, armhf is QEMU
-armv7; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
+`EMU_ARCH=arm64` runs the aarch64 `ua_host` natively on an Apple-silicon Mac; the armhf rows ran on
+QEMU armv7 before armhf was removed; Mesa llvmpipe). Build times on a busy 8-core Mac with 4 compiler jobs.
 
 | game | Unity | ABI | libil2cpp.so | metadata | build | result |
 |---|---|---|---|---|---|---|

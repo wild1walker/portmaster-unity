@@ -1,5 +1,9 @@
 # Unity version coverage: what each LTS Android player needs
 
+(The 32-bit rows and the armeabi-v7a findings below are the record of the armhf route, removed on
+2026-11-28 with all 32-bit code: the last tree with it is the tag `last-armhf`. Every release is
+aarch64 only now.)
+
 The runtime and converter were built for Unity 2017.4.9f1 (Mono, armeabi-v7a; Cuphead). This
 survey reads the Android players of the last patch of every LTS line, 2017.4 to 2022.3, and lists
 what each one needs that the tools do not have yet. It started as static analysis of Unity's own

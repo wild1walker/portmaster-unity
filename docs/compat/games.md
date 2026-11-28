@@ -14,7 +14,9 @@ Most of these games are also in the regression run's list ([tools/regress](../..
 touches the converter or `runtime/` is merged, `regress.sh rig` runs 17 of them in the emulated rig,
 and both compare with the recorded results.
 
-Routes: **32-bit** = Unity's Android Mono player (armv7) on `ua_host`, the desktop data converted;
+Routes: **32-bit** = Unity's Android Mono player (armv7) on `ua_host`, the desktop data converted
+(removed with armhf on 2026-11-28, tag `last-armhf`: those rows are its record; every release is
+aarch64 only now);
 **64-bit IL2CPP** = the desktop game compiled with `pmu il2cpp`, on the arm64 player; **APK** =
 the game's own Android build (`pmu apk`); **box64** = the game's x86-64 Linux player under box64
 (tools/box64).

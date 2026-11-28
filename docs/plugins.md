@@ -64,21 +64,12 @@ Rules ua_host follows (runtime/host/plugins.c, logged as `[plugins]` lines):
   there; SDL2, OpenAL and libudev (Rewired's Linux path) are left to Mono's dllmap and the loader
   (`keep` in the report); steam_api's stub was already registered for `libsteam_api.so`.
 
-### Float arguments on 32-bit ARM (`sig` lines)
+### Float arguments (`sig` lines, removed)
 
-The armeabi-v7a player's Mono passes `float`/`double` arguments and results in core registers
-(base AAPCS, "softfp"); a glibc armhf library expects them in VFP registers. An Android library is
-softfp itself and needs nothing. For a glibc library ua_host builds a thunk per entry point that has
-such arguments, from the `sig` lines android-data writes (the argument classes come from the
-DllImport declarations: `i` word, `l` 64-bit integer, `f` float, `d` double, `F<n>`/`D<n>` a struct of
-n floats/doubles (a VFP candidate), `s<n>`/`S<n>` another struct of n words, word/doubleword aligned;
-structs are resolved through the game's and Unity's assemblies, enums to their underlying type). The
-thunk reads the caller's argument words and calls the library with the VFP variant's layout:
-singles back-filled into free `s` registers, doubles in even-aligned pairs, VFP arguments past `s15`
-on the stack (and no more VFP registers after the first one that does not fit), integers and other
-structs in `r0`-`r3` and the stack, structs split between `r3` and the stack only while nothing is
-on the stack. Results: `v i l f d` (a float or double result comes back in `r0`/`r0:r1`). 256 thunks
-are available. AArch64 players share AAPCS64 with the host: no thunks.
+The 32-bit player's Mono passed floats in core registers (softfp), so ua_host built a thunk for each
+glibc entry point with float arguments from the `sig` lines android-data wrote. That went with armhf
+on 2026-11-28 (tag `last-armhf`): AAPCS64 is the same on both sides, android-data writes no `sig`
+lines, and ua_host ignores those of an older plugins.map.
 
 ## FMOD
 
@@ -117,8 +108,7 @@ sound tables, stopped, created, destroyed) are called on the game's thread from
 `Studio::System::update`, as with `DEFERRED_CALLBACKS`. A released instance stays valid until it has
 stopped. The mix goes into the game's OpenSL ES output like the Wwise player's.
 
-The entry points that take a float by value are built for the base AAPCS on 32-bit ARM
-(`pcs("aapcs")`): the armeabi-v7a player's Mono passes floats in core registers. `UA_FMOD_TRACE=1`
+`UA_FMOD_TRACE=1`
 logs bank loads. An FMOD library in `lib/` (below) is used instead of it. Test: `test_plugins fmod`
 (runtime/host/test/plugins_test.sh), as the integration calls it.
 
@@ -128,19 +118,17 @@ port's `lib/`:
 | | |
 |---|---|
 | files | `libfmod.so` and `libfmodstudio.so` (FMOD 2.02+: both; the core is reached through `libfmodstudio.so`'s dependency), and the DSP plugins the game's FMOD settings load (e.g. `libresonanceaudio.so`) |
-| ABI | `armeabi-v7a` for the armv7 Mono player (`arm64-v8a` for an arm64 player) |
+| ABI | `arm64-v8a` (the arm64 player) |
 | from | FMOD Engine `<version>` for Android (`fmodstudioapi<XXYYZZ>android.tar.gz`: `api/core/lib/<abi>/`, `api/studio/lib/<abi>/`), or FMOD for Unity `<version>` (the Android libraries in the `.unitypackage`) |
 | version | exactly the game's (`pmu plugins` prints it); FMOD keeps the API within a major line (2.02.x), and the integration passes its header version to `System_Create` |
 
-Why this route: these libraries are armeabi-v7a code like Unity's player, so Mono's calls need no
-ABI conversion; they need only what the runtime already gives Unity's own built-in FMOD (bionic
+Why this route: these libraries are Android code like Unity's player (arm64-v8a); they need only what the runtime already gives Unity's own built-in FMOD (bionic
 through the loader: their imports are libc, libm, libdl and liblog; OpenSL ES through the android
 shims, which play through SDL2 or, when a sound server holds the card, `pw-cat`/`pacat`); and they
 read their banks as plain files. FMOD's Linux libraries would output through ALSA or PulseAudio
-themselves, which on the handhelds' 32-bit userlands is exactly what fails when PipeWire holds the
-card (the reason the OpenSL shim has its pipe output), and on 32-bit ARM every call with a float
-argument would need a thunk. They still work as `lib` entries (glibc libraries in `lib/` are mapped,
-the `sig` lines give the thunks), e.g. on an arm64 host with a sound server.
+themselves, which fails where PipeWire holds the card (the reason the OpenSL shim has its pipe
+output). They still work as `lib` entries (glibc libraries in `lib/` are mapped), e.g. on a host
+with a sound server.
 
 What the runtime adds for FMOD:
 - `org.fmod.FMOD` (runtime/jni/up_fmod.c), the Java class FMOD's Android library calls
@@ -165,8 +153,8 @@ What the runtime adds for FMOD:
 **Test double.** runtime/host/test/fmod_double.c implements the ~200 FMOD Studio and core calls
 the integration makes, from FMOD's public API names and documented signatures (no FMOD code or
 header), logging every call; it is built both as an NDK-style Android library and as a glibc
-library (`runtime/host/test/plugins_test.sh`). In the unit test (`test_plugins lib`) a softfp caller
-standing in for Mono goes through the loader, `plugins.map` and (glibc, 32-bit ARM) the thunks; in
+library (`runtime/host/test/plugins_test.sh`). In the unit test (`test_plugins lib`) a caller
+standing in for Mono goes through the loader and `plugins.map`; in
 the emulated rig it replaces `libfmodstudio.so` for a corpus game (results below).
 
 ## Other SDKs
@@ -218,8 +206,8 @@ android-data writes, beside the `map` line, one `fn` line per entry point of the
 (the result and argument classes read from its P/Invoke declarations: `b` bool, `i`/`u` signed and
 unsigned 32-bit, `l` 64-bit, `f`, `d`, `p` a pointer or SWIG object, `r` a ref/out pointer, `z` a
 string) and `const` lines with the game's `AKRESULT` and `AkCallbackType` values. ua_host makes each
-entry point a small trampoline that reads its arguments by that signature, as the armeabi-v7a
-player's Mono passes them (floats in core registers) or by AAPCS64, and answers:
+entry point a small trampoline that reads its arguments by that signature, by
+AAPCS64, and answers:
 
 | calls | answer |
 |---|---|
@@ -303,8 +291,8 @@ StreamingAssets beside the APK), `id(name)`, `constant(name, default)` (the game
 functions from there (they lock). The game's banks are in the OBB unless the port keeps them loose
 (`android_data.streaming_assets = "both"` puts StreamingAssets beside the APK).
 
-Tests: `runtime/host/test/plugins_test.sh` (`test_plugins wwise`, armhf and arm64): Wwise 2017.2's
-signatures as android-data writes them, called as Mono calls them (softfp on 32-bit ARM): the
+Tests: `runtime/host/test/plugins_test.sh` (`test_plugins wwise`): Wwise 2017.2's
+signatures as android-data writes them, called as Mono calls them: the
 results, a bank loaded by name and with a callback, events, the callback queue as `PostCallbacks`
 reads it, a cancelled callback, game syncs given back, fields of SWIG objects, a 9-float call; with a
 test backend (`wwise_backend.c`): what it gets and an event it ends later. The map's lines:
@@ -406,7 +394,7 @@ banks without a game or a sound device, as fast as it can, into a WAV file: `wwr
 Wwise bench's (its event list: category, name, effects flag) on 128 game objects with the music and
 its state changes, and prints the player's CPU per second of audio.
 
-Tests: `runtime/host/test/wwplay_test.sh` (armhf in an arm/v7 container, arm64): `test_wwplay`, a
+Tests: `runtime/host/test/wwplay_test.sh` (natively in `ua-build-arm64`): `test_wwplay`, a
 made-up bank written by the test (PCM, IMA ADPCM from its own encoder, a synthetic Ogg Vorbis tone in
 `test/data`): lengths, levels and decoding of each codec, resampling, loops, delays, pitch, limits,
 stop / pause / resume, scopes and exceptions, bus and mixer volumes, states, RTPC curves (dB scaling,

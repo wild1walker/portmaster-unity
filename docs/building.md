@@ -6,12 +6,11 @@ same steps by hand.
 
 ## What you need
 
-- **A handheld** with an AArch64 kernel that runs 32-bit programs and has a 32-bit userland with
-  GLES 3 / EGL and SDL2 (e.g. Knulli on Allwinner H700 devices: `/lib32`, `/usr/lib32`). The
-  64-bit `ua_host` (`ARCH=arm64 runtime/build.sh`) runs the 64-bit routes on a 64-bit userland
-  ([arm64.md](arm64.md), [apk.md](apk.md), [il2cpp.md](il2cpp.md)).
-- **To build:** Docker (the Dockerfiles hold Debian bookworm armhf cross toolchains and the arm64
-  build image, and `ua-rust`, where `pmu` builds and runs: `setup-rs/tools/pmu.sh <command>`, e.g. as
+- **A handheld** with an AArch64 userland with GLES 3 / EGL and SDL2. `ua_host` (`runtime/build.sh`)
+  runs the 64-bit routes ([arm64.md](arm64.md), [mono-arm64.md](mono-arm64.md), [apk.md](apk.md),
+  [il2cpp.md](il2cpp.md)). (The 32-bit armhf build and route were removed on 2026-11-28; the last tree
+  with them is the tag `last-armhf`.)
+- **To build:** Docker (the Dockerfiles hold the arm64 build image, and `ua-rust`, where `pmu` builds and runs: `setup-rs/tools/pmu.sh <command>`, e.g. as
   `alias pmu="$PWD/setup-rs/tools/pmu.sh"`), 7-Zip (to unpack Unity's installer
   by hand), and the .NET 8 SDK for asmpatch (`tools/asmpatch/build.sh`; `port check` runs it when
   asmpatch is missing). The SDK is installed on the computer itself, not in Docker: Microsoft's
@@ -40,7 +39,7 @@ same steps by hand.
 ```sh
 git clone --recurse-submodules https://github.com/wild1walker/portmaster-unity
 cd portmaster-unity
-runtime/build.sh                    # -> runtime/host/out/ua_host (+ device checks); ARCH=arm64 for 64-bit
+bash runtime/build.sh               # -> runtime/host/out/arm64/ua_host (+ device checks)
 ```
 
 `OPENH264=0 runtime/build.sh` builds the video core without OpenH264 (runtime/media/README.md).
@@ -48,8 +47,7 @@ runtime/build.sh                    # -> runtime/host/out/ua_host (+ device chec
 **Offline, or without Docker Hub.** Each part builds its Docker image once (`docker build`, which
 pulls Debian or Ubuntu base images from Docker Hub) and uses it as it is afterwards: every build
 script checks for its image first (`docker image inspect`). With the images there
-(`unity-android-loader-build`, `ua-host-armhf`, `ua-jni-build`, `ua-android-shims`,
-`ua-media-*`, `ua-build-arm64`, `ua-emu-armhf`, `ua-port-rehearse`, `ua-rust`; `docker image ls`),
+(`ua-build-arm64`, `ua-media-arm64`, `ua-port-rehearse`, `ua-rust`; `docker image ls`),
 nothing is pulled. To rebuild an image after its Dockerfile changed, remove it (`docker image rm
 <name>`).
 
@@ -65,14 +63,15 @@ starts from scratch).
 ```sh
 alias pmu="$PWD/setup-rs/tools/pmu.sh"     # pmu in Docker
 pmu convert "<Game>.app/Contents/Resources/Data" work/data --config game.json
-pmu player donor <version> work/player --apk <donors>/donor-<version>-mono-armv7.apk
+pmu player donor <version> work/player --backend il2cpp --abi arm64-v8a --apk <donors>/donor-<version>-il2cpp-arm64.apk
 pmu android-data --src work/data --pkg work/player --out work/android --pack all
 ```
 
-Then copy to the handheld, into one folder: `ua_host`, the player's three libraries into `lib/`,
-and the contents of `work/android/zip/` (APK, OBB, `android_package.json`,
-`assets/bin/Data/Managed/etc`). Start it with `LD_LIBRARY_PATH=/lib32:/usr/lib32 ./ua_host "$PWD"`
-(see `tools/device/run.sh` and [runtime.md](runtime.md)). [porting.md](porting.md#9-by-hand) has
+Then the game's code on Unity's Mono for aarch64 (the mono-arm64 route: [mono-arm64.md](mono-arm64.md)),
+or compiled with IL2CPP ([il2cpp.md](il2cpp.md)), and on the handheld, in one folder: `ua_host`, the
+player's libraries in `lib/`, and the contents of `work/android/zip/` (APK, OBB,
+`android_package.json`). Start it with `./ua_host "$PWD"` (see `tools/device/run.sh` and
+[runtime.md](runtime.md)). [porting.md](porting.md#9-by-hand) has
 the details of each step, and what a game may need beyond them (assembly patches, a helper DLL).
 
 ## Tests

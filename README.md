@@ -38,7 +38,7 @@ route (box64).
 
 | | |
 |---|---|
-| **A handheld with PortMaster** | Most ports made with these tools need a 32-bit (armhf) userland, the 32-bit ARM libraries with OpenGL ES 3, next to the usual 64-bit system: Knulli on Allwinner H700 handhelds has both. The port's own page says what it needs. |
+| **A handheld with PortMaster** | A 64-bit (aarch64) system with OpenGL ES 3: every port made with these tools is aarch64 only (no 32-bit userland needed; the 32-bit armhf route was removed on 2026-11-28, tag `last-armhf`). The port's own page says what it needs. |
 | **Tested on** | Anbernic RG34XX-SP (Allwinner H700, Mali-G31, 1 GB RAM) with Knulli. |
 | **Your own copy of the game** | The version the port asks for, usually the Linux or macOS version. |
 | **Free space** | About three times the game's size while the first-launch setup runs. |
@@ -109,15 +109,15 @@ Each column is one kind of game build and the way it runs on the handheld (a *ro
 
 | Column | The build you have | How it runs on the handheld | Made with |
 |---|---|---|---|
-| **A** | Mono build for Linux or macOS | Unity's 32-bit ARM Android player, on the handheld's 32-bit userland; the game's data is converted on the handheld | `pmu port new` (route `android`) |
-| **B** | Mono build for Windows only | the same; its Direct3D 11 shaders are translated to OpenGL ES on the handheld, and a 2021.2+ build's class libraries are swapped for Unity's Unix ones | `pmu port new` (route `android`; the release ships HLSLcc for the setup: `ARCH=arm64 tools/hlslcc/build.sh`) |
-| **C** | Mono build (tested with Linux builds) | Unity's 64-bit ARM Android player, for handhelds without 32-bit libraries; the game's code is compiled with IL2CPP on the porter's computer, or by the port's setup on the handheld (`--on-device`) | `pmu port new --route il2cpp-arm64`; by hand: `pmu il2cpp` ([docs/il2cpp.md](docs/il2cpp.md)) |
-| **D** | The game's own Android build (APK, XAPK, AAB) | as it is, on the 32-bit or 64-bit runtime; nothing converted | `pmu port new --route apk`; by hand: `pmu apk` ([docs/apk.md](docs/apk.md)) |
+| **A** | Mono build for Linux or macOS | Unity's 64-bit ARM Android player with the game's own assemblies on Unity's Mono for aarch64 (shipped with the port); the game's data is converted on the handheld. (Until 2026-11-28 also Unity's 32-bit player on a 32-bit userland, route `android`: removed with armhf, tag `last-armhf`; the results below in column A are that route's) | `pmu port new` (route `mono-arm64`) |
+| **B** | Mono build for Windows only | the same; its Direct3D 11 shaders are translated to OpenGL ES on the handheld, and a 2021.2+ build's class libraries are swapped for Unity's Unix ones | `pmu port new` (route `mono-arm64`; the release ships HLSLcc for the setup: `ARCH=arm64 tools/hlslcc/build.sh`) |
+| **C** | Mono build (tested with Linux builds) | Unity's 64-bit ARM IL2CPP Android player; the game's code is compiled with IL2CPP on the porter's computer, or by the port's setup on the handheld (`--on-device`) | `pmu port new --route il2cpp-arm64`; by hand: `pmu il2cpp` ([docs/il2cpp.md](docs/il2cpp.md)) |
+| **D** | The game's own Android build (APK, XAPK, AAB) | as it is, its arm64-v8a player on the runtime (a Mono build with only the 32-bit player: its code compiled with IL2CPP for the 64-bit one); nothing converted | `pmu port new --route apk`; by hand: `pmu apk` ([docs/apk.md](docs/apk.md)) |
 | **E** | Linux x86-64 build, Mono or IL2CPP | the game's own Linux player, translated by box64; about half the frame rate of A | `pmu port new --route box64` ([docs/box64-route.md](docs/box64-route.md)) |
 
 What has run, by Unity version (the version numbers in the cells are the builds that were tried):
 
-| Unity | A: Mono, Linux/macOS, 32-bit | B: Mono, Windows only, 32-bit | C: Mono to 64-bit (IL2CPP) | D: Android build (APK) | E: Linux x86-64 under box64 |
+| Unity | A: Mono, Linux/macOS (results of the removed 32-bit route) | B: Mono, Windows only (results of the removed 32-bit route) | C: Mono to 64-bit (IL2CPP) | D: Android build (APK) | E: Linux x86-64 under box64 |
 |---|---|---|---|---|---|
 | 5.0 - 5.5 | Not yet (5.0 - 5.4 store shaders differently; 5.5 not checked) | Not yet | No (Unity made no 64-bit ARM player) | Not yet | Emulator: 5.5.1 menu. 32-bit-only builds: 5.3.2 menu with box64's experimental 32-bit mode; 5.0.0 crashes |
 | 5.6 - 2017.2 | Emulator: 5.6.0 main menu; 2017.2.0 stops at an old Steamworks plugin | Not yet (the Direct3D path covers 2017.3 - 2022.3) | No (Unity made no 64-bit ARM player) | Not yet | Not yet |
@@ -166,7 +166,7 @@ Most impact for the most games first:
    title screens on a handheld. Controls, sound, saves, memory over a long session and frame rates
    in play are still to be checked, game by game. One 2022.3 game shows its title at 30 fps, and
    why is not known yet.
-2. **Handhelds without 32-bit libraries** (ROCKNIX and other 64-bit-only firmwares). `port check`
+2. **The 64-bit routes** (every handheld: since 2026-11-28 every release is aarch64 only). `port check`
    offers two 64-bit routes and `port new` makes ports for both: `mono-arm64` (the game's own
    assemblies on Unity's Mono built for aarch64, shipped with the port: nothing is compiled or
    downloaded on the handheld; Hollow Knight's 64-bit build, [docs/mono-arm64.md](docs/mono-arm64.md))
@@ -323,7 +323,7 @@ port's zip: never the game, a converted game, or Unity's files (the donors go on
 | **Mono** / **IL2CPP** | Unity's two ways of running a game's code. A Mono build ships the code as .NET assemblies (`Managed/*.dll`), which Unity's ARM player can run. An IL2CPP build ships it compiled for one processor (`GameAssembly`), so its desktop version cannot run on ARM. |
 | **Android player** | Unity's engine as built for Android phones (`libunity.so`). It is the same engine as on the desktop, compiled for ARM. |
 | **ua_host** | this project's runtime: it loads the Android player on the handheld's Linux and stands in for the parts of Android the player uses. |
-| **32-bit userland** (armhf) | 32-bit ARM system libraries next to the usual 64-bit ones. Unity's Mono Android players are 32-bit, so routes A and B need them. |
+| **32-bit userland** (armhf) | 32-bit ARM system libraries next to the usual 64-bit ones. No route needs them since 2026-11-28: the 32-bit route was removed (the last tree with it is the tag `last-armhf`). |
 | **APK, OBB** | the files of an Android app: the package and its extra data. The converter writes both for the player. |
 | **box64** | a program that runs x86-64 Linux programs on ARM by translating them while they run. |
 | **GLES** | OpenGL ES, the graphics interface of handheld GPUs. Desktop shaders are converted to it. |

@@ -57,8 +57,8 @@ port.build.json, port.json, setup.env, port.env, the rendered templates, gameinf
 testing_thread.txt and `.port_files` byte for byte (dicts in the Python's insertion order, JSON
 as `json.dumps` writes it, TOML read as tomllib reads it), and the release zip with the Python's
 entries, order, modes, fixed times and versions (deflated at level 9 with zlib's own deflate, libz-sys's copy, as crates/apk; the aarch64-only
-release's donor APKs written again as zipfile writes them). `[port] aarch64_only` (docs/arm64.md,
-"Shipping aarch64 only") is there: the android route's port takes the mono-arm64 route, the release
+release's donor APKs written again as zipfile writes them). Every release is aarch64 only
+(docs/arm64.md, "Shipping aarch64 only"; the old `[port] aarch64_only` switch is dropped): the android route's port takes the mono-arm64 route, the release
 drops armhf build outputs and the donors' 32-bit players, and the zip is checked with the same scan
 as `pmu arch-check` (crates/pkgzip `arch.rs`). `player.mono64_classlibs` (a .NET 3.5 game of 2017.4 on Mono's 4.x
 class libraries: `setup/mono64/<line>/classlibs/` and `etc/`), `files.own` (files `port new` leaves as

@@ -1,5 +1,9 @@
 # Design
 
+(The original design, for the 32-bit armhf build. That build was removed on 2026-11-28, tag
+`last-armhf`: `ua_host` is aarch64 only now, [arm64.md](arm64.md). The parts and interfaces below are
+the same on aarch64; the armhf build details are history.)
+
 Unity games built for desktop run with Unity's own ARMv7 Android player instead of an x86 player
 under an emulator. The player libraries are loaded on the handheld's 32-bit Linux userland by our
 own loader, with a fake Java layer and small Android API shims. No Android OS, no emulation. The

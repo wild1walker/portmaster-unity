@@ -15,17 +15,16 @@ pmu apk base.apk split_config.arm64_v8a.apk main.12.com.x.obb out/
 pmu apk game.xapk out/                        # .xapk / .apks / a zip of APKs and OBBs
 pmu apk game.aab out/                         # an App Bundle
 pmu apk <game>.apk out/ --dry-run             # the report only
-pmu apk <game>.apk out/ --target armhf,arm64 --json   # the first player the build has; JSON on stdout
+pmu apk <game>.apk out/ --target arm64 --json  # JSON on stdout
 ```
 
-Then copy `out/` to the handheld and start `ua_host out/` with the build of the chosen ABI:
-`runtime/host/out/ua_host` (armhf, armeabi-v7a; `LD_LIBRARY_PATH=/lib32:/usr/lib32`) or
-`runtime/host/out/arm64/ua_host` (aarch64, arm64-v8a).
+Then copy `out/` to the handheld and start `ua_host out/` (`runtime/host/out/arm64/ua_host`: the
+build's arm64-v8a player; the 32-bit armhf `ua_host` was removed on 2026-11-28, tag `last-armhf`).
 
-## Mono builds on 64-bit-only systems (`--il2cpp`)
+## Mono builds (`--il2cpp`)
 
-Unity's Android players with Mono are armeabi-v7a only, so a Mono build needs a 32-bit userland.
-With `--il2cpp` it runs on a 64-bit one too: its assemblies (`assets/bin/Data/Managed/*.dll`) are
+Unity's Android players with Mono are armeabi-v7a only, whose 32-bit player is not run. With
+`--il2cpp` such a build runs: its assemblies (`assets/bin/Data/Managed/*.dll`) are
 compiled with Unity's IL2CPP (`pmu il2cpp`, docs/il2cpp.md) for Unity's arm64 IL2CPP player
 of the build's version, and `out/` gets that player, the new `libil2cpp.so` and an APK with
 IL2CPP's metadata in place of the assemblies:
@@ -36,9 +35,7 @@ pmu apk <game>.apk out/ --target arm64 --il2cpp --on-device --home <dir>        
 ```
 
 It takes what `pmu il2cpp` takes (`--home`, `--pkg`, `--jobs`, `--on-device`, `--toolchain`,
-`--link-xml`, `--strip`, `--keep-cpp`) and acts only when the chosen player is arm64-v8a and the
-build has none (a target list that starts with `armhf` on a system with a 32-bit userland keeps
-the build's own player). Unity 2017.4.16f1 - 6000.2 (the IL2CPP route's range, 2023.1 - 6000.2 as a
+`--link-xml`, `--strip`, `--keep-cpp`) and acts only when the build has no arm64-v8a player. Unity 2017.4.16f1 - 6000.2 (the IL2CPP route's range, 2023.1 - 6000.2 as a
 mixed build with 2022.3's il2cpp, not tried with an APK yet; docs/il2cpp.md, "Android builds with
 Mono", lists what changes in the layout). The build's own native plugins are
 32-bit ARM and left out. The same AOT limits as for desktop games apply (docs/il2cpp.md, "AOT
@@ -60,26 +57,19 @@ and suggests `game.package` (the setup takes only that package), `game.unity_ver
 `player.abis` (the APK's ARM players) and, for a Mono build, the pointer mode its code wants
 (docs/porting.md, section 1). The port (`setup-rs/templates/apk/`):
 
-- the release ships `ua_host` (armhf) when the APK has an armeabi-v7a player and `ua_host64` (the
-  aarch64 build) when it has an arm64-v8a one: both for a build with both, about 4 MB of the zip;
+- the release ships `ua_host64` (the aarch64 build) for the APK's arm64-v8a player;
 - the setup (no download, no conversion: a few minutes) takes the player's copy from `gamedata/`
-  and runs `pmu apk --target <the players this system runs>` (the release's `setup/pmu apk`,
-  the same command in setup-rs, with `player.il2cpp`'s compile too: no Python in the release): the armeabi-v7a one where the
-  system has a 32-bit userland (`/lib/ld-linux-armhf.so.3`; the tested route on the RG34XX-SP's
-  Mali driver), else the arm64-v8a one; `player.abi = "arm64-v8a"` takes the 64-bit one wherever
-  the APK has it. It installs `lib/`, `base.apk`, the OBBs and `android_package.json` into the port
+  and runs `pmu apk --target arm64` (the release's `setup/pmu apk`, with `player.il2cpp`'s compile
+  too: no Python in the release). It installs `lib/`, `base.apk`, the OBBs and `android_package.json` into the port
   folder and deletes the player's files from `gamedata/` (docs/porting.md, section 4);
-- the launcher runs `ua_host` or `ua_host64` by `android_package.json`'s `abi`, with gptokeyb2 for
+- the launcher runs `ua_host64` (a card set up for the 32-bit player by an older release is set up
+  again: the launcher says how), with gptokeyb2 for
   the exit hotkey, SDL's own audio driver and the build's own frame pacing (`UA_FRAME_RATE=android`);
-- port.json asks for the 32-bit userland (`reqs = ["armhf"]`) only when the port runs nothing but
-  armeabi-v7a; a card set up with the 32-bit player and moved to a 64-bit-only handheld is set up
-  again from the installed APK (the launcher says how);
+- port.json never asks for the 32-bit userland (`armhf`);
 - a Mono build (armeabi-v7a only) with `player.il2cpp = true` in port.toml (the check says when a
-  build can take it): the release ships `ua_host64` too, port.json drops the 32-bit userland, and
-  on a system without one the setup runs `pmu apk --il2cpp --on-device`, which compiles the
-  build's code on the handheld (one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi for
-  Unity's, Debian's and Microsoft's files; an interrupted build continues on the next launch). A
-  system with a 32-bit userland still takes the build's own player.
+  build can take it): the setup runs `pmu apk --il2cpp --on-device`, which compiles the build's
+  code on the handheld (one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi for Unity's,
+  Debian's and Microsoft's files; an interrupted build continues on the next launch).
 
 ## What it writes
 
@@ -105,8 +95,7 @@ makers built and tested it for, at most 33 (Android 13) and at least its `minSdk
 installs on has that), its `minSdkVersion` when the manifest names no target. The libandroid shims
 then offer what that level has (runtime/android/README.md: AChoreographer from 24, refresh rate
 callbacks and `ANativeWindow_setFrameRate` from 30, ...; newer functions read NULL, as on a phone of
-that level). `UA_SDK_INT` overrides. Converted desktop data stays at API 19 on armhf (the level the
-32-bit ports were made with, Cuphead's among them) and 22 on arm64 (64-bit Android starts at 21),
+that level). `UA_SDK_INT` overrides. Converted desktop data stays at API 22 (64-bit Android starts at 21),
 or the `min_sdk` android-data writes into `android_package.json`: 22 for a game with compute
 kernels, because Unity's players only create OpenGL ES 3.1+ contexts from Android 5.0 (API 21)
 ([android-data.md](android-data.md#2-platform-differences)).
@@ -115,12 +104,9 @@ the NDK's choreographer.
 
 ## Choices and checks
 
-- **ABI**: arm64-v8a for a 64-bit userland, armeabi-v7a for a 32-bit one. `--target arm64|armhf`
-  names the userland, a list (`armhf,arm64`) the userlands the system has in order of preference
-  (the first the build has a player for; the port's setup passes it); `--target auto` (default) is
-  the machine running the tool when that is an ARM Linux, else arm64-v8a when the build has it.
-  `--abi` takes one directly. A build with only armeabi-v7a (every Mono build) needs the 32-bit
-  userland.
+- **ABI**: arm64-v8a (`--target auto` or `arm64`; `--abi arm64-v8a`). A build with only armeabi-v7a
+  (every Mono build) is refused unless `--il2cpp` compiles its code for the arm64 player (the
+  32-bit armhf route was removed on 2026-11-28, tag `last-armhf`).
 - **Backend**: `libil2cpp.so` = IL2CPP, `libmono.so` / `libmonobdwgc-2.0.so` = Mono.
 - **Unity version**: from the data's header (`globalgamemanagers`, `data.unity3d` or `mainData`,
   in the APK, an asset pack or the OBB); the player's own build line is logged at startup too.
@@ -196,7 +182,7 @@ the resource map, so stripped or obfuscated names work) and aapt2's protobuf XML
 ## Tested (emulated rig)
 
 Free itch.io Android builds, run with `tools/emu` (`EMU_ARCH=arm64`: a native aarch64 container
-with Mesa llvmpipe; `EMU_ARCH=armhf`: QEMU armv7); the list and results are in
+with Mesa llvmpipe; until 2026-11-28 also `EMU_ARCH=armhf`, QEMU armv7); the list and results are in
 docs/compat/README.md ("Android builds run"): Unity 2019.4 - 2022.3, Mono (armeabi-v7a) and IL2CPP
 (arm64-v8a, and one build's armeabi-v7a libraries on the 32-bit route), Burst, FMOD, GLES2-only,
 Vulkan-first and Swappy-on builds all reach their title screens. No free build with an OBB was

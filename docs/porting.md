@@ -39,13 +39,15 @@ patches and a helper assembly).
 
 These hold for every port made with these tools, whichever game and whichever handheld.
 
-- **64-bit only.** A release ships aarch64 binaries only, no armhf (`[port] aarch64_only = true`;
-  [arm64.md](arm64.md), "Shipping aarch64 only"). A port moves once its 64-bit build is measured on
-  the handhelds at the 32-bit build's frame rate and memory, with the same picture and game play.
-  Tested so far: Hollow Knight passes, upgrade from the 32-bit release included (2026-11-23).
-  Gungeon does not yet: on a 1 GB handheld its dungeon floors take 120-170 MB more than the 32-bit
-  build (the managed heap, 8-byte references) and it runs out of memory on the G350, so it keeps its
-  armhf build until that is closed. New ports start 64-bit only.
+- **64-bit only.** A release ships aarch64 binaries only, no armhf: since 2026-11-28 the tools have no
+  32-bit code at all (the armhf runtime, its build images, the `android` route's armv7 player, the
+  `port.aarch64_only` switch and the apk route's 32-bit player were removed; the last tree with them
+  is the tag `last-armhf`). `port new` takes a Mono game to the mono-arm64 route, `port package`
+  stops on any 32-bit ARM file, and port.json never asks for `armhf`. What the 64-bit builds were
+  measured against (the 32-bit ones, [arm64.md](arm64.md), [arm64-routes.md](arm64-routes.md)) stays
+  in the docs as the record of that decision: Hollow Knight passed, upgrade from the 32-bit release
+  included (2026-11-23); Gungeon's dungeon floors took 120-170 MB more than its 32-bit build on a
+  1 GB handheld (the managed heap, 8-byte references), its open item when armhf went.
 - **Every speedup on every handheld.** Whatever makes the game faster is on by default on every
   device, not only on those with 1 GB of RAM: `[runtime]`, and `[runtime_low]` for what changes the
   picture ([The Low picture at launch](#the-low-picture-at-launch-runtime_low)). `[runtime_lowmem]`
@@ -130,14 +132,17 @@ The exit status is 0 when a route fits. `--json` gives the whole report (`port n
 
 | route | when | status |
 |---|---|---|
-| `android` | a Mono build of Unity 5.6 - 6000.6 with OpenGL Core shaders (macOS, Linux) or Direct3D 11 (Windows: `shaders.from = ["d3d11"]`, translated on the handheld by the release's `pmhlslcc`; a 2021.2+ Windows build's class libraries fetched by the setup, `pmu winbcl`), on a handheld with a 32-bit (armhf) userland: Unity's ARMv7 Android player run natively by `ua_host` | templates in `setup-rs/templates/android/` |
-| `il2cpp-arm64` | a Mono build of Unity 2017.4+ on a 64-bit-only system (no armhf userland): the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `setup-rs/templates/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmu il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. What changes the game's code (asmpatch, `files.managed`, `files.assembly_patches`, the opt-in patches of `streaming_assets` and `data_path`) goes into that IL2CPP build, not into android-data |
+| `android` | removed with armhf (2026-11-28, tag `last-armhf`): Unity's ARMv7 Android player on a 32-bit userland. `port check` still lists it with what it would need, never as the route; `port new` takes such a game to `mono-arm64` | none: `port new` moves a port.toml's `route = "android"` to `mono-arm64`, `port package` refuses a port folder made for it |
+| `il2cpp-arm64` | a Mono build of Unity 2017.4+: the game's code compiled with IL2CPP into Unity's arm64 IL2CPP Android player, run natively by the 64-bit `ua_host` | templates in `setup-rs/templates/il2cpp-arm64/`, hooks in `il2cpp.py`: the setup compiles the code on the handheld (`pmu il2cpp --on-device`: one to a few hours on a Cortex-A53, about 1.6 GB free, Wi-Fi), then converts and packs as the android route (`android-data --il2cpp`); by hand on the PC: docs/il2cpp.md. What changes the game's code (asmpatch, `files.managed`, `files.assembly_patches`, the opt-in patches of `streaming_assets` and `data_path`) goes into that IL2CPP build, not into android-data |
 | `mono-arm64` | a Mono build of Unity 2017.4+ with the .NET 4.x runtime on a 64-bit userland: the game's own assemblies run by Unity's Mono (built for aarch64 Linux, shipped with the release) inside Unity's arm64 IL2CPP player, whose `libil2cpp.so` is a bridge to it; no IL2CPP compile, the desktop's runtime and class libraries. .NET 3.5 games run on the line's MonoBleedingEdge with Mono's 4.x class libraries built from the same sources (`tools/mono64/build-classlibs.sh`; Cuphead, [mono-arm64.md](mono-arm64.md#a-net-35-game-on-the-4x-class-libraries-cuphead)), not yet through `port new`. Offered by `port check`, not yet recommended over the other routes | templates in `setup-rs/templates/mono-arm64/`, hook `mono64.py`: the android route's setup with the IL2CPP player and its engine modules (`player donor --managed` from an IL2CPP and a Mono donor) and `android-data --mono64`; the release's `setup/mono64/<line>/` (the package part `mono64`: `runtime/mono64/build.sh` and `tools/mono64/build-mono.sh <line>`, Docker; `--mono64-work`) goes into `lib/` ([mono-arm64.md](mono-arm64.md)) |
 | `box64` | a Linux x86-64 build (any backend, any version): the game's own player under box64 | templates in `setup-rs/templates/box64/`, hooks in `route.py`; `tools/box64/build.sh` before `package` ([box64-route.md](box64-route.md)) |
-| `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`, its armeabi-v7a player where the handheld has a 32-bit userland, its arm64-v8a player (the 64-bit `ua_host64`) elsewhere; a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 (2023.1 - 6000.2: mixed, docs/il2cpp.md) with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `setup-rs/templates/apk/`, hooks in `apk.py`: the setup runs `pmu apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmu apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
+| `apk` | the game's own Android build (an APK with its OBBs, split APKs, `.xapk`, `.apks`, `.aab`) of Unity 5.6 - 6000.6 with GLES: the player inside it, run natively by `ua_host`: its arm64-v8a player (`ua_host64`); a Mono build (armeabi-v7a only) of 2017.4 - 2022.3 (2023.1 - 6000.2: mixed, docs/il2cpp.md) with `player.il2cpp = true` also on 64-bit-only systems, its code compiled there with IL2CPP for Unity's arm64 IL2CPP player | templates in `setup-rs/templates/apk/`, hooks in `apk.py`: the setup runs `pmu apk` on the player's copy and installs it (no download, no conversion; with `player.il2cpp` on a 64-bit-only system `pmu apk --il2cpp --on-device`: one to a few hours, Wi-Fi; [apk.md](apk.md), "As a port") |
 
 
 ### Both builds in one release: 32-bit where it can, 64-bit where it must
+
+(History: how Hollow Knight shipped both builds until armhf was removed on 2026-11-28, tag `last-armhf`.
+No release made with the tools now has a 32-bit build; this records what the dual launchers met.)
 
 A Mono game whose 32-bit build is the one to run (Hollow Knight: as fast as IL2CPP on the RG34XX-SP, less
 memory, nothing compiled at setup) still needs a 64-bit build for firmwares without a 32-bit userland
@@ -419,9 +424,9 @@ checksums of its `libmain.so` and `libunity.so` into the setup, which then check
 | `port.genres` | none | one or more of `action`, `adventure`, `arcade`, `casino/card`, `fps`, `platformer`, `puzzle`, `racing`, `rhythm`, `rpg`, `simulation`, `sports`, `strategy`, `visual novel`, `other` (PortMaster's list; anything else is an error) |
 | `port.store` | none | where to get the game: `[{name = "Steam", gameurl = "https://...", developerurl = "https://..."}]` (tables; PortMaster takes no bare links) |
 | `port.availability` | `paid` with a store, else `free` | `free` / `paid` (the player provides the game's files, free or bought), `demo`, `full` (for these ports the game is never in the zip) |
-| `port.reqs` | none | device capabilities the port needs besides the route's own (the android route adds `armhf`): `!lowres`, `hires`, `2gb`, `4gb`, `power`, `opengl` (PortMaster's `device_info.txt` sets them) |
+| `port.reqs` | none | device capabilities the port needs besides the route's own (`armhf` is always dropped): `!lowres`, `hires`, `2gb`, `4gb`, `power`, `opengl` (PortMaster's `device_info.txt` sets them) |
 | `port.exp` | false | true hides a released port unless players show experimental ports; not a "still being tested" flag |
-| `port.aarch64_only` | false (`AARCH64_ONLY_DEFAULT` in port.py) | true: a release with nothing for armhf. A Mono game made for the android route takes the mono-arm64 route (Unity's arm64 IL2CPP player from the IL2CPP donor, the game's assemblies on Unity's Mono for aarch64; port.toml's armv7 `player` settings and checksums give way); `package` ships the Mono donor without its `lib/` (its engine assemblies kept), leaves out the porter's armhf `build.outputs`, and stops if any EM_ARM file is left; port.json asks for no `armhf`. The apk route keeps only `arm64-v8a` (or `player.il2cpp`). docs/arm64.md, "Shipping aarch64 only" |
+| `port.aarch64_only` | removed (2026-11-28) | every release is aarch64 only; `port new` drops the key from an older port.toml (a log line says so). `package` ships the Mono donor without its `lib/` (its engine assemblies kept), leaves out the porter's armhf `build.outputs`, and stops if any EM_ARM file is left |
 | `port.thanks` | a thank-you to `game.developer` | the README's first sentence: thank the game's makers in your own words, with a link and one thing that makes the game worth playing |
 | `port.screenshot`, `port.cover` | `screenshot.png`, `cover.png` | image files (relative to the port folder; PNG or JPEG) `package` ships as `<name>/screenshot.png` and `<name>/cover.png` |
 | `port.ready_marker` | `.setup_done` | the file that marks the setup done (a port moving onto these tools keeps its old one, so installed copies are not set up again) |
@@ -437,10 +442,10 @@ checksums of its `libmain.so` and `libunity.so` into the setup, which then check
 | `game.genre`, `description` | the first of `port.genres`, `port.desc` | `gameinfo.xml`'s genre (a display name: `Platformer`, `RPG`) and description (the frontend has room for more than `port.desc`) |
 | `game.url` | the first store's `gameurl` | the game's page (the testing thread) |
 | `[controls]` | drafted from InControl's default pad bindings (the check's survey), else none; your own table replaces the draft | the game's controls for the READMEs and the testing thread, one row per button in order (`"D-Pad" = "Move"`, `B = "Jump"`), named as the handheld labels them; most PortMaster handhelds have the Nintendo layout (A right, B bottom), and the game sees the bottom button as its gamepad's A. The buttons always work by position (the bottom one jumps and confirms); only the prompts may show the handheld's letters ([input.md](input.md#buttons-by-position): never name the pad as a Nintendo one). Leave out buttons that do nothing; PortMaster's exit hotkey (`Select + Start`) is added |
-| `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player the setup unpacks from the port's donors; apk route: the APK's backend, and `abi = "auto"` (the APK's armeabi-v7a player where the handheld has a 32-bit userland, else its arm64-v8a one) or `"arm64-v8a"` (the 64-bit one wherever the APK has it) |
+| `player.backend`, `player.abi` | `mono`, `armeabi-v7a` | the player the setup unpacks from the port's donors; apk route: the APK's backend, and `abi = "arm64-v8a"` |
 | `player.donors` | the route's for each of `game.unity_versions` (section 5) | the donor APKs the release ships in `donor/`: `port new` names the route's (a comment in port.toml) and adds any listed here; `port package --donors DIR` copies them and stops when one is missing |
-| `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs, and so the runtimes the release ships: `ua_host` for `armeabi-v7a`, `ua_host64` for `arm64-v8a` |
-| `player.il2cpp` | apk route: false | true (a Mono build, armeabi-v7a only, of Unity 2017.4 - 2022.3, or 2023.1 - 6000.2 as a mixed build): where the system has no 32-bit userland, the setup compiles the build's code with Unity's IL2CPP on the handheld for Unity's arm64 IL2CPP player (`pmu apk --il2cpp --on-device`: one to a few hours, about 1.6 GB free, Wi-Fi); the release ships `ua_host64` too and port.json no longer asks for the 32-bit userland. The check says when a Mono build can take it |
+| `player.abis` | apk route: the APK's ARM ABIs | the APK's players the port runs: `arm64-v8a` (`ua_host64`) |
+| `player.il2cpp` | apk route: false | true (a Mono build, armeabi-v7a only, of Unity 2017.4 - 2022.3, or 2023.1 - 6000.2 as a mixed build): the setup compiles the build's code with Unity's IL2CPP on the handheld for Unity's arm64 IL2CPP player (`pmu apk --il2cpp --on-device`: one to a few hours, about 1.6 GB free, Wi-Fi); the release ships `ua_host64`. The check says when a Mono build can take it |
 | `player.sha256` | from `--player` | `{"libmain.so" = "<sha256>", ...}`: the setup checks the player it unpacks from the donors (an older port.toml's `player.url` is ignored: the handheld never downloads Unity's player) |
 | `convert` | `steps = ["shaders", "settings", "audio", "quality"]`, `settings.graphics_apis = [11]` | `pmu convert`'s config: each step's `DEFAULTS` (`textures.py`, `settings.py`, `audio.py`, `quality.py`, `shaders/step.py`); `{setup}` in a value is the setup folder on the handheld. `quality` is the handheld quality profile ([quality.md](quality.md)): a cheaper picture on every handheld, the game play the same, with no setup question (`quality.ram_mb` limits it to handhelds with at most that much RAM, for a port measured to keep its frame rate with the game's own picture on bigger ones). `video` (pmu only): VP8 clips taller than `max_height` (720) halved until they are not and encoded again (`mode` auto: where MemTotal is at most `ram_mb`, 1024; `cq_level` 10, `cpu_used` 4), each into its old place in the resource file: a 1080p cinematic is more than an A53 decodes in time, 540p a quarter of it and the same on a 720x480 panel ([rust-setup.md](rust-setup.md#video)) |
 | `android_data.asmpatch` | `auto` when the check finds Rewired, the Input System package or PlayMaker, else `off` | `auto`: tools/asmpatch runs on the game's assemblies with its default patches, the android ones and the exact optimizations (each changes only what it finds; the package then ships asmpatch); a list: only those patches; `["auto", "<patch>", ...]`: the default ones and those (opt-in ones such as the `reduce` patches) |
@@ -1269,8 +1274,7 @@ folder copied without it, or deleted) says so: "Install the port again (unzip it
 folder)". To set a game up again: unzip the release over the port (a launch of a set-up game has
 removed `setup/` and `donor/`), delete `.setup_done`, put the game in `gamedata/`, launch.
 Free space: about three times the game while it
-runs. Where the time goes on a handheld (textures and the card, mostly): [setup-speed.md](setup-speed.md). The setup needs an aarch64 system for its tools and the game a 32-bit (armhf) userland
-(the launcher checks for `/lib/ld-linux-armhf.so.3` first).
+runs. Where the time goes on a handheld (textures and the card, mostly): [setup-speed.md](setup-speed.md). The setup and the game need an aarch64 system.
 
 The il2cpp-arm64 route's setup takes the same steps with step 3 replaced: `il2cpp --on-device`
 (on pmu, as the other steps) compiles the game's code on
@@ -1281,22 +1285,19 @@ which gets the opt-in patches `streaming_assets` and `data_path` ask for (`--str
 (android-data checks them against the build's `il2cpp.json`), and nothing of the code goes to
 android-data.
 
-The apk route's setup is shorter: the setup's tool (pmu); the players this system runs, in order (the
-APK's armeabi-v7a one where `/lib/ld-linux-armhf.so.3` exists and the port has `ua_host`, its
-arm64-v8a one where the port has `ua_host64`; `player.abi = "arm64-v8a"` puts that first); the
-packages in `gamedata/` (`game.data`, any depth, macOS's `._` files skipped) with the `.obb` files
-there, else the APK installed before (a setup again, e.g. after moving the card to a 64-bit-only
-handheld), else the `game` hook (it sets `INPUTS`); `pmu apk --target <those players> --json`,
+The apk route's setup is shorter: the setup's tool (pmu); the player this system runs (the APK's
+arm64-v8a one, with the port's `ua_host64`); the packages in `gamedata/` (`game.data`, any depth,
+macOS's `._` files skipped) with the `.obb` files there, else the APK installed before (a setup
+again), else the `game` hook (it sets `INPUTS`); `pmu apk --target arm64 --json`,
 which checks the build and lays it out in the work folder (APKs and OBBs hard-linked, or copied
 on exFAT/FAT; what it unpacks from an `.xapk` or rebuilds from an `.aab` moved); the package and the
 Unity version checked against `game.package` and `game.unity_versions`; then installing: `lib/`,
 `base.apk`, the OBBs under the names the player looks for, Mono's config and
 `android_package.json` moved into the port folder, the player's files in `gamedata/` deleted
-(`keep_installers=1` keeps them). Free space: about the build's size. The launcher picks `ua_host`
-or `ua_host64` by `android_package.json`'s `abi`, and keeps the build's own frame pacing (ua_host
-runs imported builds with `UA_FRAME_RATE=android`). With `player.il2cpp` (a Mono build) the
-players are `armhf,arm64` (`ua_host64` is in the release), and on a system without the 32-bit
-loader the call is `pmu apk --target arm64 --il2cpp --on-device --home <work>/il2cpp-home`: the
+(`keep_installers=1` keeps them). Free space: about the build's size. The launcher runs `ua_host64`
+(a build set up for the 32-bit player by an older release asks for the setup again), and keeps the
+build's own frame pacing (ua_host runs imported builds with `UA_FRAME_RATE=android`). With
+`player.il2cpp` (a Mono build) the call is `pmu apk --target arm64 --il2cpp --on-device --home <work>/il2cpp-home`: the
 build's assemblies compiled for Unity's arm64 IL2CPP player of its version (one to a few hours,
 about 1.6 GB more free space, Wi-Fi for the tools; an interrupted build continues from
 `<work>/apk/.il2cpp`), its output shown as it goes.
@@ -1466,11 +1467,9 @@ bits of what they run; PortMaster wants `.sh` files 644). macOS's `._<name>` and
 files are left out of the zip and of the submission folder, so the same port gives the same zip
 from any filesystem. `uaflipbook.dll` goes beside `ua_host` only when the port's settings name
 `UA_FLIPBOOK` (`runtime`, `runtime_low`, `runtime_lowmem` or a question's `env`); `package` stops
-when such a port's DLL is not built. The il2cpp-arm64 route
-ships the 64-bit `ua_host` (`runtime/host/out/arm64/`, `ARCH=arm64 runtime/build.sh`) as
-`ua_host`; the apk route ships `ua_host` for an APK's armeabi-v7a player and that 64-bit one as
-`ua_host64` for its arm64-v8a player (`player.abis`), each with its build's decoder licences (the
-64-bit one's as `LICENSE.<part>.ua_host64.txt`).
+when such a port's DLL is not built. The il2cpp-arm64 and
+mono-arm64 routes ship `ua_host` (`runtime/host/out/arm64/`, `runtime/build.sh`) as `ua_host`; the
+apk route ships it as `ua_host64` (its decoder licences as `LICENSE.<part>.ua_host64.txt`).
 
 The zip also gets the screenshot and the cover (`port.screenshot`, `port.cover`) as
 `<name>/screenshot.png` and `<name>/cover.png`, where PortMaster's own release zips have them, and
@@ -1788,8 +1787,7 @@ is at hand.
 The pull request's template asks the porter to confirm they understand the launcher and can
 explain every line that differs from PortMaster's usual ones. In these launchers that is: the
 first-launch setup through PortMaster's patcher (`PATCHER_FILE`, `PATCHER_GAME`, `PATCHER_TIME`,
-`PATCHER_QUESTIONS`), the 32-bit userland check and `/lib32:/usr/lib32` first on `LD_LIBRARY_PATH`
-(the android route's `ua_host` is an armhf program), `UA_FPS` (a frame-rate line in `log.txt`), `port.env` and
+`PATCHER_QUESTIONS`), `UA_FPS` (a frame-rate line in `log.txt`), `port.env` and
 `answers.env` (the game's options and the setup's answers), and for box64 the Westonpack block,
 box64's settings and the command written to `conf/run.sh`. Testing on the firmwares and screens
 of the testing thread's checklist is the testers' and the porter's work; the rehearsal
@@ -1809,14 +1807,15 @@ Hollow Knight submission (PortsMaster/PortMaster-New#2880) did about it:
 - `trap` only for a reason (Hollow Knight's puts the Rockchip video nodes back on exit and still ends
   with `pm_message_end`, which `funcs.txt` set as the EXIT trap).
 - No SDL driver defaults (PortMaster's `pmcheck` warns on `SDL_AUDIODRIVER` and the like) unless a
-  named device needs one. The android template's `SDL_AUDIODRIVER=alsa` (`setup-rs/templates/android/launcher.sh`) changes nothing
+  named device needs one. The removed android template's `SDL_AUDIODRIVER=alsa` (the tag `last-armhf`) changed nothing
   on the firmwares checked: with it unset, the 32-bit SDL picks ALSA by itself on dArkOS (G350: it plays;
   32-bit libpipewire and libpulse are there, no sound server runs) and on muOS 2606 (32-bit libpipewire
   and its ALSA plugin are there, SDL's PipeWire driver is not; ALSA's open fails either way, and
   the OpenSL shim pipes into `pw-cat`), and on Knulli the same as on muOS (32-bit libpipewire and libpulse
   there, SDL 2.32's drivers for them not available). Hollow Knight's submission dropped it (2026-11-19); a silent
   check is `runtime/host/audiocheck` (one second of zeros) with and without the variable.
-- The same question for `/lib32:/usr/lib32` on `LD_LIBRARY_PATH` (pmcheck asks which device needs it):
+- (The 32-bit launchers' items below are history: no release made with the tools has a 32-bit build
+  since 2026-11-28.) The same question for `/lib32:/usr/lib32` on `LD_LIBRARY_PATH` (pmcheck asks which device needs it):
   Knulli, muOS 2606 (32-bit libraries in `/lib32`, `/usr/lib32`) and dArkOS (Debian multiarch, no `/lib32`)
   find them without it (`/lib/ld-linux-armhf.so.3 --list` on `audiocheck`, 2026-11-19). Hollow Knight's
   launcher keeps it for `ua_host`: 197 merged launchers put `/usr/lib32` first the same way (gmloader
