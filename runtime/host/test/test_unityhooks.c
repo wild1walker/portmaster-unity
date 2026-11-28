@@ -29,6 +29,9 @@ void nativebeh_frame(void) {}
 void enginerw_on_load_match(uintptr_t base, size_t size) { (void)base; (void)size; }
 void enginerw_on_load_patch(uintptr_t base, size_t size) { (void)base; (void)size; }
 void enginerw_frame(void) {}
+void unityphys2d_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
+void unityphys2d_on_load_patch(uintptr_t base, size_t size) { (void)base; (void)size; }
+void unityphys2d_frame(void) {}
 const char *so_name(so_module *m) { (void)m; return NULL; }
 uintptr_t so_base(so_module *m) { (void)m; return 0; }
 size_t so_size(so_module *m) { (void)m; return 0; }
