@@ -1639,16 +1639,60 @@ fn profile_of(c: &Json) -> Result<(bool, String)> {
     }
 }
 
-fn bundles(job: &Job) -> usize {
+fn bundles(job: &Job) -> Vec<String> {
     job.walk("StreamingAssets")
         .into_iter()
-        .map(|(rel, names)| {
+        .flat_map(|(rel, names)| {
             names
-                .iter()
+                .into_iter()
                 .filter(|n| super::shaders::is_bundle(&job.src.join(&rel).join(n)))
-                .count()
+                .map(|n| if rel.is_empty() { n } else { format!("{rel}/{n}") })
+                .collect::<Vec<_>>()
         })
-        .sum()
+        .collect()
+}
+
+/// The lights in the asset bundles under StreamingAssets (scene bundles hold a stage's lights) capped as the
+/// data's are (`light_edit`: shadow resolution, Important render mode): a light's own resolution overrides the
+/// quality level's (Bomb Rush Cyberfunk's prelude and square suns: Very High, a 4096x2048 shadow map of 48 MB on a
+/// 1 GB handheld). Only bundles with a light to change are written. Returns (bundles written, lights changed).
+fn bundle_lights(job: &mut Job, rels: &[String], s: &Scan, c: &Json) -> Result<(usize, usize, Vec<String>)> {
+    let (mut files, mut lights, mut left) = (0, 0, Vec::new());
+    for rel in rels {
+        if job.is_done("quality-bundles", rel) {
+            continue;
+        }
+        let o = unityfs::Options { all_serialized: true, ..Default::default() };
+        let mut f = match job.open(&job.path_in(rel), o) {
+            Ok(f) => f,
+            Err(e) => {
+                left.push(format!("{rel}: {e}"));
+                continue;
+            }
+        };
+        let mut n = 0;
+        for k in 0..f.file_count() {
+            f.select(k)?;
+            for (pid, class) in objects(&f) {
+                if class != "Light" {
+                    continue;
+                }
+                let Ok(mut tree) = f.sf.read_typetree(pid) else { continue };
+                if light_edit(&mut tree, &s.qcaps, c, true) {
+                    f.sf.save_typetree(pid, &tree)?;
+                    n += 1;
+                }
+            }
+        }
+        if n > 0 {
+            job.write_with(rel, |tmp| Ok(f.write_to(tmp, false)?))?;
+            files += 1;
+            lights += n;
+        }
+        drop(f);
+        job.mark_done("quality-bundles", rel)?;
+    }
+    Ok((files, lights, left))
 }
 
 pub fn run(job: &mut Job) -> Result<()> {
@@ -1701,9 +1745,21 @@ pub fn run(job: &mut Job) -> Result<()> {
         }
     }
     let b = bundles(job);
-    if b > 0 {
+    if !b.is_empty() {
+        if dry {
+            plan.kept.push(format!("{} asset bundles under StreamingAssets: their lights not looked at (a dry run)", b.len()));
+        } else {
+            let (files, lights, left) = bundle_lights(job, &b, &s, &c)?;
+            if lights > 0 {
+                plan.done.push(format!("{lights} lights in {files} of {} asset bundles capped as the data's", b.len()));
+            }
+            for l in left {
+                plan.kept.push(format!("a bundle not read for its lights: {l}"));
+            }
+        }
         plan.kept.push(format!(
-            "{b} asset bundles under StreamingAssets: not looked at (scenes, lights and URP data there keep the game's quality)"
+            "{} asset bundles under StreamingAssets: their URP data and cameras not looked at (only their lights)",
+            b.len()
         ));
     }
     for k in &plan.kept {

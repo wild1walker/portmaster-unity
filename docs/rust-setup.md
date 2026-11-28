@@ -538,6 +538,19 @@ the patched game then loads them all at startup as the original does. A missing 
 the same lines as an independent UnityPy read. The unit tests (`cargo test -p convert --lib fmodcatalogs`) cover
 the field reader and the path range.
 
+### `shadowmask`: one-channel shadowmasks as R8 (exact)
+
+Baked shadowmask lightmaps (Unity names them `Lightmap-<n>_comp_shadowmask`) are often stored as ARGB4444, two
+bytes a texel, although a scene with one mixed light keeps its occlusion in one channel (its occlusion mask channel
+0, red). Shaders read a shadowmask only as `dot(mask, unity_OcclusionMaskSelector)` (the selector one-hot on the
+light's channel; a deferred pass copies it to a G-buffer target that deferred lighting reads the same way), so a
+texture whose alpha, green and blue are 0 in every texel of every mip is the same as R8 (red n: n/15 in 4 bits,
+n*17/255 = n/15 in 8): the step converts those, texel by texel, every mip, and leaves any other one as it is
+(logged). `names` (a regex on m_Name, default `_comp_shadowmask$`). Checked for Bomb Rush Cyberfunk on the
+converted shaders: all 1,246 programs that sample `unity_ShadowMask` use it in that dot or copy it to the G-buffer.
+Bomb Rush: 13 shadowmasks 346.7 -> 173.3 MB, the first level's textures 142.7 -> 116 MB. `pmu-dev census3d
+--bytes` prints each big ARGB4444 texture's channel ranges (the check before turning the step on).
+
 ### `exact_shaders` and `exactindex`: palette textures
 
 Some shaders read a texel as data, not as a colour: Blasphemous's `Maikel/MaikelSpriteMasterShader` with the

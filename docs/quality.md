@@ -37,7 +37,7 @@ player needs to see may disappear:
 |---|---|---|---|
 | built-in | pixel lights per object at most 1 (`pixelLightCount`); Auto spot lights and lights with shadows or a cookie Important | QualitySettings (every level), the scenes' and prefabs' Light components | ForwardBase passes with `VERTEXLIGHT_ON` variants in the data |
 | built-in | soft shadows hard (`shadows` 2 -> 1) | QualitySettings | every `SHADOWS_SOFT` variant has its hard twin |
-| built-in | shadow resolution at most Medium (`shadowResolution`, lights' own), cascades at most 2 | QualitySettings, Light components | (no variant changes from 4 to 2 cascades) |
+| built-in | shadow resolution at most Medium (`shadowResolution`, lights' own), cascades at most 2 | QualitySettings, Light components (the data's and, since 2026-11-28, those in asset bundles under StreamingAssets: a stage's scene bundle holds its sun) | (no variant changes from 4 to 2 cascades) |
 | built-in | MSAA off, anisotropic filtering per texture (not forced), soft particles off | QualitySettings | |
 | built-in | the Standard shaders' LOD-150 SubShader first (below) | Shader (`Standard`, `Standard (Specular setup)`, `Standard (Roughness setup)`, `Autodesk Interactive`) | forward rendering (no deferred tier or camera); that SubShader has GLES3 programs for its forward, forward-add and shadow passes |
 | URP | MSAA off (`m_MSAA` 1), shadow atlases at most 2048 (main and additional lights), soft shadow quality Low (URP 14+) | UniversalRenderPipelineAsset (every one in the data) | soft shadow quality: where it is a uniform, or `_SHADOWS_SOFT_LOW` variants exist |
@@ -198,6 +198,11 @@ refresh rate with `UA_GL_MEMO`), Chapéu de Papel (its frame is UI overdraw: not
 applies), the single items of the URP games, URP render scale against ua_host's display scaling,
 and the run-time caps of quality.c on the handheld (unit-tested: `runtime/host/test/test_quality.c`).
 None of the six games calls a QualitySettings setter (their assemblies reference none).
+
+Lights in asset bundles (2026-11-28): the quality step caps the lights in every asset bundle under StreamingAssets
+as the data's (pixel lights' render mode, shadow resolution); their URP data and cameras are still not looked at.
+Bomb Rush Cyberfunk's prelude and square suns had their own Very High resolution over the capped quality level: a
+4096x2048 shadow map of 48 MB on the 1 GB G350 (render textures in the first level 57 -> 12 MB).
 
 What did not go in: realtime reflection probes off (a mirror can show the player things), LOD bias
 (moves the culled transition), shadow distance, Bokeh depth of field to Gaussian (another focus;

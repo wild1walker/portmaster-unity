@@ -12,6 +12,7 @@ pub mod fmodcatalogs;
 pub mod fusedpost;
 pub mod grabfetch;
 pub mod lazy;
+pub mod shadowmask;
 pub mod lazyref;
 pub mod metal;
 pub mod quality;
@@ -58,6 +59,11 @@ pub fn builtin() -> Vec<(String, StepFn)> {
         (
             "video".into(),
             Arc::new(|job: &mut Job, _: &Args| video::run(job)),
+        ),
+        // pmu's own (exact): one-channel ARGB4444 shadowmask lightmaps as R8
+        (
+            shadowmask::STEP.into(),
+            Arc::new(|job: &mut Job, _: &Args| shadowmask::run(job)),
         ),
         // pmu's own: assets left out of the scenes' preload lists (loaded when used)
         (

@@ -5,7 +5,8 @@
 //! rendering path), reflection probes, particle systems, terrains, animators by culling mode,
 //! occlusion data and lightmaps; for the whole game the shaders the most renderers draw with and
 //! their passes (a pass a lit renderer draws each frame is a draw call), the post effects
-//! (MonoBehaviours by script) and QualitySettings. It changes nothing.
+//! (MonoBehaviours by script) and QualitySettings. --bytes: also each file's serialized bytes by class (what loading it
+//! puts in memory, before textures' and sounds' streamed data: a 1 GB handheld's budget). It changes nothing.
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
@@ -134,8 +135,10 @@ fn mesh_tris(m: &Value) -> u64 {
 }
 
 pub fn run(args: &[String]) -> Result<u8, String> {
-    let usage = "usage: pmu-dev census3d <Game_Data> [--json out.json] [--top N] [--bundles REGEX]";
-    let (mut pos, mut json_out, mut top, mut bundles) = (vec![], None, 25usize, String::from("."));
+    let usage = "usage: pmu-dev census3d <Game_Data> [--json out.json] [--top N] [--bundles REGEX] [--bytes]";
+    let (mut pos, mut json_out, mut top, mut bundles, mut bytes) = (vec![], None, 25usize, String::from("."), false);
+    let mut by_file: Vec<(String, u64, BTreeMap<String, u64>)> = vec![];
+    let mut by_class: BTreeMap<String, (u64, u64)> = BTreeMap::new();
     let mut i = 0;
     while i < args.len() {
         let next = |i: usize| args.get(i + 1).cloned().ok_or(usage.to_string());
@@ -143,6 +146,7 @@ pub fn run(args: &[String]) -> Result<u8, String> {
             "--json" => { json_out = Some(next(i)?); i += 1; }
             "--top" => { top = next(i)?.parse().map_err(|_| usage)?; i += 1; }
             "--bundles" => { bundles = next(i)?; i += 1; }
+            "--bytes" => bytes = true,
             a if a.starts_with('-') => return Err(usage.into()),
             a => pos.push(a.to_string()),
         }
@@ -209,6 +213,59 @@ pub fn run(args: &[String]) -> Result<u8, String> {
             }
             let own = if f.is_bundle { base(&names[k]) } else { base(rel) };
             let objs: Vec<(i64, String)> = f.sf.objects.iter().map(|o| (o.path_id, f.class_name(o))).collect();
+            if bytes {
+                let mut m: BTreeMap<String, u64> = BTreeMap::new();
+                for o in &f.sf.objects {
+                    let c = f.class_name(o);
+                    *m.entry(c.clone()).or_default() += o.byte_size as u64;
+                    let e = by_class.entry(c).or_default();
+                    e.0 += o.byte_size as u64;
+                    e.1 += 1;
+                }
+                // objects of 1 MB or more by name (textures with their format and size)
+                for o in f.sf.objects.iter().filter(|o| o.byte_size > 1 << 20) {
+                    let c = f.class_name(o);
+                    if let Ok(t) = f.read(o.path_id) {
+                        let nm = sname(&t, "m_Name").chars().take(28).collect::<String>();
+                        let key = if c == "Texture2D" {
+                            let (w, h, fmt) = (int(&t, "m_Width"), int(&t, "m_Height"), int(&t, "m_TextureFormat"));
+                            // ARGB4444 (2): each channel's range over the first mip (a channel that never changes is unused:
+                            // a shadowmask of one light keeps its occlusion in one channel)
+                            let mut ranges = String::new();
+                            if fmt == 2 {
+                                let n = (w * h * 2) as usize;
+                                let mut px = t.get("image data").and_then(Value::as_bytes).map(|b| b.to_vec()).unwrap_or_default();
+                                if px.len() < n {
+                                    if let Some(sd) = t.get("m_StreamData") {
+                                        let path = sname(sd, "path");
+                                        let off = sd.get("offset").and_then(Value::as_u64).unwrap_or(0);
+                                        px = f.read_node(&path, off, n).unwrap_or_default();
+                                    }
+                                }
+                                if px.len() >= n {
+                                    let mut lo = [15u8; 4];
+                                    let mut hi = [0u8; 4];
+                                    for p in px[..n].chunks_exact(2) {
+                                        let v = u16::from_le_bytes([p[0], p[1]]);
+                                        for (k, sh) in [12u16, 8, 4, 0].iter().enumerate() {
+                                            let c = ((v >> sh) & 15) as u8;
+                                            lo[k] = lo[k].min(c);
+                                            hi[k] = hi[k].max(c);
+                                        }
+                                    }
+                                    ranges = format!(" [A {}-{} R {}-{} G {}-{} B {}-{}]", lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], lo[3], hi[3]);
+                                }
+                            }
+                            format!("= Texture2D fmt {fmt} {w}x{h} {nm}{ranges}")
+                        } else {
+                            format!("= {c} {nm}")
+                        };
+                        *m.entry(key).or_default() += o.byte_size as u64;
+                    }
+                }
+                let tot = m.iter().filter(|(k, _)| !k.starts_with("= ")).map(|(_, v)| *v).sum();
+                by_file.push((format!("{rel}{}", if f.file_count() > 1 { format!(" #{k}") } else { String::new() }), tot, m));
+            }
             let sc = &mut scenes[scene_ix];
             for (pid, cls) in objs {
                 let read = |f: &unityfs::DataFile| f.read(pid).ok();
@@ -279,7 +336,16 @@ pub fn run(args: &[String]) -> Result<u8, String> {
                             if l.get("m_Enabled").and_then(Value::as_int) == Some(0) { continue; }
                             let ty = ["spot", "directional", "point", "area", "disc"].get(int(&l, "m_Type") as usize).copied().unwrap_or("?");
                             let bake = match int(&l, "m_Lightmapping") { 1 => "mixed", 2 => "baked", _ => "realtime" };
-                            let sh = match l.path(&["m_Shadows", "m_Type"]).and_then(Value::as_int).unwrap_or(0) { 1 => " hard shadows", 2 => " soft shadows", _ => "" };
+                            let mut sh = match l.path(&["m_Shadows", "m_Type"]).and_then(Value::as_int).unwrap_or(0) { 1 => " hard shadows", 2 => " soft shadows", _ => "" }.to_string();
+                            if !sh.is_empty() {
+                                let res = l.path(&["m_Shadows", "m_Resolution"]).and_then(Value::as_int).unwrap_or(-1);
+                                let custom = l.path(&["m_Shadows", "m_CustomResolution"]).and_then(Value::as_int).unwrap_or(-1);
+                                sh += &match (res, custom) {
+                                    (_, c) if c > 0 => format!(" (custom resolution {c})"),
+                                    (-1, _) => " (quality's resolution)".to_string(),
+                                    (r, _) => format!(" (resolution {})", ["low", "medium", "high", "very high"].get(r as usize).copied().unwrap_or("?")),
+                                };
+                            }
                             *sc.lights.entry(format!("{bake} {ty}{sh}")).or_default() += 1;
                         }
                     }
@@ -400,6 +466,23 @@ pub fn run(args: &[String]) -> Result<u8, String> {
     sv.sort_by(|a, b| b.1.cmp(&a.1));
     println!("\nMonoBehaviours by script (top {top}):");
     for (k, v) in sv.iter().take(top) { println!("  {v:6}  {k}"); }
+    if bytes {
+        let mb = |b: u64| b as f64 / 1048576.0;
+        by_file.sort_by(|a, b| b.1.cmp(&a.1));
+        println!("\nserialized bytes by file (top {top}; textures' and sounds' data streamed from .resS/.resource not counted):");
+        for (n, t, m) in by_file.iter().take(top) {
+            let mut v: Vec<_> = m.iter().collect();
+            v.sort_by(|a, b| b.1.cmp(a.1));
+            let parts: Vec<String> = v.iter().take(6).map(|(c, b)| format!("{c} {:.1}", mb(**b))).collect();
+            println!("  {:8.1} MB  {n}: {}", mb(*t), parts.join(", "));
+        }
+        let mut v: Vec<_> = by_class.iter().collect();
+        v.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        println!("\nserialized bytes by class, all files (top {top}):");
+        for (c, (b, n)) in v.iter().take(top) {
+            println!("  {:8.1} MB  {n:7}  {c}", mb(*b));
+        }
+    }
     if let Some(p) = json_out {
         let j = serde_json::json!({ "scenes": scenes, "shaders": sh });
         std::fs::write(&p, serde_json::to_string_pretty(&j).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
