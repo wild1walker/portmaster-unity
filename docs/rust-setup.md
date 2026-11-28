@@ -88,7 +88,9 @@ the folder pmu was started in and writes its exit status back (the output goes t
 is kept for the commands whose output pmu reads), and pmu waits for it; without `$PMU_HOST_EXEC`
 the commands run where pmu runs. `crates/port/tests/host.rs` runs requests through pmu.sh's loop
 (`pmu.sh --serve <dir>`). `pmu slim-donor <apk> [out]` is package's slim_donor by itself (a port's
-own packaging script: Cuphead's).
+own packaging script: Cuphead's). asmpatch and a port's assembly patches go that way too, from
+android-data and from `pmu il2cpp` (the container has no .NET: a Mac `dotnet` run in it is
+`[Errno 8] Exec format error`).
 
 Docker Desktop's shared folders on macOS answer a hard link of a **symlink** (Linux's `link`, which does
 not follow it) with EIO after macOS has made the link, to the file the symlink names. A fallback copy

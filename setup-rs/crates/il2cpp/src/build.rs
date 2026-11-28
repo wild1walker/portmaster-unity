@@ -958,16 +958,19 @@ pub fn linker_descriptors(editor: &str, profile: &str, work: &str) -> Result<Str
     Ok(dst)
 }
 
-/// A program run with its output captured (subprocess.run(capture_output=True, text=True)).
+/// A program run with its output captured (subprocess.run(capture_output=True, text=True)): asmpatch
+/// and a port's assembly patches, .NET programs. When pmu runs in setup-rs/tools/pmu.sh's container
+/// they run on the computer (pkgzip::host), as android-data's do: the container has no .NET.
 fn run_captured(cmd: &[String]) -> Result<(i32, String, String)> {
     if cmd.is_empty() {
         return fail("IndexError: list index out of range");
     }
-    let o = std::process::Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .stdin(std::process::Stdio::inherit())
-        .output()
-        .map_err(|e| {
+    let o = pkgzip::host::output(
+        std::process::Command::new(&cmd[0])
+            .args(&cmd[1..])
+            .stdin(std::process::Stdio::inherit()),
+    )
+    .map_err(|e| {
             Error::Fail(match e.raw_os_error() {
                 Some(n) => format!(
                     "[Errno {n}] {}: {}",
