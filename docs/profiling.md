@@ -736,6 +736,15 @@ is the measuring tool. (In the game as it ships the GPU sets the rate, King's Pa
 so a main-thread change would not show there either. The 2017.4 `sem_wait` path passes the loader's
 tests but has not been benched in a 2017.4 game.)
 
+**In a 2017.4 game on the G350 (Blasphemous, 2026-11-27).** Here the trade is the other way round. UnityMain spent
+10 % of its time in `bsem_futex` (bionic `sem_post` waking a sleeping job worker: a third of those inside
+`RenderManager::RenderOffscreenCameras`, a tenth of the Director pass), while each of the three workers ran 14 - 19 % of a
+core and the render thread 60 %, so the watching has idle cores to spend. A 2.5-minute walk, the steady 220 s
+compared, three A/B rounds in alternating order: off 54.45 / 54.40 / 54.35 fps, `UA_FUTEX_SPIN=50` 55.46 / 55.23 /
+54.72 (+0.7 fps), 400 54.98 (one round). Blasphemous ships 50 on every device; Enter the Gungeon (2017.4) measured
++0.5 fps with it. So: profile first. `bsem_futex` or `syscall` high in UnityMain's self time and idle workers mean
+it pays; cores already busy (Hollow Knight above) mean it costs.
+
 ### Mono's runtime invoke and thread-local reads (Unity 2017.4, `UA_MONO_INVOKE`, `UA_MONO_TLS`)
 
 Enter the Gungeon's first fight on the RG34XX-SP (the Keep's first enemy room; a fixed floor seed and no
