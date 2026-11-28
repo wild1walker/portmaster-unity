@@ -172,9 +172,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 2,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -212,7 +211,7 @@
    "tree": {
     "files": 157,
     "mb": 122,
-    "total": "6ba007a6f9e6071a5be5eb5003ca445570ab462d1ea6ee5d48fe7b08183f89e1",
+    "total": "58048e8da646b7a0a0547f8a9433fe9cb63ba1cdcda55f5b5256c3f202caa78c",
     "zips": {
      "zip/Game.apk": {
       "entries": 133,
@@ -268,9 +267,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 2,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -1451,9 +1449,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 9,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -1677,9 +1674,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 6,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -1750,9 +1746,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 6,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -1998,9 +1993,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 3,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -2059,9 +2053,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 3,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -2385,9 +2378,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 10,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -2423,7 +2415,7 @@
    "tree": {
     "files": 178,
     "mb": 56,
-    "total": "f0c14818eddf987dd75689d233c4705ace1914464acb2807216d0882178caefc",
+    "total": "88ce9df601d05138d7ace918f1c73a3057f9a7f64dcf801f5e136867d0284507",
     "zips": {}
    },
    "verify_ok": true,
@@ -2473,9 +2465,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 10,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -2511,9 +2502,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 6,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -2581,9 +2571,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 6,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -2629,9 +2618,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 8,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
@@ -2705,9 +2693,8 @@
    "compressed": false,
    "exit": 0,
    "notes": 8,
-   "route": "android",
+   "route": "mono-arm64",
    "routes_ok": [
-    "android",
     "box64",
     "il2cpp-arm64",
     "mono-arm64"
