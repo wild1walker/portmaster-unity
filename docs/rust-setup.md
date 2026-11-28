@@ -96,8 +96,10 @@ Docker Desktop's shared folders on macOS answer a hard link of a **symlink** (Li
 not follow it) with EIO after macOS has made the link, to the file the symlink names. A fallback copy
 into that path then opens the source itself and cuts it to nothing: on 2026-11-27 the regression run
 (its views are symlinks into the corpus) emptied 156 files of two corpus games that way. android-data
-links with `AT_SYMLINK_FOLLOW` (Python's `os.link`), and every link-else-copy removes whatever a failed
-link left before copying.
+links with `AT_SYMLINK_FOLLOW` (Python's `os.link`), every link-else-copy removes whatever a failed
+link left before copying, and the copy helpers (android-data's `copyfile`, il2cpp's `copyfile` and
+`copy2`) remove a path that is already there instead of writing into it: an output can be a hard link
+to the game's file (android-data's linked tree, mix's trees, a rerun) or a symlink.
 
 The templates, the converter it ships for ports pmu does not cover, `LICENSE` and `THIRD_PARTY.md`
 come from the checkout: `$PMUNITY_REPO`, else the first folder above the program (or the working

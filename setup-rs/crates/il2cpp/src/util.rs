@@ -237,13 +237,34 @@ pub fn read(p: &str) -> Result<Vec<u8>> {
 /// shutil.copyfile: the contents only.
 pub fn copyfile(a: &str, b: &str) -> Result<()> {
     let data = read(a)?;
+    unlink_for_copy(a, b)?;
     fs::write(b, data).map_err(at(b))
 }
 
 /// shutil.copy2: the contents, the mode bits and the times.
 pub fn copy2(a: &str, b: &str) -> Result<()> {
+    unlink_for_copy(a, b)?;
     fs::copy(a, b).map_err(at(a))?;
     copy_times(a, b)
+}
+
+/// b removed before a copy writes it, never written in place: it can be a hard link or a symlink
+/// to the source tree's own file (mix's linked trees, a link a failed or earlier run left). An
+/// error when it is a itself (shutil.SameFileError).
+fn unlink_for_copy(a: &str, b: &str) -> Result<()> {
+    if !lexists(b) {
+        return Ok(());
+    }
+    if let (Ok(x), Ok(y)) = (fs::canonicalize(a), fs::canonicalize(b)) {
+        if x == y {
+            return Err(Error::Fail(format!(
+                "shutil.SameFileError: {} and {} are the same file",
+                pkgzip::py::str_repr(a),
+                pkgzip::py::str_repr(b)
+            )));
+        }
+    }
+    unlink(b)
 }
 
 fn copy_times(a: &str, b: &str) -> Result<()> {
@@ -381,6 +402,31 @@ pub fn shlex_split(s: &str) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// copies onto a hard link (mix's trees) or a symlink of the source make new files: the
+    /// source keeps its bytes; onto itself is an error
+    #[test]
+    fn copies_never_write_through_links() {
+        let t = std::env::temp_dir().join(format!("il2cpp-copy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&t);
+        fs::create_dir_all(&t).unwrap();
+        let p = |n: &str| t.join(n).to_string_lossy().into_owned();
+        fs::write(p("tool"), b"editor file").unwrap();
+        fs::write(p("new"), b"other").unwrap();
+        fs::hard_link(p("tool"), p("mixed")).unwrap();
+        copy2(&p("new"), &p("mixed")).unwrap();
+        fs::hard_link(p("tool"), p("mixed2")).unwrap();
+        copyfile(&p("new"), &p("mixed2")).unwrap();
+        std::os::unix::fs::symlink(p("tool"), p("sl")).unwrap();
+        copy2(&p("new"), &p("sl")).unwrap();
+        assert_eq!(fs::read(p("tool")).unwrap(), b"editor file");
+        assert_eq!(fs::read(p("mixed")).unwrap(), b"other");
+        assert_eq!(fs::read(p("mixed2")).unwrap(), b"other");
+        assert!(copy2(&p("tool"), &p("tool")).is_err());
+        assert!(copyfile(&p("tool"), &p("tool")).is_err());
+        assert_eq!(fs::read(p("tool")).unwrap(), b"editor file");
+        let _ = fs::remove_dir_all(&t);
+    }
 
     #[test]
     fn relpaths() {

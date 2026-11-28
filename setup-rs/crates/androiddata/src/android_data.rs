@@ -273,12 +273,32 @@ fn hard_link_followed(src: &str, dst: &str) -> std::io::Result<()> {
     }
 }
 
-/// shutil.copyfile.
+/// shutil.copyfile, into a new file: a dst already there is removed first, never written in place
+/// (it can be a hard link or a symlink to the game's own file: a link a failed or earlier run
+/// left; shutil's open would cut that file).
 pub fn copyfile(src: &str, dst: &str) -> Result<(), Stop> {
     let mut i = File::open(src).map_err(io_at(src))?;
+    unlink_for_copy(src, dst)?;
     let mut o = File::create(dst).map_err(io_at(dst))?;
     std::io::copy(&mut i, &mut o).map_err(io_at(dst))?;
     Ok(())
+}
+
+/// dst removed before a copy writes it; Stop when it is src itself (shutil.SameFileError).
+fn unlink_for_copy(src: &str, dst: &str) -> Result<(), Stop> {
+    if !lexists(dst) {
+        return Ok(());
+    }
+    if let (Ok(a), Ok(b)) = (fs::canonicalize(src), fs::canonicalize(dst)) {
+        if a == b {
+            return Err(Stop::Fail(format!(
+                "shutil.SameFileError: {} and {} are the same file",
+                py::str_repr(src),
+                py::str_repr(dst)
+            )));
+        }
+    }
+    fs::remove_file(dst).map_err(io_at(dst))
 }
 
 pub(crate) fn mv(src: &str, dst: &str) -> Result<&'static str, Stop> {
@@ -2499,6 +2519,28 @@ mod tests {
         assert_eq!(clone(&link, &c, false).unwrap(), "copy");
         assert_eq!(fs::read(&c).unwrap(), b"game bytes");
         assert_eq!(fs::read(&real).unwrap(), b"game bytes");
+        let _ = fs::remove_dir_all(&t);
+    }
+
+    /// a copy onto a hard link of its source (left by an earlier run) makes a new file: the
+    /// source keeps its bytes; a copy onto itself is an error, the file kept
+    #[test]
+    fn copy_onto_a_link_of_the_source() {
+        let t = crate::paths::temp_dir().unwrap();
+        let (game, out) = (py::join(&t, "game.dll"), py::join(&t, "out.dll"));
+        fs::write(&game, b"game bytes").unwrap();
+        fs::hard_link(&game, &out).unwrap();
+        let other = py::join(&t, "other.dll");
+        fs::write(&other, b"patched").unwrap();
+        copyfile(&other, &out).unwrap();
+        assert_eq!(fs::read(&out).unwrap(), b"patched");
+        assert_eq!(fs::read(&game).unwrap(), b"game bytes");
+        let sl = py::join(&t, "sl.dll");
+        std::os::unix::fs::symlink(&game, &sl).unwrap();
+        copyfile(&other, &sl).unwrap();
+        assert_eq!(fs::read(&game).unwrap(), b"game bytes");
+        assert!(copyfile(&game, &game).is_err());
+        assert_eq!(fs::read(&game).unwrap(), b"game bytes");
         let _ = fs::remove_dir_all(&t);
     }
 
