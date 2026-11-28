@@ -39,7 +39,7 @@ docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=arm64 -e CC=gcc -e STRI
   | grep -v "warning:\|note:\|^ \|^In \|^$" || true
 docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=aarch64 ua-build-arm64 bash -c "$build" 2>&1 | grep -v "warning:\|note:\|^ \|^In \|^$" || true
 # Rockchip MPP 1.1.0, as rkmpp/build_mpp.sh builds it (cmake and ninja put into the throwaway container)
-# (the source patches run with Debian bookworm's Python 3.11 (image ua-py311, made here from debian:bookworm on
+# (the source patches run with Debian bookworm's Python 3.11 (image ua-py311, made here from debian:bookworm-slim on
 # first use): they call Path.write_text(newline=), which Python 3.10 added, and ua-build-arm64 has 3.8)
 prep='set -e; H=/o/src/pmhwdec; M=/o/mpp-src-$A; rm -rf $M /o/mpp-build-$A && cp -a /o/src/mpp $M
 for p in soc_name hw_list no_enc no_dbg_log; do python3 -I $H/rkmpp/patch_$p.py $M >/dev/null; done'
@@ -61,7 +61,7 @@ cp -L $(find /o/mpp-build-$A -name "librockchip_mpp.so*" -type f | head -1) $O/l
   echo; cat $M/LICENSES/Apache-2.0 2>/dev/null || cat $M/LICENSE.md; } > $O/LICENSE.mpp.txt
 rm -rf $M /o/mpp-build-$A /o/mpp-$A.cmake /o/mpp-api-$A.map'
 if [ "${MPP_ARM64:-1}" = 1 ]; then
-  docker image inspect ua-py311 >/dev/null 2>&1 || printf 'FROM debian:bookworm\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*\n' | docker build -q -t ua-py311 - >/dev/null
+  docker image inspect ua-py311 >/dev/null 2>&1 || printf 'FROM debian:bookworm-slim\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*\n' | docker build -q -t ua-py311 - >/dev/null
   docker run --rm -v "$OUT":/o -e A=arm64 ua-py311 bash -c "$prep"
   docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=arm64 -e PROC=aarch64 -e CROSS= \
     -e CPU=-mcpu=cortex-a53 ua-build-arm64 bash -c "$mpp"
