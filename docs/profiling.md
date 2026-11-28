@@ -2044,10 +2044,44 @@ script method lookup per message) is Unity's own and stays.
 Both switches are on by default since 2026-11-28 on every handheld (docs/porting.md, "Rules for every port"):
 exact, verify clean on both 2017.4.40f1 games, no loss on muOS; `=0` turns either off. Not measured on the G350.
 
+**Other players: nothing to cut (2026-11-28).** Hollow Knight (6000.0.61f1 arm64, City of Tears, muOS profile
+cot1, 6000.0 symbols): no `RecreateCollider` sample at all (its colliders move with Rigidbody2Ds), the sync 0.2 % of
+UnityMain, `PhysicsContacts2D::ProcessContacts` 2.1 % (~0.45 ms) of which the allocations are 6000.0's own
+`CollisionAllocator` (2 %): the rest is PlayMaker's collision callbacks and the message dispatch. Enter the Gungeon
+(2017.4.27f1 arm64, census gu1, exact unwinding): 2 samples of 9,062 under `SyncTransforms`, none under
+`ProcessContacts` or a rebuild (its own physics, SpeculativeRigidbody, does not use Unity's 2D step). So no rows were
+added for either player: there is no time to win.
+
 What the sync still costs is Unity's own rebuild (shapes, broad-phase proxies out and in, the fixture's create and
 destroy) and the first wake walk of each sync, whose contacts are not in the cache. Making a moved static collider
 cheaper than a rebuild (Box2D's MoveProxy) would change the broad-phase tree and so the order queries and contacts come
 in: not exact, not built.
+
+### Cuphead 64-bit: what the main thread's "job waits" are (2026-11-28)
+
+The run-and-gun level's 2.8 - 4 ms a frame of `JobQueue::WaitForJobGroup` on UnityMain (exact unwinding, 2017.4.40f1
+symbols, muOS, `UA_PROF=200`) is not waiting: in it UnityMain is on a CPU 100 % of the samples, 86.5 % of them
+running jobs itself (`JobQueue::Exec`) and 12 % in the system call that wakes the workers; UnityMain is blocked
+2.2 % of the whole frame (~0.5 ms). The groups are the animation's: `DirectorManager::ExecutePrepareFrames` (270
+samples a run, the playable graphs' prepare jobs) and `Animator::UpdateAvatars` (254: its prepare, animation, root
+motion and write steps), then the transform dispatch for renderers and the physics sync (61) and culling / render
+queue extraction (47). Each is `ScheduleJobForEachInternal` (one job an element, no worker-count split) followed at
+once by the wait, step after step, so the main thread takes most elements before a woken worker gets its CPU: each of
+the three workers runs only ~1.3 s of 20 s (6 %) and waits ~3.9 s for a CPU across ~21,000 wakes (~0.18 ms a wake).
+
+Waking them faster does not change it (A B C A B, the same route):
+
+| | default | `UA_FUTEX_SPIN=100` workers only | `UA_FUTEX_SPIN=100` all |
+|---|---|---|---|
+| fps | 41.7, 44.1 | 42.8, 41.3 | 41.4 |
+| UnityMain, ms of CPU a frame | 22.1, 20.9 | 20.7, 21.6 | 21.7 |
+| job-system area, ms a frame | 4.34, 3.92 | 4.18, 4.20 | 4.07 |
+| the workers' CPU, ms over 20 s | 3,936, 3,778 | 5,370, 5,049 | 5,109 |
+
+The spinning workers burn 1.3 s more and run no larger share of the jobs: each step is too short for a worker to take
+much before UnityMain has drained it. Starting a step earlier (before the scripts that may still set the Animators'
+parameters, or overlapping two steps) would change what the steps read: not exact, not built. What is left there is
+the animation work itself (item 1 above).
 
 ## Shader programs: compiles, links and Unity's binary cache
 
