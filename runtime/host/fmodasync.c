@@ -75,33 +75,18 @@
 void *mono_runtime_lib(void);                           // hitches.c
 void *so_dlsym(void *handle, const char *symbol);
 
-enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
+enum { ISA_A64 = 'x' };
 enum { NVAL = 7 };                    // the validates: 0 SystemI (also called by the replacement), then the others
 
 struct fa_player {
     struct uh_row upd;                // FMOD::System::update (replaced whole)
     struct uh_row sysi_upd;           // FMOD::SystemI::update (called: the update itself)
     struct uh_row am_upd;             // AudioManager::Update (checked: the caller whose result is dropped)
-    uint32_t am_ret;                  // where its call of System::update returns (a Thumb one with bit 0)
+    uint32_t am_ret;                  // where its call of System::update returns
     struct uh_row val[NVAL];          // the validates (hooked)
 };
 
 static const struct fa_player g_players[] = {
-    {
-        { "6000.0.61f1 armeabi-v7a", "FMOD::System::update", 0x1257d3e, 0x1a, ISA_THUMB, 0x6dd1f3df13ec02a1ull },
-        { "6000.0.61f1 armeabi-v7a", "FMOD::SystemI::update", 0x1211650, 0x1ec, ISA_THUMB, 0xd5e3604e0f8639d7ull },
-        { "6000.0.61f1 armeabi-v7a", "AudioManager::Update", 0x755658, 0x178, ISA_THUMB, 0x13337b06dbf51b80ull },
-        0x755791,
-        {
-            { "6000.0.61f1 armeabi-v7a", "FMOD::SystemI::validate", 0x120a854, 0x40, ISA_THUMB, 0xa16ffd0206b34525ull },
-            { "6000.0.61f1 armeabi-v7a", "FMOD::ChannelI::validate", 0x11fea5c, 0x76, ISA_THUMB, 0xbc7ac53321804f4cull },
-            { "6000.0.61f1 armeabi-v7a", "FMOD::ChannelGroupI::validate", 0x1202f36, 0x14, ISA_THUMB, 0x464a65d704ad2269ull },
-            { "6000.0.61f1 armeabi-v7a", "FMOD::SoundI::validate", 0x12072c2, 0x14, ISA_THUMB, 0xfd688a1cd8a87331ull },
-            { "6000.0.61f1 armeabi-v7a", "FMOD::DSPI::validate", 0x124f60a, 0x14, ISA_THUMB, 0xfd688a1cd8a87331ull },
-            { "6000.0.61f1 armeabi-v7a", "FMOD::DSPConnectionI::validate", 0x123b998, 0x14, ISA_THUMB, 0xfd688a1cd8a87331ull },
-            { "6000.0.61f1 armeabi-v7a", "FMOD::ReverbI::validate", 0x12046c4, 0x14, ISA_THUMB, 0xfd688a1cd8a87331ull },
-        },
-    },
     {
         { "6000.0.61f1 arm64-v8a", "FMOD::System::update", 0x18b7358, 0x2c, ISA_A64, 0x084ce44b5dd878f7ull },
         { "6000.0.61f1 arm64-v8a", "FMOD::SystemI::update", 0x185ed5c, 0x2c0, ISA_A64, 0x716015ef09f15d6eull },
@@ -115,36 +100,6 @@ static const struct fa_player g_players[] = {
             { "6000.0.61f1 arm64-v8a", "FMOD::DSPI::validate", 0x18ac7fc, 0x28, ISA_A64, 0xe9911bf387e9f7a4ull },
             { "6000.0.61f1 arm64-v8a", "FMOD::DSPConnectionI::validate", 0x1893d24, 0x28, ISA_A64, 0xe9911bf387e9f7a4ull },
             { "6000.0.61f1 arm64-v8a", "FMOD::ReverbI::validate", 0x184db14, 0x28, ISA_A64, 0xe9911bf387e9f7a4ull },
-        },
-    },
-    {
-        { "2017.4.9f1 armeabi-v7a", "FMOD::System::update", 0xb02084, 0x28, ISA_ARM, 0x132b8b9ae2b55df5ull },
-        { "2017.4.9f1 armeabi-v7a", "FMOD::SystemI::update", 0xaadb54, 0x24c, ISA_ARM, 0xf63853f544800d93ull },
-        { "2017.4.9f1 armeabi-v7a", "AudioManager::Update", 0x19cf4c, 0x184, ISA_ARM, 0x5faadca47da268ceull },
-        0x19d090,
-        {
-            { "2017.4.9f1 armeabi-v7a", "FMOD::SystemI::validate", 0xaa8820, 0x70, ISA_ARM, 0xa3838bdcab13f3b2ull },
-            { "2017.4.9f1 armeabi-v7a", "FMOD::ChannelI::validate", 0xb24484, 0xb4, ISA_ARM, 0x68c0974a3701f5c8ull },
-            { "2017.4.9f1 armeabi-v7a", "FMOD::ChannelGroupI::validate", 0xb207b8, 0x20, ISA_ARM, 0xd75a5e048628faadull },
-            { "2017.4.9f1 armeabi-v7a", "FMOD::SoundI::validate", 0xaa3b7c, 0x24, ISA_ARM, 0x57342ba2b4baae9eull },
-            { "2017.4.9f1 armeabi-v7a", "FMOD::DSPI::validate", 0xaf71b0, 0x24, ISA_ARM, 0x57342ba2b4baae9eull },
-            { "2017.4.9f1 armeabi-v7a", "FMOD::DSPConnectionI::validate", 0xade914, 0x24, ISA_ARM, 0x57342ba2b4baae9eull },
-            { "2017.4.9f1 armeabi-v7a", "FMOD::ReverbI::validate", 0xaa228c, 0x24, ISA_ARM, 0x57342ba2b4baae9eull },
-        },
-    },
-    {
-        { "2017.4.40f1 armeabi-v7a", "FMOD::System::update", 0xb0cc80, 0x2c, ISA_ARM, 0xe83299cb0b403715ull },
-        { "2017.4.40f1 armeabi-v7a", "FMOD::SystemI::update", 0xab774c, 0x2c4, ISA_ARM, 0xb532075f13ab2c20ull },
-        { "2017.4.40f1 armeabi-v7a", "AudioManager::Update", 0x19d418, 0x184, ISA_ARM, 0x4c971e718c46d443ull },
-        0x19d55c,
-        {
-            { "2017.4.40f1 armeabi-v7a", "FMOD::SystemI::validate", 0xaae6c8, 0x60, ISA_ARM, 0x284a2def6bd337f8ull },
-            { "2017.4.40f1 armeabi-v7a", "FMOD::ChannelI::validate", 0xb2ccfc, 0xbc, ISA_ARM, 0x70d02e17ba3973c5ull },
-            { "2017.4.40f1 armeabi-v7a", "FMOD::ChannelGroupI::validate", 0xb2bc98, 0x24, ISA_ARM, 0x704a887024078bd7ull },
-            { "2017.4.40f1 armeabi-v7a", "FMOD::SoundI::validate", 0xaa9a84, 0x24, ISA_ARM, 0xe926bf594c93fe73ull },
-            { "2017.4.40f1 armeabi-v7a", "FMOD::DSPI::validate", 0xb00da0, 0x24, ISA_ARM, 0xe926bf594c93fe73ull },
-            { "2017.4.40f1 armeabi-v7a", "FMOD::DSPConnectionI::validate", 0xae6380, 0x24, ISA_ARM, 0xe926bf594c93fe73ull },
-            { "2017.4.40f1 armeabi-v7a", "FMOD::ReverbI::validate", 0xaa7f60, 0x24, ISA_ARM, 0xe926bf594c93fe73ull },
         },
     },
     {
@@ -379,8 +334,8 @@ static const uint8_t *(*m_code)(void *, uint32_t *, uint32_t *);
 static void *(*m_vtable)(void *, void *), *(*m_domain)(void);
 static int g_api = -1;
 
-// Mono's API: the 32-bit player's libmono through the loader; the 64-bit Mono route's libmonobdwgc-2.0.so is a host
-// library the bridge loaded
+// Mono's API: the player's libmono through the loader, else the 64-bit Mono route's libmonobdwgc-2.0.so (a host
+// library the bridge loaded)
 static void *mono_api(const char *name)
 {
     void *h = mono_runtime_lib(), *p = h ? so_dlsym(h, name) : NULL;
@@ -598,7 +553,7 @@ void fmodasync_on_load(uintptr_t base, size_t size)
     }
     g_base = base;
     g_ret = base + p->am_ret;
-    g_sysi_update = (int (*)(void *))(base + p->sysi_upd.off + (p->sysi_upd.isa == ISA_THUMB));
+    g_sysi_update = (int (*)(void *))(base + p->sysi_upd.off);
     for (int k = 0; k < NVAL; k++) {
         // the same function may be listed twice (identical bytes at another offset are another function): each
         // offset is hooked once

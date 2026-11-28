@@ -6,8 +6,8 @@
 // (arm64: bionic's TLS slot at tpidr_el0 + 0x28); a corrupt packed table fails cleanly; arm64: an
 // unwinder inside the library walks through Android and host frames. Newer players' bionic symbols:
 // the fortify functions (and their failures: message, SIGABRT), android_set_abort_message,
-// sys_signame, nftw/ftw, fnmatch, pathconf, sem_open, newlocale, wcstod/strtold_l (softfp), statvfs and
-// getpw* layouts, and on 32-bit ARM __mmap2, mknod, the mbstate_t conversions; libmediandk.so routing
+// sys_signame, nftw/ftw, fnmatch, pathconf, sem_open, newlocale, wcstod/strtold_l, statvfs and
+// getpw* layouts; libmediandk.so routing
 // (dlopen and a DT_NEEDED entry served by shims). Usage: test_syn <dir>
 #define _GNU_SOURCE
 #include "../so_loader.h"
@@ -261,7 +261,6 @@ static void test_mediandk(const char *dir)
 /* ICU: Android's system library stood in for by the handheld's (AArch64), where it has one */
 static void test_icu(void)
 {
-#if defined(__aarch64__)
     if (system("ls /usr/lib/aarch64-linux-gnu/libicuuc.so.* >/dev/null 2>&1 || ls /usr/lib/libicuuc.so.* >/dev/null 2>&1") != 0) {
         printf("  (no ICU on this machine: the ICU check skipped)\n");
         return;
@@ -277,10 +276,8 @@ static void test_icu(void)
     if (ver) ver(vb);
     CHECK(h && ver && vb[0] >= 50, "dlopen(libicuuc.so) -> the host's ICU: %p, %s, version %d", h, name, vb[0]);
     CHECK(so_dlopen("libicui18n.so", 0) != NULL, "dlopen(libicui18n.so)");
-#endif
 }
 
-#if defined(__aarch64__)
 static unsigned long (*tls_guard)(void);
 static int (*protected_fn)(int);
 static void *host_thread(void *a) { (void)a; protected_fn(3); return (void *)tls_guard(); }
@@ -290,7 +287,6 @@ static int (*backtrace_fn)(uintptr_t *, int);
 static uintptr_t pcs[32];
 static int npcs;
 __attribute__((noinline)) static int host_cb(void) { npcs = backtrace_fn(pcs, 32); return npcs + 1; }
-#endif
 
 static unsigned long (*tid_fn)(void);
 static void *host_tid(void *arg) { (void)arg; return (void *)tid_fn(); }
@@ -318,15 +314,6 @@ int main(int argc, char **argv)
         CHECK(prop_get && prop_get("persist.sys.timezone", v) > 0 && !strcmp(v, "Europe/Lisbon"), "persist.sys.timezone = \"%s\"", v);
         unsetenv("TZ");
     }
-#if defined(__arm__)
-    // bionic-only names glibc lacks resolve to the static softfp wrappers (2018.4's libmonobdwgc)
-    {
-        int (SO_ABI *fin)(double) = (int (SO_ABI *)(double))so_resolve("__isfinite");
-        int (SO_ABI *finf)(float) = (int (SO_ABI *)(float))so_resolve("__isfinitef");
-        CHECK(fin && fin(1.5) && !fin(1.0 / 0.0) && !fin(0.0 / 0.0), "__isfinite");
-        CHECK(finf && finf(2.5f) && !finf(1.0f / 0.0f), "__isfinitef");
-    }
-#endif
 
     static const char *const kinds[] = { "plain", "RELR", "APS2", "RELR+APS2", "Android RELR+APS2" };
     so_module *m[5];
@@ -387,7 +374,6 @@ int main(int argc, char **argv)
     test_mediandk(dir);
     test_icu();
 
-#if defined(__aarch64__)
     tls_guard = (unsigned long (*)(void))sym(m[0], "syn_tls_guard");
     protected_fn = (int (*)(int))sym(m[0], "syn_protected");
     backtrace_fn = (int (*)(uintptr_t *, int))sym(m[0], "syn_backtrace");
@@ -416,10 +402,6 @@ int main(int argc, char **argv)
         if (!n || seq[n - 1] != c) seq[n++] = c, seq[n] = 0;
     }
     CHECK(!strncmp(seq, "AHAH", 4), "unwinding through Android and host frames: %d frames, %s", npcs, seq);
-#else
-    void *(*guard_addr)(void) = (void *(*)(void))sym(m[0], "syn_guard_addr");
-    CHECK(guard_addr && guard_addr() == so_shim_lookup("__stack_chk_guard"), "__stack_chk_guard not bionic's");
-#endif
 
     // bionic's thread id slot: non-zero and per thread, also on a thread the host started
     tid_fn = (unsigned long (*)(void))sym(m[0], "syn_thread_id");

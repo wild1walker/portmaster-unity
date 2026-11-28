@@ -1,4 +1,4 @@
-/* fakejni unit test (host side: armhf, or aarch64). See Makefile `make test` / `test-qemu`. */
+/* fakejni unit test (host side, aarch64). See Makefile `make test`. */
 #include "../fakejni.h"
 #include <math.h>
 #include <pthread.h>
@@ -9,7 +9,7 @@ static int fails;
 #define CHECK(c) do { if (!(c)) { printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 static int feq(double a, double b) { return fabs(a - b) < 1e-5; }
 
-int android_side_run(JavaVM *vm);   /* softfp object on ARM, integer-only signature */
+int android_side_run(JavaVM *vm);   /* integer-only signature */
 
 /* ---------- handlers for test/Calc ---------- */
 static jvalue h_mix(JNIEnv *env, jobject cls, const jvalue *a, void *ud)
@@ -101,7 +101,7 @@ int main(void)
     fails += android_side_run(vm);
 
     printf("== host side\n");
-    /* host calls through the jni.h table (JNI_ABI pointers) */
+    /* host calls through the jni.h table (pointers) */
     jclass calc = (*env)->FindClass(env, "test/Calc");
     jmethodID sum = (*env)->GetStaticMethodID(env, calc, "sum", "(IJFD)D");
     CHECK(feq((*env)->CallStaticDoubleMethod(env, calc, sum, (jint)2, (jlong)3, (jfloat)0.25f, (jdouble)0.5), 5.75));

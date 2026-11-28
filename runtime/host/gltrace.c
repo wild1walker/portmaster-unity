@@ -790,7 +790,7 @@ static void log_blit(const GLint r[8], GLbitfield m)
             r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], bits(m, b), px);
 }
 
-// ---- wrappers (none of these take floats: no softfp thunk needed)
+// ---- wrappers
 // only the swapping thread's calls make the traced frame (another context's, e.g. an upload thread's, do not)
 #define ON (g_on && pthread_equal(pthread_self(), g_thread))
 // UA_GL_TRACE_FILL: the draw made once more first, counted (glfill.c)

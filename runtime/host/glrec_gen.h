@@ -2320,7 +2320,7 @@ static void w_glBlendBarrierNV(void)
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glBlendBarrierNV)(); glrec_t1(OP_glBlendBarrierNV, t_); TRC(glBlendBarrierNV); return; }
     glrec_cmd(OP_glBlendBarrierNV, 0);
 }
-static SO_ABI void w_glBlendColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
+static void w_glBlendColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glBlendColor)(red, green, blue, alpha); glrec_t1(OP_glBlendColor, t_); TRC(glBlendColor, red, green, blue, alpha); return; }
@@ -2441,7 +2441,7 @@ static void w_glClear(GLbitfield mask)
     uint64_t *rec_a = glrec_cmd(OP_glClear, 1);
     rec_a[0] = (uint64_t)(int64_t)mask;
 }
-static SO_ABI void w_glClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil)
+static void w_glClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glClearBufferfi)(buffer, drawbuffer, depth, stencil); glrec_t1(OP_glClearBufferfi, t_); TRC(glClearBufferfi, buffer, drawbuffer, depth, stencil); return; }
@@ -2469,14 +2469,14 @@ static void w_glClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint * v
     uint64_t *rec_a = glrec_cmd(OP_glClearBufferuiv, 3);
     rec_a[0] = (uint64_t)(int64_t)buffer; rec_a[1] = (uint64_t)(int64_t)drawbuffer; rec_a[2] = glrec_blob(value, (size_t)(16));
 }
-static SO_ABI void w_glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
+static void w_glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glClearColor)(red, green, blue, alpha); glrec_t1(OP_glClearColor, t_); TRC(glClearColor, red, green, blue, alpha); return; }
     uint64_t *rec_a = glrec_cmd(OP_glClearColor, 4);
     rec_a[0] = rec_fbits(red); rec_a[1] = rec_fbits(green); rec_a[2] = rec_fbits(blue); rec_a[3] = rec_fbits(alpha);
 }
-static SO_ABI void w_glClearDepthf(GLfloat d)
+static void w_glClearDepthf(GLfloat d)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glClearDepthf)(d); glrec_t1(OP_glClearDepthf, t_); TRC(glClearDepthf, d); return; }
@@ -2643,7 +2643,7 @@ static void w_glDepthMask(GLboolean flag)
     uint64_t *rec_a = glrec_cmd(OP_glDepthMask, 1);
     rec_a[0] = (uint64_t)(int64_t)flag;
 }
-static SO_ABI void w_glDepthRangef(GLfloat n, GLfloat f)
+static void w_glDepthRangef(GLfloat n, GLfloat f)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glDepthRangef)(n, f); glrec_t1(OP_glDepthRangef, t_); TRC(glDepthRangef, n, f); return; }
@@ -3110,7 +3110,7 @@ static GLboolean w_glIsTransformFeedback(GLuint id) { glrec_submit_for(OP_glIsTr
 static GLboolean w_glIsVertexArray(GLuint array) { glrec_submit_for(OP_glIsVertexArray); uint64_t t_ = glrec_t0(); GLboolean r_ = NX(glIsVertexArray)(array); glrec_tadd(OP_glIsVertexArray, t_); TRC(glIsVertexArray, array, r_); return r_; }
 static GLboolean w_glIsVertexArrayOES(GLuint array) { glrec_submit_for(OP_glIsVertexArrayOES); uint64_t t_ = glrec_t0(); GLboolean r_ = NX(glIsVertexArrayOES)(array); glrec_tadd(OP_glIsVertexArrayOES, t_); TRC(glIsVertexArrayOES, array, r_); return r_; }
 static void w_glLabelObjectEXT(GLenum type, GLuint object, GLsizei length, const GLchar * label) { glrec_submit_for(OP_glLabelObjectEXT); uint64_t t_ = glrec_t0(); NX(glLabelObjectEXT)(type, object, length, label); glrec_tadd(OP_glLabelObjectEXT, t_); TRC(glLabelObjectEXT, type, object, length, label); }
-static SO_ABI void w_glLineWidth(GLfloat width)
+static void w_glLineWidth(GLfloat width)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glLineWidth)(width); glrec_t1(OP_glLineWidth, t_); TRC(glLineWidth, width); return; }
@@ -3123,7 +3123,7 @@ static void * w_glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr leng
 static void * w_glMapBufferRangeEXT(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) { glrec_submit_for(OP_glMapBufferRangeEXT); uint64_t t_ = glrec_t0(); void * r_ = NX(glMapBufferRangeEXT)(target, offset, length, access); glrec_tadd(OP_glMapBufferRangeEXT, t_); TRC(glMapBufferRangeEXT, target, offset, length, access, r_); return r_; }
 static void w_glMemoryBarrier(GLbitfield barriers) { glrec_submit_for(OP_glMemoryBarrier); uint64_t t_ = glrec_t0(); NX(glMemoryBarrier)(barriers); glrec_tadd(OP_glMemoryBarrier, t_); TRC(glMemoryBarrier, barriers); }
 static void w_glMemoryBarrierByRegion(GLbitfield barriers) { glrec_submit_for(OP_glMemoryBarrierByRegion); uint64_t t_ = glrec_t0(); NX(glMemoryBarrierByRegion)(barriers); glrec_tadd(OP_glMemoryBarrierByRegion, t_); TRC(glMemoryBarrierByRegion, barriers); }
-static SO_ABI void w_glMinSampleShading(GLfloat value) { glrec_submit_for(OP_glMinSampleShading); uint64_t t_ = glrec_t0(); NX(glMinSampleShading)(value); glrec_tadd(OP_glMinSampleShading, t_); TRC(glMinSampleShading, value); }
+static void w_glMinSampleShading(GLfloat value) { glrec_submit_for(OP_glMinSampleShading); uint64_t t_ = glrec_t0(); NX(glMinSampleShading)(value); glrec_tadd(OP_glMinSampleShading, t_); TRC(glMinSampleShading, value); }
 static void w_glMultiDrawArraysEXT(GLenum mode, const GLint * first, const GLsizei * count, GLsizei primcount) { glrec_submit_for(OP_glMultiDrawArraysEXT); uint64_t t_ = glrec_t0(); NX(glMultiDrawArraysEXT)(mode, first, count, primcount); glrec_tadd(OP_glMultiDrawArraysEXT, t_); TRC(glMultiDrawArraysEXT, mode, first, count, primcount); }
 static void w_glMultiDrawElementsBaseVertexEXT(GLenum mode, const GLsizei * count, GLenum type, const void *const* indices, GLsizei drawcount, const GLint * basevertex) { glrec_submit_for(OP_glMultiDrawElementsBaseVertexEXT); uint64_t t_ = glrec_t0(); NX(glMultiDrawElementsBaseVertexEXT)(mode, count, type, indices, drawcount, basevertex); glrec_tadd(OP_glMultiDrawElementsBaseVertexEXT, t_); TRC(glMultiDrawElementsBaseVertexEXT, mode, count, type, indices, drawcount, basevertex); }
 static void w_glMultiDrawElementsEXT(GLenum mode, const GLsizei * count, GLenum type, const void *const* indices, GLsizei primcount) { glrec_submit_for(OP_glMultiDrawElementsEXT); uint64_t t_ = glrec_t0(); NX(glMultiDrawElementsEXT)(mode, count, type, indices, primcount); glrec_tadd(OP_glMultiDrawElementsEXT, t_); TRC(glMultiDrawElementsEXT, mode, count, type, indices, primcount); }
@@ -3142,14 +3142,14 @@ static void w_glPixelStorei(GLenum pname, GLint param)
     uint64_t *rec_a = glrec_cmd(OP_glPixelStorei, 2);
     rec_a[0] = (uint64_t)(int64_t)pname; rec_a[1] = (uint64_t)(int64_t)param;
 }
-static SO_ABI void w_glPolygonOffset(GLfloat factor, GLfloat units)
+static void w_glPolygonOffset(GLfloat factor, GLfloat units)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glPolygonOffset)(factor, units); glrec_t1(OP_glPolygonOffset, t_); TRC(glPolygonOffset, factor, units); return; }
     uint64_t *rec_a = glrec_cmd(OP_glPolygonOffset, 2);
     rec_a[0] = rec_fbits(factor); rec_a[1] = rec_fbits(units);
 }
-static SO_ABI void w_glPolygonOffsetClampEXT(GLfloat factor, GLfloat units, GLfloat clamp)
+static void w_glPolygonOffsetClampEXT(GLfloat factor, GLfloat units, GLfloat clamp)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glPolygonOffsetClampEXT)(factor, units, clamp); glrec_t1(OP_glPolygonOffsetClampEXT, t_); TRC(glPolygonOffsetClampEXT, factor, units, clamp); return; }
@@ -3174,7 +3174,7 @@ static void w_glPopGroupMarkerEXT(void)
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glPopGroupMarkerEXT)(); glrec_t1(OP_glPopGroupMarkerEXT, t_); TRC(glPopGroupMarkerEXT); return; }
     glrec_cmd(OP_glPopGroupMarkerEXT, 0);
 }
-static SO_ABI void w_glPrimitiveBoundingBox(GLfloat minX, GLfloat minY, GLfloat minZ, GLfloat minW, GLfloat maxX, GLfloat maxY, GLfloat maxZ, GLfloat maxW)
+static void w_glPrimitiveBoundingBox(GLfloat minX, GLfloat minY, GLfloat minZ, GLfloat minW, GLfloat maxX, GLfloat maxY, GLfloat maxZ, GLfloat maxW)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glPrimitiveBoundingBox)(minX, minY, minZ, minW, maxX, maxY, maxZ, maxW); glrec_t1(OP_glPrimitiveBoundingBox, t_); TRC(glPrimitiveBoundingBox, minX, minY, minZ, minW, maxX, maxY, maxZ, maxW); return; }
@@ -3184,7 +3184,7 @@ static SO_ABI void w_glPrimitiveBoundingBox(GLfloat minX, GLfloat minY, GLfloat 
 static void w_glProgramBinary(GLuint program, GLenum binaryFormat, const void * binary, GLsizei length) { glrec_submit_for(OP_glProgramBinary); uint64_t t_ = glrec_t0(); NX(glProgramBinary)(program, binaryFormat, binary, length); glrec_tadd(OP_glProgramBinary, t_); glrec_program_binary(program, binary, length); TRC(glProgramBinary, program, binaryFormat, binary, length); }
 static void w_glProgramBinaryOES(GLuint program, GLenum binaryFormat, const void * binary, GLint length) { glrec_submit_for(OP_glProgramBinaryOES); uint64_t t_ = glrec_t0(); NX(glProgramBinaryOES)(program, binaryFormat, binary, length); glrec_tadd(OP_glProgramBinaryOES, t_); glrec_program_binary(program, binary, length); TRC(glProgramBinaryOES, program, binaryFormat, binary, length); }
 static void w_glProgramParameteri(GLuint program, GLenum pname, GLint value) { glrec_submit_for(OP_glProgramParameteri); uint64_t t_ = glrec_t0(); NX(glProgramParameteri)(program, pname, value); glrec_tadd(OP_glProgramParameteri, t_); TRC(glProgramParameteri, program, pname, value); }
-static SO_ABI void w_glProgramUniform1f(GLuint program, GLint location, GLfloat v0)
+static void w_glProgramUniform1f(GLuint program, GLint location, GLfloat v0)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glProgramUniform1f)(program, location, v0); glrec_t1(OP_glProgramUniform1f, t_); TRC(glProgramUniform1f, program, location, v0); return; }
@@ -3226,7 +3226,7 @@ static void w_glProgramUniform1uiv(GLuint program, GLint location, GLsizei count
     uint64_t *rec_a = glrec_cmd(OP_glProgramUniform1uiv, 4);
     rec_a[0] = (uint64_t)(int64_t)program; rec_a[1] = (uint64_t)(int64_t)location; rec_a[2] = (uint64_t)(int64_t)count; rec_a[3] = glrec_blob(value, (size_t)(count * 1 * 4));
 }
-static SO_ABI void w_glProgramUniform2f(GLuint program, GLint location, GLfloat v0, GLfloat v1)
+static void w_glProgramUniform2f(GLuint program, GLint location, GLfloat v0, GLfloat v1)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glProgramUniform2f)(program, location, v0, v1); glrec_t1(OP_glProgramUniform2f, t_); TRC(glProgramUniform2f, program, location, v0, v1); return; }
@@ -3268,7 +3268,7 @@ static void w_glProgramUniform2uiv(GLuint program, GLint location, GLsizei count
     uint64_t *rec_a = glrec_cmd(OP_glProgramUniform2uiv, 4);
     rec_a[0] = (uint64_t)(int64_t)program; rec_a[1] = (uint64_t)(int64_t)location; rec_a[2] = (uint64_t)(int64_t)count; rec_a[3] = glrec_blob(value, (size_t)(count * 2 * 4));
 }
-static SO_ABI void w_glProgramUniform3f(GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2)
+static void w_glProgramUniform3f(GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glProgramUniform3f)(program, location, v0, v1, v2); glrec_t1(OP_glProgramUniform3f, t_); TRC(glProgramUniform3f, program, location, v0, v1, v2); return; }
@@ -3310,7 +3310,7 @@ static void w_glProgramUniform3uiv(GLuint program, GLint location, GLsizei count
     uint64_t *rec_a = glrec_cmd(OP_glProgramUniform3uiv, 4);
     rec_a[0] = (uint64_t)(int64_t)program; rec_a[1] = (uint64_t)(int64_t)location; rec_a[2] = (uint64_t)(int64_t)count; rec_a[3] = glrec_blob(value, (size_t)(count * 3 * 4));
 }
-static SO_ABI void w_glProgramUniform4f(GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)
+static void w_glProgramUniform4f(GLuint program, GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glProgramUniform4f)(program, location, v0, v1, v2, v3); glrec_t1(OP_glProgramUniform4f, t_); TRC(glProgramUniform4f, program, location, v0, v1, v2, v3); return; }
@@ -3454,7 +3454,7 @@ static void w_glRenderbufferStorageMultisampleEXT(GLenum target, GLsizei samples
 static void w_glRenderbufferStorageMultisampleIMG(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height) { glrec_submit_for(OP_glRenderbufferStorageMultisampleIMG); uint64_t t_ = glrec_t0(); NX(glRenderbufferStorageMultisampleIMG)(target, samples, internalformat, width, height); glrec_tadd(OP_glRenderbufferStorageMultisampleIMG, t_); TRC(glRenderbufferStorageMultisampleIMG, target, samples, internalformat, width, height); }
 static void w_glResolveMultisampleFramebufferAPPLE(void) { glrec_submit_for(OP_glResolveMultisampleFramebufferAPPLE); uint64_t t_ = glrec_t0(); NX(glResolveMultisampleFramebufferAPPLE)(); glrec_tadd(OP_glResolveMultisampleFramebufferAPPLE, t_); TRC(glResolveMultisampleFramebufferAPPLE); }
 static void w_glResumeTransformFeedback(void) { glrec_submit_for(OP_glResumeTransformFeedback); uint64_t t_ = glrec_t0(); NX(glResumeTransformFeedback)(); glrec_tadd(OP_glResumeTransformFeedback, t_); TRC(glResumeTransformFeedback); }
-static SO_ABI void w_glSampleCoverage(GLfloat value, GLboolean invert)
+static void w_glSampleCoverage(GLfloat value, GLboolean invert)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glSampleCoverage)(value, invert); glrec_t1(OP_glSampleCoverage, t_); TRC(glSampleCoverage, value, invert); return; }
@@ -3482,7 +3482,7 @@ static void w_glSamplerParameterIuiv(GLuint sampler, GLenum pname, const GLuint 
     uint64_t *rec_a = glrec_cmd(OP_glSamplerParameterIuiv, 3);
     rec_a[0] = (uint64_t)(int64_t)sampler; rec_a[1] = (uint64_t)(int64_t)pname; rec_a[2] = glrec_blob(param, (size_t)((pname == 0x1004 ? 4 : 1) * 4));
 }
-static SO_ABI void w_glSamplerParameterf(GLuint sampler, GLenum pname, GLfloat param)
+static void w_glSamplerParameterf(GLuint sampler, GLenum pname, GLfloat param)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glSamplerParameterf)(sampler, pname, param); glrec_t1(OP_glSamplerParameterf, t_); TRC(glSamplerParameterf, sampler, pname, param); return; }
@@ -3581,7 +3581,7 @@ static void w_glTexParameterIuiv(GLenum target, GLenum pname, const GLuint * par
     uint64_t *rec_a = glrec_cmd(OP_glTexParameterIuiv, 3);
     rec_a[0] = (uint64_t)(int64_t)target; rec_a[1] = (uint64_t)(int64_t)pname; rec_a[2] = glrec_blob(params, (size_t)((pname == 0x1004 ? 4 : 1) * 4));
 }
-static SO_ABI void w_glTexParameterf(GLenum target, GLenum pname, GLfloat param)
+static void w_glTexParameterf(GLenum target, GLenum pname, GLfloat param)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glTexParameterf)(target, pname, param); glrec_t1(OP_glTexParameterf, t_); TRC(glTexParameterf, target, pname, param); return; }
@@ -3636,7 +3636,7 @@ static void w_glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint y
 static void w_glTextureViewEXT(GLuint texture, GLenum target, GLuint origtexture, GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer, GLuint numlayers) { glrec_submit_for(OP_glTextureViewEXT); uint64_t t_ = glrec_t0(); NX(glTextureViewEXT)(texture, target, origtexture, internalformat, minlevel, numlevels, minlayer, numlayers); glrec_tadd(OP_glTextureViewEXT, t_); TRC(glTextureViewEXT, texture, target, origtexture, internalformat, minlevel, numlevels, minlayer, numlayers); }
 static void w_glTextureViewOES(GLuint texture, GLenum target, GLuint origtexture, GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer, GLuint numlayers) { glrec_submit_for(OP_glTextureViewOES); uint64_t t_ = glrec_t0(); NX(glTextureViewOES)(texture, target, origtexture, internalformat, minlevel, numlevels, minlayer, numlayers); glrec_tadd(OP_glTextureViewOES, t_); TRC(glTextureViewOES, texture, target, origtexture, internalformat, minlevel, numlevels, minlayer, numlayers); }
 static void w_glTransformFeedbackVaryings(GLuint program, GLsizei count, const GLchar *const* varyings, GLenum bufferMode) { glrec_submit_for(OP_glTransformFeedbackVaryings); uint64_t t_ = glrec_t0(); NX(glTransformFeedbackVaryings)(program, count, varyings, bufferMode); glrec_tadd(OP_glTransformFeedbackVaryings, t_); TRC(glTransformFeedbackVaryings, program, count, varyings, bufferMode); }
-static SO_ABI void w_glUniform1f(GLint location, GLfloat v0)
+static void w_glUniform1f(GLint location, GLfloat v0)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glUniform1f)(location, v0); glrec_t1(OP_glUniform1f, t_); TRC(glUniform1f, location, v0); return; }
@@ -3678,7 +3678,7 @@ static void w_glUniform1uiv(GLint location, GLsizei count, const GLuint * value)
     uint64_t *rec_a = glrec_cmd(OP_glUniform1uiv, 3);
     rec_a[0] = (uint64_t)(int64_t)location; rec_a[1] = (uint64_t)(int64_t)count; rec_a[2] = glrec_blob(value, (size_t)(count * 1 * 4));
 }
-static SO_ABI void w_glUniform2f(GLint location, GLfloat v0, GLfloat v1)
+static void w_glUniform2f(GLint location, GLfloat v0, GLfloat v1)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glUniform2f)(location, v0, v1); glrec_t1(OP_glUniform2f, t_); TRC(glUniform2f, location, v0, v1); return; }
@@ -3720,7 +3720,7 @@ static void w_glUniform2uiv(GLint location, GLsizei count, const GLuint * value)
     uint64_t *rec_a = glrec_cmd(OP_glUniform2uiv, 3);
     rec_a[0] = (uint64_t)(int64_t)location; rec_a[1] = (uint64_t)(int64_t)count; rec_a[2] = glrec_blob(value, (size_t)(count * 2 * 4));
 }
-static SO_ABI void w_glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2)
+static void w_glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glUniform3f)(location, v0, v1, v2); glrec_t1(OP_glUniform3f, t_); TRC(glUniform3f, location, v0, v1, v2); return; }
@@ -3762,7 +3762,7 @@ static void w_glUniform3uiv(GLint location, GLsizei count, const GLuint * value)
     uint64_t *rec_a = glrec_cmd(OP_glUniform3uiv, 3);
     rec_a[0] = (uint64_t)(int64_t)location; rec_a[1] = (uint64_t)(int64_t)count; rec_a[2] = glrec_blob(value, (size_t)(count * 3 * 4));
 }
-static SO_ABI void w_glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)
+static void w_glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glUniform4f)(location, v0, v1, v2, v3); glrec_t1(OP_glUniform4f, t_); TRC(glUniform4f, location, v0, v1, v2, v3); return; }
@@ -3892,7 +3892,7 @@ static void w_glValidateProgramPipeline(GLuint pipeline)
     uint64_t *rec_a = glrec_cmd(OP_glValidateProgramPipeline, 1);
     rec_a[0] = (uint64_t)(int64_t)pipeline;
 }
-static SO_ABI void w_glVertexAttrib1f(GLuint index, GLfloat x)
+static void w_glVertexAttrib1f(GLuint index, GLfloat x)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glVertexAttrib1f)(index, x); glrec_t1(OP_glVertexAttrib1f, t_); TRC(glVertexAttrib1f, index, x); return; }
@@ -3906,7 +3906,7 @@ static void w_glVertexAttrib1fv(GLuint index, const GLfloat * v)
     uint64_t *rec_a = glrec_cmd(OP_glVertexAttrib1fv, 2);
     rec_a[0] = (uint64_t)(int64_t)index; rec_a[1] = glrec_blob(v, (size_t)(4));
 }
-static SO_ABI void w_glVertexAttrib2f(GLuint index, GLfloat x, GLfloat y)
+static void w_glVertexAttrib2f(GLuint index, GLfloat x, GLfloat y)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glVertexAttrib2f)(index, x, y); glrec_t1(OP_glVertexAttrib2f, t_); TRC(glVertexAttrib2f, index, x, y); return; }
@@ -3920,7 +3920,7 @@ static void w_glVertexAttrib2fv(GLuint index, const GLfloat * v)
     uint64_t *rec_a = glrec_cmd(OP_glVertexAttrib2fv, 2);
     rec_a[0] = (uint64_t)(int64_t)index; rec_a[1] = glrec_blob(v, (size_t)(8));
 }
-static SO_ABI void w_glVertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z)
+static void w_glVertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glVertexAttrib3f)(index, x, y, z); glrec_t1(OP_glVertexAttrib3f, t_); TRC(glVertexAttrib3f, index, x, y, z); return; }
@@ -3934,7 +3934,7 @@ static void w_glVertexAttrib3fv(GLuint index, const GLfloat * v)
     uint64_t *rec_a = glrec_cmd(OP_glVertexAttrib3fv, 2);
     rec_a[0] = (uint64_t)(int64_t)index; rec_a[1] = glrec_blob(v, (size_t)(12));
 }
-static SO_ABI void w_glVertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
+static void w_glVertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
 {
     int rec_ = glrec_recording();
     if (!rec_) { uint64_t t_ = glrec_t0(); NX(glVertexAttrib4f)(index, x, y, z, w); glrec_t1(OP_glVertexAttrib4f, t_); TRC(glVertexAttrib4f, index, x, y, z, w); return; }

@@ -1,7 +1,6 @@
 // libsyn_<n>.so: a synthetic "Android" library for test_syn.c. Built freestanding, without glibc's
 // headers (bionic's types are written out below where they differ), -nostdlib, with the stack
-// protector on every function: Android's TLS guard (tpidr_el0 + 0x28) on arm64, the global
-// __stack_chk_guard on 32-bit ARM. It needs libsyn_dep.so and "libc.so" (DT_NEEDED, as bionic
+// protector on every function: Android's TLS guard (tpidr_el0 + 0x28). It needs libsyn_dep.so and "libc.so" (DT_NEEDED, as bionic
 // libraries do) and imports from the host (strlen, snprintf, pthread_*, sig*), from libsyn_dep.so
 // and from the test's shim table. The same objects are linked as libsyn_0.so .. libsyn_4.so, whose
 // relocations pack_relocs.c then rewrites (RELR, Android's APS2 packing); test_syn.c checks that
@@ -9,7 +8,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(__LP64__)
 #define JBLEN 32                         // bionic's _JBLEN (longs)
 #define MUTEX_WORDS 10                   // bionic's pthread_mutex_t / cond / rwlock, in int32s
 #define COND_WORDS 12
@@ -17,15 +15,6 @@
 #define STAT_SIZE 128                    // bionic's struct stat
 #define B_RTLD_NOW 2
 #define B_RTLD_DEFAULT ((void *)0)
-#else
-#define JBLEN 64
-#define MUTEX_WORDS 1
-#define COND_WORDS 1
-#define RWLOCK_WORDS 10
-#define STAT_SIZE 104
-#define B_RTLD_NOW 0
-#define B_RTLD_DEFAULT ((void *)0xffffffff)
-#endif
 #define SENTINEL ((long)0x5e17e1a5)
 
 // ---- imports ----------------------------------------------------------------------------------
@@ -44,11 +33,7 @@ __attribute__((weak)) int no_such_function(void);
 __attribute__((weak)) extern int no_such_data;
 
 typedef unsigned long b_sigset_t;        // bionic: one word
-#if defined(__LP64__)
 struct b_sigaction { int flags; void (*handler)(int); b_sigset_t mask; void *restorer; };
-#else
-struct b_sigaction { void (*handler)(int); b_sigset_t mask; int flags; void *restorer; };
-#endif
 int sigemptyset(b_sigset_t *), sigfillset(b_sigset_t *), sigaddset(b_sigset_t *, int);
 int sigdelset(b_sigset_t *, int), sigismember(const b_sigset_t *, int), sigpending(b_sigset_t *);
 int sigprocmask(int, const b_sigset_t *, b_sigset_t *);
@@ -119,15 +104,9 @@ static int self_cb(struct b_dl_phdr_info *info, size_t size, void *data)
     (void)size;
     const unsigned char *ph = info->phdr;
     for (int i = 0; i < info->phnum; i++) {
-#if defined(__LP64__)
         const unsigned char *p = ph + 56 * i;
         uint32_t type = *(const uint32_t *)p;
         uintptr_t vaddr = *(const uint64_t *)(p + 16), memsz = *(const uint64_t *)(p + 40);
-#else
-        const unsigned char *p = ph + 32 * i;
-        uint32_t type = *(const uint32_t *)p;
-        uintptr_t vaddr = *(const uint32_t *)(p + 8), memsz = *(const uint32_t *)(p + 20);
-#endif
         if (type == 1 && (uintptr_t)self_addr >= info->addr + vaddr && (uintptr_t)self_addr < info->addr + vaddr + memsz) {
             *(int *)data = streq(info->name + strlen(info->name) - 11, "libsyn_0.so") ? 1 : 2;
             return 1;
@@ -259,34 +238,22 @@ static unsigned long thread_ids[4];
 unsigned long syn_thread_id(void)
 {
     unsigned long *tp;
-#if defined(__aarch64__)
     __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
-#else
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tp));
-    tp = (unsigned long *)((unsigned long)tp & ~3ul);
-#endif
     return tp[1];
 }
 
-#if defined(__aarch64__)
 unsigned long syn_tls_guard(void)
 {
     unsigned long tp;
     __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
     return *(volatile unsigned long *)(tp + 40);
 }
-#else
-extern unsigned long __stack_chk_guard;
-void *syn_guard_addr(void) { return &__stack_chk_guard; }
-#endif
 
 static void *worker(void *arg)
 {
     int id = (int)(intptr_t)arg;
     thread_ids[id] = syn_thread_id();
-#if defined(__aarch64__)
     thread_guard[id] = syn_tls_guard();
-#endif
     for (int i = 0; i < 20000; i++) {
         pthread_mutex_lock(S.mutex);
         S.counter++;
@@ -381,9 +348,7 @@ int syn_thread_test(void)
     if (S.turn != 200) return 4;
     if (S.max_readers < 0) return 5;                     // a writer saw readers
     if (pthread_rwlock_tryrdlock(S.rwlock) || pthread_rwlock_unlock(S.rwlock)) return 6;
-#if defined(__aarch64__)
     for (int i = 0; i < 4; i++) if (thread_guard[i] != syn_tls_guard()) return 7;
-#endif
     for (int i = 0; i < 4; i++) {                        // thread id slots: set, one per thread
         if (!thread_ids[i] || thread_ids[i] == syn_thread_id()) return 9;
         for (int j = 0; j < i; j++) if (thread_ids[i] == thread_ids[j]) return 9;
@@ -425,7 +390,6 @@ void syn_smash(int n)
     for (int i = 0; i < n; i++) buf[i] = (char)i;
 }
 
-#if defined(__aarch64__)
 // ---- unwinding through .eh_frame with an unwinder of our own (libgcc_eh, linked in hidden, as NDK
 // libraries carry libgcc's or LLVM's); it finds frames through dl_iterate_phdr --------------------
 struct _Unwind_Context;
@@ -445,7 +409,6 @@ __attribute__((noinline)) int syn_backtrace(uintptr_t *pcs, int max)
     return b.n;
 }
 __attribute__((noinline)) int syn_call_host(int (*cb)(void)) { return cb() + 1; }
-#endif
 
 // ---- bionic symbols of newer players (Unity 2019.4-2022.3) -------------------------------------
 // fortify entry points only bionic has, android_set_abort_message, sys_signame/sys_siglist, and calls
@@ -476,21 +439,11 @@ int open(const char *, int, ...), close(int), unlink(const char *);
 struct b_passwd {
     char *pw_name, *pw_passwd;
     unsigned pw_uid, pw_gid;
-#if defined(__LP64__)
     char *pw_gecos;                      // LP32 bionic has none
-#endif
     char *pw_dir, *pw_shell;
 };
 struct b_passwd *getpwuid(unsigned), *getpwnam(const char *);
 int getpwuid_r(unsigned, struct b_passwd *, char *, size_t, struct b_passwd **);
-#if !defined(__LP64__)
-void *__mmap2(void *, size_t, int, int, int, size_t);
-int munmap(void *, size_t);
-int mknod(const char *, unsigned, unsigned, unsigned);   // bionic's has 3 arguments: r3 = junk
-size_t mbsrtowcs(b_wchar *, const char **, size_t, void *), wcsrtombs(char *, const b_wchar **, size_t, void *);
-size_t mbrlen(const char *, size_t, void *);
-int mbsinit(const void *);
-#endif
 #define B_LC_ALL_MASK 0x1fbf
 #define B_ENOENT 2
 #define B_EINVAL 22
@@ -633,32 +586,10 @@ int syn_newer_test(const char *dir, const long *pc, const unsigned long *vfs)
     if (newlocale(1 << 6, "C", 0) || *__errno() != B_EINVAL) f |= 1 << 9;
     if (loc) freelocale(loc);
     if (c) freelocale(c);
-    // float results (softfp wrappers on 32-bit ARM)
+    // float results
     static const b_wchar w1[] = { '2', '.', '5', 'x', 0 }, w2[] = { '-', '0', '.', '7', '5', 0 };
     b_wchar *we = 0;
     if (wcstod(w1, &we) != 2.5 || we != w1 + 3 || wcstof(w2, 0) != -0.75f) f |= 1 << 10;
-#if !defined(__LP64__)
-    // __mmap2: the offset in 4096-byte units
-    snprintf(path, sizeof path, "%s/file8k", dir);
-    fd = open(path, 0);
-    const char *m = fd >= 0 ? __mmap2(0, 4096, 1 /* PROT_READ */, 2 /* MAP_PRIVATE */, fd, 1) : 0;
-    if (!m || m == (const char *)-1 || m[0] != 'Q' || m[1] != 'R') f |= 1 << 11;
-    else munmap((void *)m, 4096);
-    close(fd);
-    // mknod: bionic's 32-bit dev_t (r3 holds junk the callee must ignore)
-    unlink("/tmp/syn_fifo");
-    if (mknod("/tmp/syn_fifo", 0010600 /* S_IFIFO | 0600 */, 0, 0xdeadbeef)) f |= 1 << 12;
-    unlink("/tmp/syn_fifo");
-    // conversions with bionic's 4-byte mbstate_t
-    struct { unsigned st; unsigned sentinel; } s = { 0, 0x5e17e1a5 };
-    const char *src = "abc";
-    b_wchar wb[8];
-    if (mbsrtowcs(wb, &src, 8, &s.st) != 3 || wb[0] != 'a' || wb[2] != 'c' || src || s.sentinel != 0x5e17e1a5) f |= 1 << 13;
-    const b_wchar *wsrc = wb;
-    char nb[8];
-    if (wcsrtombs(nb, &wsrc, sizeof nb, &s.st) != 3 || !streq(nb, "abc") || s.sentinel != 0x5e17e1a5) f |= 1 << 13;
-    if (mbrlen("a", 1, &s.st) != 1 || !mbsinit(&s.st) || s.sentinel != 0x5e17e1a5) f |= 1 << 13;
-#endif
     return f;
 }
 

@@ -6,11 +6,9 @@
 // can be compared line by line.
 //
 // Two builds (runtime/host/test/plugins_test.sh):
-//   -DDOUBLE_ANDROID: armeabi-v7a / arm64-v8a code linked like an NDK library (freestanding, softfp
-//     on 32-bit ARM, DT_NEEDED libc.so): FMOD's Android libraries are this kind; it also calls the
+//   -DDOUBLE_ANDROID: arm64-v8a code linked like an NDK library (freestanding, DT_NEEDED libc.so): FMOD's Android libraries are this kind; it also calls the
 //     Java side FMOD's Android library needs (org.fmod.FMOD) through JNI_OnLoad's JavaVM
-//   otherwise: a glibc (armhf / aarch64) library, as FMOD's Linux libraries are; on 32-bit ARM its
-//     float arguments arrive in VFP registers, i.e. through ua_host's softfp thunks
+//   otherwise: a glibc (aarch64) library, as FMOD's Linux libraries are
 // Install as lib/libfmodstudio.so (and lib/libfmod.so for wrappers that import "fmod").
 #include <stdarg.h>
 #include <stddef.h>
@@ -39,11 +37,7 @@ int close(int);
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#if defined(__aarch64__)
 #define FLAVOR "glibc-arm64"
-#else
-#define FLAVOR "glibc"
-#endif
 #endif
 
 #define EXPORT __attribute__((visibility("default")))

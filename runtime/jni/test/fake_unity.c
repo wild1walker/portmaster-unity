@@ -1,6 +1,5 @@
 /*
- * A fake libmain + libunity for test_unityplayer: built like NDK code (softfp/freestanding on
- * 32-bit ARM, ordinary code on AArch64). It registers the natives the real libraries register,
+ * A fake libmain + libunity for test_unityplayer: built like NDK code (ordinary code on AArch64). It registers the natives the real libraries register,
  * with the names and signatures of the Unity version chosen by fake_unity_set_shape() (from
  * pmu-dev jni-tables run on each version's player), and uses the Java APIs the real libunity
  * binds (pmu-dev jni-bindings): paths, display metrics, Build fields, SharedPreferences,

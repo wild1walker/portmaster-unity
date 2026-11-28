@@ -12,9 +12,6 @@ int unityhooks_matches(const struct uh_row *r, uintptr_t base, size_t size) { (v
 int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig) { (void)fn; (void)isa; (void)to; (void)orig; return -1; }
 int unityhooks_jump(uintptr_t fn, char isa, void *to) { (void)fn; (void)isa; (void)to; return -1; }
 
-#if !defined(__aarch64__)
-int main(void) { printf("PASSED cullstep1: 0 failure(s) (AArch64 only)\n"); return 0; }
-#else
 enum { MAXN = 3000, NGROUPS = 16 };
 static uint8_t nodes[MAXN * 24];
 static uint8_t params[0x200];
@@ -80,4 +77,3 @@ int main(void)
     printf("%s cullstep1: %d failure(s) (%ld lists, %ld visible nodes)\n", fails ? "FAILED" : "PASSED", fails, lists, vis);
     return fails != 0;
 }
-#endif

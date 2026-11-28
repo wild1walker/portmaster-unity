@@ -1,30 +1,20 @@
-# fakejni + C UnityPlayer.
-#   ARCH=armhf (default): Debian bookworm cross gcc (glibc 2.36) -> out/
-#   ARCH=arm64: native gcc of the ua-build-arm64 image (Ubuntu 20.04, glibc 2.31) -> out/arm64/
-# Usage (from the Mac):   ./build.sh  /  ARCH=arm64 ./build.sh   (docker; builds and runs the tests)
-# Inside the container:   make all test-qemu  /  make ARCH=arm64 all test
+# fakejni + C UnityPlayer, arm64: native gcc of the ua-build-arm64 image (Ubuntu 20.04, glibc 2.31)
+# -> out/arm64/. (32-bit armhf was removed; the last tree with it is the tag last-armhf.)
+# Usage (from the Mac):   ./build.sh   (docker; builds and runs the tests)
+# Inside the container:   make all test
 
-ARCH    ?= armhf
+ARCH    ?= arm64
 CFLAGS  ?= -O2 -g
 CFLAGS  += -std=gnu11 -fPIC -ffunction-sections -Wall -Wextra -Wno-unused-parameter
 
-ifeq ($(ARCH),arm64)
+ifneq ($(ARCH),arm64)
+$(error ARCH must be arm64 (armhf was removed: tag last-armhf))
+endif
 CROSS   ?=
 OUT     := out/arm64
 # arm64-v8a code and the host share AAPCS64: the "Android side" of the tests is ordinary code
 ANDROID_CFLAGS := -std=gnu11 -O2 -g -Wall
 TEST_LDFLAGS   :=
-else ifeq ($(ARCH),armhf)
-CROSS   ?= arm-linux-gnueabihf-
-OUT     := out
-CFLAGS  += -march=armv7-a -mfpu=neon -mfloat-abi=hard -funwind-tables
-# "Android side" of the tests: built like NDK armeabi-v7a code (softfp calling convention)
-ANDROID_CFLAGS := -std=gnu11 -O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=softfp \
-                  -ffreestanding -fno-builtin -fno-stack-protector
-TEST_LDFLAGS   := -Wl,--no-warn-mismatch
-else
-$(error ARCH must be armhf or arm64)
-endif
 
 CC      := $(CROSS)gcc
 AR      := $(CROSS)ar
@@ -61,17 +51,12 @@ $(OUT)/test_unityplayer: test/test_unityplayer.c test/fake_unity.h $(OUT)/fake_u
 	$(CC) $(CFLAGS) $< $(OUT)/fake_unity.o -L$(OUT) -lfakejni -lz -ldl -lpthread -lm \
 	      $(TEST_LDFLAGS) -o $@
 
-# run natively (arm64 in ua-build-arm64, or armhf on the device / an arm/v7 container)
+# run natively (in ua-build-arm64, or on the device)
 test: $(OUT)/test_fakejni $(OUT)/test_unityplayer
 	$(OUT)/test_fakejni
 	$(OUT)/test_unityplayer
 
-# run with the qemu-user binary of the armhf build container
-test-qemu: $(OUT)/test_fakejni $(OUT)/test_unityplayer
-	qemu-arm -L /usr/arm-linux-gnueabihf $(OUT)/test_fakejni
-	qemu-arm -L /usr/arm-linux-gnueabihf $(OUT)/test_unityplayer
-
 clean:
 	rm -f $(OUT)/*.o $(OUT)/*.a $(OUT)/test_fakejni $(OUT)/test_unityplayer
 
-.PHONY: all clean test test-qemu
+.PHONY: all clean test

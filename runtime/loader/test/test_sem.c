@@ -1,5 +1,5 @@
 // Bionic-layout semaphores from bionic_compat_table(): zeroed word = value 0, post/wait across
-// threads, trywait, timedwait timeout. Build: see build.sh; run under QEMU (docker --platform linux/arm/v7).
+// threads, trywait, timedwait timeout. Build and run: ../build.sh test.
 #include "../so_loader.h"
 #include <errno.h>
 #include <pthread.h>

@@ -20,9 +20,6 @@ int unityhooks_jump(uintptr_t fn, char isa, void *to) { (void)fn; (void)isa; (vo
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
-#if !defined(__aarch64__)
-int main(void) { printf("PASSED anchorwalk: 0 failure(s) (the walk: AArch64 only)\n"); return 0; }
-#else
 enum { MAXN = 600, NTYPES = 8, RECT_TYPE = 5, MAXCALLS = 4096 };
 struct hier {                                   // the fields at the players' offsets are filled in place
     uint8_t raw[0x100];
@@ -208,4 +205,3 @@ int main(void)
            fails, walks, withcalls, (unsigned long long)g_aw_verified);
     return fails != 0;
 }
-#endif

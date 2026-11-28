@@ -994,12 +994,7 @@ static void ima_tables(void)
 
 static inline int sat16(int x)
 {
-#if defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH >= 6
-    __asm__("ssat %0, #16, %1" : "=r"(x) : "r"(x));
-    return x;
-#else
     return x > 32767 ? 32767 : x < -32768 ? -32768 : x;
-#endif
 }
 
 static void ima_block(const uint8_t *b, int16_t *out, int upto)

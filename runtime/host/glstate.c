@@ -17,8 +17,7 @@
 // call changes as a side effect is followed too: glDeleteTextures and glDeleteBuffers unbind the
 // names they delete (and the textures' parameters go), glBindVertexArray brings other vertex
 // arrays (the index buffer binding and the attributes are the vertex array's), glBindBufferBase
-// and glBindBufferRange set the generic binding. Integer and pointer arguments only (a wrapper of a
-// float-taking call would need the player's softfp convention).
+// and glBindBufferRange set the generic binding.
 #include "glstate.h"
 
 #include <dlfcn.h>

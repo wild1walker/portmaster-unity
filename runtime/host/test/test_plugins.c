@@ -1,15 +1,13 @@
 // plugins.c's unit test (runtime/host/test/plugins_test.sh):
-//   test_plugins thunks              softfp -> hard-float thunks for 10 signature shapes (32-bit ARM;
-//                                    on AArch64 plugins_thunk must return the function itself)
 //   test_plugins paths <tmp>         StreamingAssets paths -> files beside the APK
-//   test_plugins lib <libdir> <root> the FMOD test double in <libdir> through plugins.map, the loader
-//                                    and (32-bit ARM, glibc build) the thunks; stubs and refusals
+//   test_plugins lib <libdir> <root> the FMOD test double in <libdir> through plugins.map and the
+//                                    loader; stubs and refusals
 //   test_plugins wwise <root> [backend.so]   the Wwise stub (wwise.c) built from fn lines, called as
-//                                    Mono calls Wwise 2017.2's integration (softfp on 32-bit ARM):
+//                                    Mono calls Wwise 2017.2's integration:
 //                                    results, the callback queue, game syncs; with a backend, what
 //                                    it gets and an event it ends later
 //   test_plugins fmod <root>         the built-in FMOD (fmodstub.c) under fmod and fmodstudio, called
-//                                    as the integration calls it (softfp on 32-bit ARM)
+//                                    as the integration calls it
 #define _GNU_SOURCE
 #include "../plugins.h"
 #include "../../loader/so_loader.h"
@@ -27,68 +25,9 @@ static int fails;
 
 typedef struct { uint32_t a, b; } id2;
 typedef struct { float x, y, z; } vec3;
-void sf_thunk_calls(void *const *fn, uint64_t *ret);
 int sf_fmod_calls(void *create, void *getvca, void *setvol, void *loadbank, void *bits, const char *bank, uint32_t *out);
 int sf_discord(void *create);
 int sf_wwise(void *(*sym)(const char *), uint64_t *o, uint64_t go, uint32_t rtpc, uint32_t event);
-
-// hard-float targets: each checks what it received
-static int ok[10];
-static int t0(int a, float b) { ok[0] = a == 7 && b == 1.5f; return 40; }
-static int t1(int a, long long b, float c) { ok[1] = a == 3 && b == 0x1122334455667788LL && c == -2.25f; return 41; }
-static int t2(void *p, float a, float b, float c, float d, float e, float f, float g, float h)
-{ ok[2] = p == (void *)0x1234 && a == 1 && b == 2 && c == 3 && d == 4 && e == 5 && f == 6 && g == 7 && h == 8; return 42; }
-static int t3(float a, double b, float c) { ok[3] = a == .5f && b == 3.25 && c == 4.75f; return 43; }
-static int t4(void *p, id2 id, float v, int i) { ok[4] = p == (void *)0x5678 && id.a == 0xaabb && id.b == 0xccdd && v == .125f && i == 1; return 44; }
-static int t5(vec3 v, int i) { ok[5] = v.x == 1 && v.y == 2 && v.z == 3 && i == 9; return 45; }
-static double t6(double a, double b, double c, double d, double e, double f, double g, double h, double i)
-{ ok[6] = a == 1 && b == 2 && c == 3 && d == 4 && e == 5 && f == 6 && g == 7 && h == 8 && i == 9; return a + b + c + d + e + f + g + h + i; }
-static float t7(float a, float b) { ok[7] = a == 1.5f && b == 4.f; return a * b; }
-static int t8(int a, int b, int c, int d, int e, int f, float f0, float f1, float f2, float f3, float f4, float f5, float f6,
-              float f7, float f8, float f9, float f10, float f11, float f12, float f13, float f14, float f15, float f16, float f17)
-{
-    float v[18] = { f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17 };
-    int good = a == 1 && b == 2 && c == 3 && d == 4 && e == 5 && f == 6;
-    for (int i = 0; i < 18; i++) good &= v[i] == .5f * (i + 1);
-    ok[8] = good;
-    return 48;
-}
-static int t9(double a, int b, float c, double d, float e, float f) { ok[9] = a == 1.25 && b == 11 && c == 2.5f && d == 3.75 && e == 5.5f && f == 6.25f; return 49; }
-
-static int test_thunks(void)
-{
-    struct { void *fn; const char *ret, *args; } s[10] = {
-        { (void *)t0, "i", "i,f" }, { (void *)t1, "i", "i,l,f" }, { (void *)t2, "i", "i,f,f,f,f,f,f,f,f" },
-        { (void *)t3, "i", "f,d,f" }, { (void *)t4, "i", "i,s2,f,i" }, { (void *)t5, "i", "F3,i" },
-        { (void *)t6, "d", "d,d,d,d,d,d,d,d,d" }, { (void *)t7, "f", "f,f" },
-        { (void *)t8, "i", "i,i,i,i,i,i,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f,f" }, { (void *)t9, "i", "d,i,f,d,f,f" },
-    };
-    void *fn[10];
-    for (int i = 0; i < 10; i++) {
-        fn[i] = plugins_thunk(s[i].fn, s[i].ret, s[i].args);
-        CHECK(fn[i] != NULL, "thunk %d", i);
-#if !(defined(__arm__) && defined(__ARM_PCS_VFP))
-        CHECK(fn[i] == s[i].fn, "thunk %d: AArch64 needs none", i);
-#endif
-    }
-    CHECK(plugins_thunk((void *)t0, "i", "i,i") == (void *)t0, "no floats: the function itself");
-    CHECK(plugins_thunk((void *)t0, "x", "i") == NULL, "bad result class");
-    CHECK(plugins_thunk((void *)t0, "i", "i,F9") == NULL, "too big an aggregate");
-    uint64_t ret[10];
-    memset(ret, 0, sizeof ret);
-    sf_thunk_calls(fn, ret);
-    for (int i = 0; i < 10; i++) {
-        CHECK(ok[i], "signature %d (%s): arguments arrived wrong", i, s[i].args);
-        if (i != 6 && i != 7) CHECK((uint32_t)ret[i] == (uint32_t)(40 + i), "signature %d: result %u", i, (uint32_t)ret[i]);
-    }
-    double d; float f;
-    memcpy(&d, &ret[6], 8);
-    uint32_t fb = (uint32_t)ret[7];
-    memcpy(&f, &fb, 4);
-    CHECK(d == 45, "double result %g", d);
-    CHECK(f == 6, "float result %g", f);
-    return 0;
-}
 
 static void touch(const char *p)
 {
@@ -365,13 +304,12 @@ static int test_wwise(const char *root, const char *backend)
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    const char *mode = argc > 1 ? argv[1] : "thunks";
-    if (!strcmp(mode, "thunks")) test_thunks();
-    else if (!strcmp(mode, "paths") && argc > 2) test_paths(argv[2]);
+    const char *mode = argc > 1 ? argv[1] : "";
+    if (!strcmp(mode, "paths") && argc > 2) test_paths(argv[2]);
     else if (!strcmp(mode, "lib") && argc > 3) test_lib(argv[2], argv[3]);
     else if (!strcmp(mode, "wwise") && argc > 2) test_wwise(argv[2], argc > 3 ? argv[3] : NULL);
     else if (!strcmp(mode, "fmod") && argc > 2) test_fmod(argv[2]);
-    else { fprintf(stderr, "usage: test_plugins thunks | paths <tmp> | lib <libdir> <root> | wwise <root> [backend.so] | fmod <root>\n"); return 2; }
+    else { fprintf(stderr, "usage: test_plugins paths <tmp> | lib <libdir> <root> | wwise <root> [backend.so] | fmod <root>\n"); return 2; }
     printf("%s: %s (%d failures)\n", mode, fails ? "FAILED" : "PASSED", fails);
     return fails != 0;
 }

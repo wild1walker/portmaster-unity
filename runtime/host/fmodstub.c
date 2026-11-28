@@ -17,10 +17,6 @@
 //
 // Handles are numbers, not pointers: a type tag, a slot and its generation (a released instance's
 // handle stops being valid; slots are reused).
-//
-// Floats: the armeabi-v7a player's Mono passes them in core registers (softfp), so the entry
-// points that take a float by value are built for the base AAPCS on 32-bit ARM (pcs("aapcs"));
-// floats returned through pointers need nothing.
 #define _GNU_SOURCE
 #include "fmodstub.h"
 #include "fmplay.h"
@@ -35,11 +31,6 @@
 #include <strings.h>
 #include <unistd.h>
 
-#if defined(__arm__) && defined(__ARM_PCS_VFP)
-#define SOFTFP __attribute__((pcs("aapcs")))
-#else
-#define SOFTFP
-#endif
 
 // FMOD_RESULT values the stand-in uses
 #define OK 0
@@ -182,7 +173,7 @@ static int System_LoadPlugin(uintptr_t s, const char *f, uint32_t *handle, uint3
 static int System_SetUserData(uintptr_t s, uintptr_t u) { (void)s; g_core_user = u; return OK; }
 static int System_GetUserData(uintptr_t s, uintptr_t *u) { (void)s; if (u) *u = g_core_user; return OK; }
 static int g_player;
-SOFTFP static int ChannelGroup_SetVolume(uintptr_t cg, float v) { if (cg == MASTER_CG) { g_master_vol = v; if (g_player) fmp_master_volume(v); } return OK; }
+static int ChannelGroup_SetVolume(uintptr_t cg, float v) { if (cg == MASTER_CG) { g_master_vol = v; if (g_player) fmp_master_volume(v); } return OK; }
 static int System_MixerSuspend(uintptr_t s) { (void)s; if (g_player) fmp_pause_all(1); return OK; }
 static int System_MixerResume(uintptr_t s) { (void)s; if (g_player) fmp_pause_all(0); return OK; }
 static int ChannelGroup_GetVolume(uintptr_t cg, float *v) { if (v) *v = cg == MASTER_CG ? g_master_vol : 1.0f; return OK; }
@@ -476,11 +467,11 @@ static int Studio_EventInstance_Release(uintptr_t e)
     return i > 0 ? OK : ERR_INVALID_HANDLE;
 }
 static int Studio_EventInstance_GetPlaybackState(uintptr_t e, int *st) { int i = INST(e); if (st) *st = i > 0 && g_inst[i].pid ? fmp_state(g_inst[i].pid) : PLAYBACK_STOPPED; return i > 0 ? OK : ERR_INVALID_HANDLE; }
-SOFTFP static int Studio_EventInstance_SetVolume(uintptr_t e, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].vol = v; if (g_inst[i].pid) fmp_set_volume(g_inst[i].pid, v); return OK; }
+static int Studio_EventInstance_SetVolume(uintptr_t e, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].vol = v; if (g_inst[i].pid) fmp_set_volume(g_inst[i].pid, v); return OK; }
 static int Studio_EventInstance_GetVolume(uintptr_t e, float *v, float *fv) { int i = INST(e); float x = i > 0 ? g_inst[i].vol : 0; if (v) *v = x; if (fv) *fv = x; return i > 0 ? OK : ERR_INVALID_HANDLE; }
-SOFTFP static int Studio_EventInstance_SetPitch(uintptr_t e, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].pitch = v; if (g_inst[i].pid) fmp_set_pitch(g_inst[i].pid, v); return OK; }
+static int Studio_EventInstance_SetPitch(uintptr_t e, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].pitch = v; if (g_inst[i].pid) fmp_set_pitch(g_inst[i].pid, v); return OK; }
 static int Studio_EventInstance_GetPitch(uintptr_t e, float *v, float *fv) { int i = INST(e); float x = i > 0 ? g_inst[i].pitch : 0; if (v) *v = x; if (fv) *fv = x; return i > 0 ? OK : ERR_INVALID_HANDLE; }
-SOFTFP static int Studio_EventInstance_SetProperty(uintptr_t e, int k, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (k >= 0 && k < 8) g_inst[i].prop[k] = v; return OK; }
+static int Studio_EventInstance_SetProperty(uintptr_t e, int k, float v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (k >= 0 && k < 8) g_inst[i].prop[k] = v; return OK; }
 static int Studio_EventInstance_GetProperty(uintptr_t e, int k, float *v) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (v) *v = k >= 0 && k < 8 ? g_inst[i].prop[k] : 0; return OK; }
 static int Studio_EventInstance_SetPaused(uintptr_t e, int p) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; g_inst[i].paused = p != 0; if (g_inst[i].pid) fmp_set_paused(g_inst[i].pid, p != 0); return OK; }
 static int Studio_EventInstance_GetPaused(uintptr_t e, int *p) { int i = INST(e); if (i <= 0) return ERR_INVALID_HANDLE; if (p) *p = g_inst[i].paused; return OK; }
@@ -542,7 +533,7 @@ static int Studio_EventInstance_GetParameterByIndex(uintptr_t e, int index, uint
     if (p) *p = h;
     return h ? OK : i > 0 ? ERR_INVALID_PARAM : ERR_INVALID_HANDLE;
 }
-SOFTFP static int Studio_EventInstance_SetParameterValue(uintptr_t e, const char *name, float v)
+static int Studio_EventInstance_SetParameterValue(uintptr_t e, const char *name, float v)
 {
     pthread_mutex_lock(&M);
     int i = INST(e), k = i > 0 && name ? param_for(i, name, -1) : -1;
@@ -550,7 +541,7 @@ SOFTFP static int Studio_EventInstance_SetParameterValue(uintptr_t e, const char
     pthread_mutex_unlock(&M);
     return k > 0 ? OK : ERR_INVALID_HANDLE;
 }
-SOFTFP static int Studio_EventInstance_SetParameterValueByIndex(uintptr_t e, int index, float v)
+static int Studio_EventInstance_SetParameterValueByIndex(uintptr_t e, int index, float v)
 {
     pthread_mutex_lock(&M);
     int i = INST(e), k = i > 0 ? param_for(i, NULL, index) : -1;
@@ -570,7 +561,7 @@ static int Studio_EventInstance_GetParameterValue(uintptr_t e, const char *name,
 }
 #define PARAM(h) SLOT(h, T_PARAM, g_param)
 static int Studio_ParameterInstance_IsValid(uintptr_t p) { int k = PARAM(p); return k > 0 && g_inst[g_param[k].inst].h.used && g_inst[g_param[k].inst].h.gen == g_param[k].inst_gen; }
-SOFTFP static int Studio_ParameterInstance_SetValue(uintptr_t p, float v) { pthread_mutex_lock(&M); int k = PARAM(p); if (k > 0) param_set(k, v); pthread_mutex_unlock(&M); return k > 0 ? OK : ERR_INVALID_HANDLE; }
+static int Studio_ParameterInstance_SetValue(uintptr_t p, float v) { pthread_mutex_lock(&M); int k = PARAM(p); if (k > 0) param_set(k, v); pthread_mutex_unlock(&M); return k > 0 ? OK : ERR_INVALID_HANDLE; }
 static int Studio_ParameterInstance_GetValue(uintptr_t p, float *v) { int k = PARAM(p); if (v) *v = k > 0 ? g_param[k].value : 0; return k > 0 ? OK : ERR_INVALID_HANDLE; }
 static int Studio_ParameterInstance_GetDescription(uintptr_t p, param_desc *out)
 {
@@ -696,7 +687,7 @@ static int Studio_System_Update(uintptr_t s)
 static bus_t *bus_of(uintptr_t h) { int t = h_type(h); int i = t == T_BUS ? SLOT(h, T_BUS, g_bus) : t == T_VCA ? SLOT(h, T_VCA, g_vca) : -1; return i > 0 ? (t == T_BUS ? &g_bus[i] : &g_vca[i]) : NULL; }
 static int Studio_Bus_IsValid(uintptr_t b) { return h_type(b) == T_BUS && bus_of(b) != NULL; }
 static int Studio_VCA_IsValid(uintptr_t b) { return h_type(b) == T_VCA && bus_of(b) != NULL; }
-SOFTFP static int Studio_Bus_SetVolume(uintptr_t b, float v) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->vol = v; if (x->pbus >= 0) fmp_bus_set_volume(x->pbus, v); return OK; }
+static int Studio_Bus_SetVolume(uintptr_t b, float v) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->vol = v; if (x->pbus >= 0) fmp_bus_set_volume(x->pbus, v); return OK; }
 static int Studio_Bus_GetVolume(uintptr_t b, float *v, float *fv) { bus_t *x = bus_of(b); float y = x ? x->vol : 0; if (v) *v = y; if (fv) *fv = y; return x ? OK : ERR_INVALID_HANDLE; }
 static int Studio_Bus_SetPaused(uintptr_t b, int p) { bus_t *x = bus_of(b); if (!x) return ERR_INVALID_HANDLE; x->paused = p != 0; if (x->pbus >= 0) fmp_bus_set_paused(x->pbus, p != 0); return OK; }
 static int Studio_Bus_GetPaused(uintptr_t b, int *p) { bus_t *x = bus_of(b); if (p) *p = x ? x->paused : 0; return x ? OK : ERR_INVALID_HANDLE; }

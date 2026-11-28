@@ -425,26 +425,6 @@ static void compile_ahead(void *m)
     t_compiling = 0;
 }
 
-#if defined(__arm__)
-// Unity 2017.4's armeabi-v7a libmono (Mono 2.6): mono_runtime_class_init_full returns at once when bit 1 of the
-// vtable's byte 0x1b (MonoVTable.initialized) is set, the first thing it tests; its bytes up to there (FNV-1a,
-// as monoinvoke.c checks this build) and mono_runtime_class_init's place are checked before the probe reads it
-static int ran_2017_4(void *klass)
-{
-    void *vt = jitwarm_class_vtable(jitwarm_domain_get(), klass);   // (made if not yet: no managed code runs)
-    return vt && (((const unsigned char *)vt)[0x1b] & 2);
-}
-static int probe_2017_4(void *h)
-{
-    void *ci = so_dlsym(h, "mono_runtime_class_init");
-    uintptr_t bias = 0;
-    if (!ci || !so_module_at(ci, &bias) || (uintptr_t)ci != bias + 0x1f0784) return 0;
-    const unsigned char *p = (const unsigned char *)bias + 0x1f07a8;
-    uint32_t x = 0x811c9dc5u;
-    for (int i = 0; i < 0x3c; i++) x = (x ^ p[i]) * 0x01000193u;
-    return x == 0x6c9a9ab2u;
-}
-#endif
 
 // UA_JIT_WARM_CHECK (Mono 2.6's legacy profiler): the static constructors run, those inside a warm-up compile counted
 static void on_invoke(void *prof, void *method)
@@ -701,9 +681,6 @@ static void install(void)
         g_on = 0;
         return;
     }
-#if defined(__arm__)
-    if (legacy && !g_probe && probe_2017_4(h)) jitwarm_set_probe(ran_2017_4, 0);
-#endif
     read_list(LIST);
     size_t own_n = g_list_n; long own_stale = g_stale;
     read_list(SEED);

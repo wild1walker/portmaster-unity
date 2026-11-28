@@ -1,4 +1,4 @@
-/* End-to-end test of the C UnityPlayer against a fake libmain/libunity (softfp on ARM), once per
+/* End-to-end test of the C UnityPlayer against a fake libmain/libunity, once per
  * Unity version shape (fake_unity.h): each runs in its own process (the player is a singleton).
  *   test_unityplayer            all shapes
  *   test_unityplayer <n>        shape n only (0 = 2017.4.9 ... 6 = 2022.3) */
@@ -14,8 +14,8 @@
 int fake_unity_get(int i);
 void fake_unity_set_shape(int shape);
 jobject fake_unity_proxy(void);
-jint FJ_ABI fake_libmain_onload(JavaVM *vm, void *reserved);
-jint FJ_ABI fake_libunity_onload(JavaVM *vm, void *reserved);
+jint fake_libmain_onload(JavaVM *vm, void *reserved);
+jint fake_libunity_onload(JavaVM *vm, void *reserved);
 static int no_libmain;     /* the newest shape once more without libmain: libunity's JNI_OnLoad called directly (Unity 7) */
 void fake_unity_soft_input(int op, int arg);
 const char *fake_unity_si_seq(void);

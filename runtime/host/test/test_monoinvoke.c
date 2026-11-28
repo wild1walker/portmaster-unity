@@ -24,11 +24,6 @@
 static int failures;
 #define CHECK(c, ...) do { if (!(c)) { failures++; fprintf(stderr, "FAIL %s:%d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
-#if defined(__arm__)
-// monoinvoke.c's UA_MONO_TLS patches with unityhooks.c, not linked here (its load hook is not exercised)
-int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig);
-int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig) { (void)fn; (void)isa; (void)to; (void)orig; return -1; }
-#endif
 
 // ---- the double's Mono ----
 struct method { uint16_t flags; unsigned char head[18], bits[4]; uint32_t token; const char *name; void *vtable; int dyn, throws, events_on; };   // flags at 0, bits at 20, as in Mono
@@ -209,45 +204,6 @@ static void run_tscript(void *(*inv)(void *, void *, void **, void **), struct d
     prof_events = 0; no_exec = 0;
 }
 
-#if defined(__arm__)
-#include <sys/auxv.h>
-// ---- UA_MONO_DIV: the replacements against C's division, with doubles of Mono's originals (which only see a
-// divisor of 0, or -1 signed: their exceptions, here marked results)
-static int div_orig_calls;
-static int32_t d_idiv(int32_t a, int32_t b) { div_orig_calls++; return b == 0 ? 0x7777 : a == INT32_MIN ? 0x6666 : -a; }
-static int32_t d_irem(int32_t a, int32_t b) { div_orig_calls++; return b == 0 ? 0x5555 : a == INT32_MIN ? 0x4444 : 0; }
-static uint32_t d_idiv_un(uint32_t a, uint32_t b) { div_orig_calls++; (void)a; (void)b; return 0x3333; }
-static uint32_t d_irem_un(uint32_t a, uint32_t b) { div_orig_calls++; (void)a; (void)b; return 0x2222; }
-static void div_check(int hw)
-{
-    struct monoinvoke_div o = { d_idiv, d_irem, d_idiv_un, d_irem_un }, f;
-    monoinvoke_div_start(&o, hw, &f);
-    static const int32_t v[] = { 0, 1, -1, 2, -2, 3, -3, 7, -7, 10, -10, 16, -16, 255, 256, -256, 1000, -1000, 65535, -65536,
-                                 0x12345678, -0x12345678, INT32_MAX, INT32_MIN, INT32_MAX - 1, INT32_MIN + 1 };
-    int n = (int)(sizeof v / sizeof *v), bad = 0, expect_orig = 0;
-    div_orig_calls = 0;
-    uint32_t x = 2463534242u;
-    for (int i = 0; i < n * n + 200000; i++) {
-        int32_t a, b;
-        if (i < n * n) { a = v[i / n]; b = v[i % n]; }
-        else { x ^= x << 13; x ^= x >> 17; x ^= x << 5; a = (int32_t)x; x ^= x << 13; x ^= x >> 17; x ^= x << 5; b = (int32_t)(x >> (x & 31)); }
-        int32_t q = f.idiv(a, b), r = f.irem(a, b);
-        uint32_t uq = f.idiv_un((uint32_t)a, (uint32_t)b), ur = f.irem_un((uint32_t)a, (uint32_t)b);
-        if (b == 0 || b == -1) {
-            expect_orig += 2;
-            if (q != d_idiv(a, b) || r != d_irem(a, b)) bad++;
-            div_orig_calls -= 2;
-        } else if (q != a / b || r != a % b) bad++;
-        if (b == 0) {
-            expect_orig += 2;
-            if (uq != 0x3333 || ur != 0x2222) bad++;
-        } else if (uq != (uint32_t)a / (uint32_t)b || ur != (uint32_t)a % (uint32_t)b) bad++;
-    }
-    CHECK(!bad, "UA_MONO_DIV (%s): %d results differ from C's division", hw ? "SDIV/UDIV" : "C divide", bad);
-    CHECK(div_orig_calls == expect_orig, "UA_MONO_DIV (%s): the originals called %d times, want %d (divisor 0, or -1 signed)",
-          hw ? "SDIV/UDIV" : "C divide", div_orig_calls, expect_orig);
-}
-#endif
 
 int main(void)
 {
@@ -347,12 +303,6 @@ int main(void)
     for (int i = 0; i < 4; i++) pthread_create(&t[i], NULL, hammer, &a);
     for (int i = 0; i < 4; i++) pthread_join(t[i], NULL);
     CHECK(monoinvoke_cached() == cached + N, "threads: %d cached, want %d", monoinvoke_cached(), cached + N);
-#if defined(__arm__)
-    div_check(0);
-    unsigned long hw = getauxval(AT_HWCAP);
-    if ((hw & (1ul << 17)) && (hw & (1ul << 18))) div_check(1);
-    else fprintf(stderr, "test_monoinvoke: no SDIV/UDIV on this CPU: the C divide only\n");
-#endif
     fprintf(stderr, "test_monoinvoke: %s (%d methods cached; the original %d times for 400,000 calls)\n",
             failures ? "FAILED" : "ok", monoinvoke_cached(), orig_calls);
     return failures != 0;

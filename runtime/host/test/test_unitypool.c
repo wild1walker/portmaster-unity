@@ -20,9 +20,8 @@ int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig) { (void)fn; (
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
-// ---- the model: DataBufferGLES and the manager with their fields where the layout of this pointer width
-// has them (the 32-bit player: size 0x8, owner 0xc, usage 0x10, drawn 0x24; frame 0x0, done 0xa4; the
-// 64-bit one: 0x10, 0x18, 0x20, 0x34; 0x0, 0x148), with ids of our own after the fields Unity's code reads
+// ---- the model: DataBufferGLES and the manager with their fields where the arm64 player's layout has them
+// (size 0x10, owner 0x18, usage 0x20, drawn 0x34; frame 0x0, done 0x148), with ids of our own after the fields Unity's code reads
 typedef struct { _Alignas(16) uint8_t f[0x40]; int id, where; } dbuf;   // where: 0 in use, 1 model free, 2 model pending, 3 deleted
 enum { USED, MFREE, MPEND, GONE };
 static _Alignas(16) uint8_t g_mgr[0x150];
@@ -224,8 +223,8 @@ static void reset(void)
 
 int main(void)
 {
-    L = &g_layouts[sizeof(void *) == 4 ? 0 : 1];        // the layout whose field sizes this build reads
-    CHECK((strstr(L->unity, "arm64") != NULL) == (sizeof(void *) == 8), "layout %s on %zu-byte pointers", L->unity, sizeof(void *));
+    L = &g_layouts[0];                                  // the arm64 player's layout (the only one)
+    CHECK(strstr(L->unity, "arm64") != NULL, "layout %s", L->unity);
     CAPS_MIN = 1024;
     o_acquire = m_acquire; o_release = m_release; o_live = m_live; o_prune = m_prune;
     o_clear = m_clear; o_invalidate = m_clear; o_dtor = NULL; o_caps = m_caps;

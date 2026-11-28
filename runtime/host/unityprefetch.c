@@ -76,7 +76,6 @@
 enum { STUB_BEH, STUB_SPRITE, STUB_CULL, STUB_PLAY, STUB_PS, STUB_ANIM, STUB_N };
 static const char *const g_stub_name[STUB_N] = { "beh", "sprite", "cull", "play", "ps", "anim" };
 
-#if defined(__aarch64__)
 // The stubs: position-independent code copied into a page near libunity. Each ends in four words the installer
 // fills with the jump to the callee (`b`, or `ldr x16, #8; br x16; <address>`), then its literals.
 __asm__(
@@ -278,7 +277,6 @@ extern const uint8_t ua_pf_anim_start[], ua_pf_anim_tail[], ua_pf_anim_end[];
 static const uint8_t *const g_stub_start[STUB_N] = { ua_pf_beh_start, ua_pf_sprite_start, ua_pf_cull_start, ua_pf_play_start, ua_pf_ps_start, ua_pf_anim_start };
 static const uint8_t *const g_stub_tail[STUB_N] = { ua_pf_beh_tail, ua_pf_sprite_tail, ua_pf_cull_tail, ua_pf_play_tail, ua_pf_ps_tail, ua_pf_anim_tail };
 static const uint8_t *const g_stub_end[STUB_N] = { ua_pf_beh_end, ua_pf_sprite_end, ua_pf_cull_end, ua_pf_play_end, ua_pf_ps_end, ua_pf_anim_end };
-#endif
 
 // a call site: the function (its row), the `bl` in it, the function it calls (its row), the stub
 struct pf_site {
@@ -414,10 +412,6 @@ void unityprefetch_on_load(uintptr_t base, size_t size)
     int asked = v && *v;
     if (!asked) v = "beh,sprite,cull,play";     // the default (ps: measured apart); a player without rows: silently none
     if (!strcmp(v, "0")) return;
-#if !defined(__aarch64__)
-    (void)base; (void)size;
-    if (asked) fprintf(stderr, "[unityprefetch] UA_PREFETCH: the 64-bit player's sites only; nothing on this build\n");
-#else
     for (size_t k = 0; k < sizeof g_players / sizeof *g_players; k++) {
         const struct pf_player *p = &g_players[k];
         int any = 0, ok = 1;
@@ -490,5 +484,4 @@ void unityprefetch_on_load(uintptr_t base, size_t size)
         return;
     }
     if (asked) fprintf(stderr, "[unityprefetch] this libunity.so is not one whose loops were read (pmu-dev unityhooks); no prefetch\n");
-#endif
 }

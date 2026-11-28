@@ -1,4 +1,4 @@
-// Device check for the native Android-player route: can a 32-bit (armhf) program draw with the
+// Device check for the native Android-player route: can a program draw with the
 // RGSP's Mali GPU through EGL on the fbdev window? Clears the screen red, green, blue, ... and times
 // the swaps. Build: host/build.sh; run on the device: ./egltest [seconds]
 //

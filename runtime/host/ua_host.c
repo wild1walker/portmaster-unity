@@ -1,7 +1,7 @@
 #define _GNU_SOURCE
 // ua_host: runs a Unity game with Unity's own Android player (libmain.so, libunity.so,
 // libmono.so or libil2cpp.so) natively on an ARM Linux handheld, no Android system and no
-// emulator: the armeabi-v7a player in a 32-bit (armhf) build, the arm64-v8a one in an aarch64 build.
+// emulator: the arm64-v8a player in an aarch64 build.
 //   ../loader   maps the Android libraries; bionic -> glibc through libhybris's hooks
 //   ../android  liblog, libandroid (window, looper, sensors), OpenSL ES (SDL2), EGL glue (Mali fbdev)
 //   display.c   the EGL window Unity draws into: Mali fbdev, or an SDL2 window (UA_DISPLAY)
@@ -22,7 +22,6 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "uinav.h"
 #include "monoinvoke.h"
 #include "icallcount.h"
-#include "unityicalls.h"
 #include "jitlog.h"
 #include "monoaot.h"
 #include "jitwarm.h"
@@ -58,7 +57,6 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include "plugins.h"
 #include "mono64.h"
 #include "unityhooks.h"
-#include "unitylayers.h"
 #include "fmodasync.h"
 #include "monodump.h"
 #include "memledger.h"
@@ -75,9 +73,6 @@ void up_media_init(void);                  /* ../jni/up_media.c */
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
-#if defined(__arm__)
-#include <sys/personality.h>
-#endif
 
 static char libdir[512];
 
@@ -174,19 +169,14 @@ static void read_package_json(const char *root)
     pj_compute_group = json_int(js, "compute_group");
 }
 
-// Build.VERSION.SDK_INT. Converted desktop data: 4.4 (API 19) as the 32-bit ports were made with
-// (Cuphead's 2017.4 player among them), 5.1 (API 22) for 64-bit players (64-bit Android starts at
-// API 21), or the data's min_sdk where android-data wrote one (22 for a game with compute kernels:
+// Build.VERSION.SDK_INT. Converted desktop data: 5.1 (API 22) (64-bit Android starts at API 21),
+// or the data's min_sdk where android-data wrote one (22 for a game with compute kernels:
 // Unity's Android players create OpenGL ES 3.1+ contexts, and so run compute shaders and GLES 3.1
 // programs, only from Android 5.0, API 21); the loader's ro.build.version.sdk says the same. An
 // imported Android build (pmu apk): its targetSdkVersion, the Android its makers tested it on,
 // but at most SDK_CAP and at least its minSdkVersion (a phone it installs on has that). UA_SDK_INT
 // overrides.
-#if defined(__aarch64__)
 #define BASE_SDK 22
-#else
-#define BASE_SDK 19
-#endif
 #define SDK_CAP 33
 static int reported_sdk(void)
 {
@@ -404,13 +394,11 @@ static void *dlsym_hook(const char *sym, void *p)
 {
     p = plugins_dlsym_hook(sym, p);            // FMOD's file paths (plugins.c)
     p = framerate_dlsym_hook(sym, p);          // UA_FRAME_RATE (framerate.c)
-    p = unitylayers_dlsym_hook(sym, p);        // UaHost::LayersInScene (unitylayers.c)
     p = gcbudget_dlsym_hook(sym, p);           // UA_GC_BUDGET (gcbudget.c)
     p = quality_dlsym_hook(sym, p);            // the quality profile's caps (quality.c)
     p = desktopenv_dlsym_hook(sym, p);         // the command line, Screen.resolutions (desktopenv.c)
     p = monoinvoke_dlsym_hook(sym, p);         // UA_MONO_INVOKE: the runtime invoke's cache (monoinvoke.c)
     p = icallcount_dlsym_hook(sym, p);         // UA_ICALL_COUNT: the engine's internal calls counted (icallcount.c)
-    p = unityicalls_dlsym_hook(sym, p);        // UA_PROPERTY_ID: engine calls answered from earlier answers (unityicalls.c)
     p = monoimage_dlsym_hook(sym, p);          // UA_MONO_IMAGE_MAP: the assemblies read in place from the APK (monoimage.c)
     p = fmodasync_dlsym_hook(sym, p);          // UA_FMOD_ASYNC: managed code waits for FMOD's update (fmodasync.c)
     p = lockstep_dlsym_hook(sym, p);           // UA_LOCKSTEP: the clocks a check run fixes (lockstep.c)
@@ -528,27 +516,12 @@ static void *after_glmemo(const char *name)
 }
 
 // UnityMain, after each frame
-static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); guiwarm_frame(); unityhooks_frame(); fmodasync_frame(); unitylayers_frame(); monodump_frame(); icallcount_frame(); unityicalls_frame(); lockstep_frame(); }
+static void on_frame(void *user) { input_main_frame(); framerate_frame(user); gcbudget_frame(user); quality_frame(user); uinav_frame(user); prof_main_frame(); jitlog_frame(); jitwarm_frame(); guiwarm_frame(); unityhooks_frame(); fmodasync_frame(); monodump_frame(); icallcount_frame(); lockstep_frame(); }
 
 static volatile int quitting;
 static void on_quit(void *user) { (void)user; quitting = 1; }
 static void on_signal(int s) { (void)s; quitting = 1; }
 
-#if defined(__arm__)
-// A 32-bit player on a 64-bit ARM kernel runs with the PER_LINUX32 personality, as Android's 32-bit
-// app processes do: /proc/cpuinfo then shows the 32-bit view (neon, vfpv3, ...) and uname "armv8l".
-// Without it the kernel prints the AArch64 format, and Unity 2019.4+'s CPU detection takes the
-// player for ARM64; its FMOD then crashes registering its audio output. UA_LINUX32=0: leave it.
-static void linux32_personality(void)
-{
-    struct utsname u;
-    const char *e = getenv("UA_LINUX32");
-    if ((e && !strcmp(e, "0")) || uname(&u) != 0 || strcmp(u.machine, "aarch64") != 0) return;
-    int p = personality(0xffffffff);
-    if (p != -1 && (p & PER_MASK) != PER_LINUX32 && personality((p & ~PER_MASK) | PER_LINUX32) != -1)
-        fprintf(stderr, "[host] 64-bit kernel: PER_LINUX32 personality (32-bit /proc/cpuinfo, as on Android)\n");
-}
-#endif
 
 #if defined(__LP64__) && defined(__GLIBC__)
 #include <malloc.h>
@@ -573,9 +546,6 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     gldriver_early(argv);                           // UA_GL_DRIVER=mesa: started again with Mesa's libraries (gldriver.c)
     malloc_setup();
-#if defined(__arm__)
-    linux32_personality();
-#endif
     // Mono's Boehm collector starts with a 64 MB heap instead of growing from ~15 MB: in a fight it
     // collects about half as often (each collection is a 140-280 ms frame on the handheld) for ~7 MB
     // more resident memory. GC_INITIAL_HEAP_SIZE set by the caller wins (UA_GC_HEAP=0: Boehm's default).

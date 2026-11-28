@@ -1,6 +1,5 @@
 /*
- * so_loader.c - ELF loader for Android ARM shared libraries on glibc: armeabi-v7a (ELF32, REL
- * relocations) on armhf, arm64-v8a (ELF64, RELA) on aarch64. See so_loader.h. Our own code; ideas
+ * so_loader.c - ELF loader for Android arm64-v8a shared libraries (ELF64, RELA) on aarch64 glibc. See so_loader.h. Our own code; ideas
  * from the Vita so_util.c and gmloader.
  */
 #define _GNU_SOURCE
@@ -24,23 +23,11 @@
 #include "relayout.h"
 
 /* the one kind of Android library this build loads: the host's own architecture */
-#if defined(__aarch64__)
 #define SO_ELFCLASS ELFCLASS64
 #define SO_MACHINE  EM_AARCH64
 #define SO_ARCH     "AArch64 (arm64-v8a)"
-#elif defined(__arm__)
-#define SO_ELFCLASS ELFCLASS32
-#define SO_MACHINE  EM_ARM
-#define SO_ARCH     "ARM32 (armeabi-v7a)"
-#else
-#error "so_loader runs Android ARM code: build it for armhf or aarch64"
-#endif
 /* ELF32_ / ELF64_ macros of that class (link.h's ElfW names the types only) */
-#if defined(__LP64__)
 #define ELFW(x) ELF64_##x
-#else
-#define ELFW(x) ELF32_##x
-#endif
 
 #ifndef PT_ARM_EXIDX
 #define PT_ARM_EXIDX 0x70000001
@@ -73,7 +60,7 @@
 #ifndef R_ARM_IRELATIVE
 #define R_ARM_IRELATIVE 160
 #endif
-#if defined(__aarch64__) && !defined(R_AARCH64_TLS_DTPMOD)   /* older elf.h: the ...64 names */
+#if !defined(R_AARCH64_TLS_DTPMOD)   /* older elf.h: the ...64 names */
 #define R_AARCH64_TLS_DTPMOD 1028
 #define R_AARCH64_TLS_DTPREL 1029
 #define R_AARCH64_TLS_TPREL  1030
@@ -82,15 +69,9 @@
 /* bionic dlfcn values: LP32 and LP64 differ */
 #define B_RTLD_LAZY    1
 #define B_RTLD_NOLOAD  4
-#if defined(__LP64__)
 #define B_RTLD_GLOBAL  0x100
 #define B_RTLD_DEFAULT ((void *)0)
 #define B_RTLD_NEXT    ((void *)-1L)
-#else
-#define B_RTLD_GLOBAL  2
-#define B_RTLD_DEFAULT ((void *)0xffffffff)
-#define B_RTLD_NEXT    ((void *)0xfffffffe)
-#endif
 /* NULL, RTLD_DEFAULT, RTLD_NEXT and the other top values: never one of our handles */
 #define PSEUDO_HANDLE(h) (!(h) || (uintptr_t)(h) >= (uintptr_t)-16)
 
@@ -149,7 +130,6 @@ struct so_module {
     void (**preinit_array)(int, char **, char **); size_t npreinit_array;
     void (*fini)(void);
     void (**fini_array)(void); size_t nfini_array;
-    uintptr_t exidx; int exidx_count;
     int symbolic;
     int textrel;
     int ready;               /* relocated and protected: its IFUNC resolvers can run */
@@ -543,8 +523,6 @@ static void *host_lookup(const char *name)
     void *p = NULL;
     for (int i = 0; i < g_nhost_libs && !p; i++) p = dlsym(g_host_libs[i], name);
     if (!p) p = dlsym(RTLD_DEFAULT, name);
-    if (p) p = so_softfp_wrap(name, p);
-    else p = so_softfp_static(name);
     return p;
 }
 
@@ -577,11 +555,7 @@ static void so_unresolved_called(const char *name)
 }
 
 /* a stub per unresolved function: so_unresolved_called(name). Sizes in 32-bit words */
-#if defined(__aarch64__)
 #define STUB_WORDS 8
-#else
-#define STUB_WORDS 4
-#endif
 
 static void *make_stub(const char *name)
 {
@@ -599,7 +573,6 @@ static void *make_stub(const char *name)
     if (!rwx) mprotect(page, PAGE_SZ, PROT_READ | PROT_WRITE);
     uint32_t *s = page + used;
     used += STUB_WORDS;
-#if defined(__aarch64__)
     void (*fn)(const char *) = so_unresolved_called;
     s[0] = 0x58000080;                 /* ldr x0, #16   (-> s[4..5]) */
     s[1] = 0x580000b0;                 /* ldr x16, #20  (-> s[6..7]) */
@@ -607,12 +580,6 @@ static void *make_stub(const char *name)
     s[3] = 0xd503201f;                 /* nop */
     memcpy(s + 4, &name, sizeof name);
     memcpy(s + 6, &fn, sizeof fn);
-#else
-    s[0] = 0xe59f0000;                 /* ldr r0, [pc, #0]  (-> s[2]) */
-    s[1] = 0xe59ff000;                 /* ldr pc, [pc, #0]  (-> s[3]) */
-    s[2] = (uint32_t)(uintptr_t)name;
-    s[3] = (uint32_t)(uintptr_t)so_unresolved_called;
-#endif
     __builtin___clear_cache((char *)s, (char *)(s + STUB_WORDS));
     if (!rwx) mprotect(page, PAGE_SZ, PROT_READ | PROT_EXEC);
     so_unlock();
@@ -736,12 +703,8 @@ static int in_image(const so_module *m, const void *p)
  * _IFUNC_ARG_HWCAP flag and a struct with both words) */
 static uintptr_t call_ifunc(uintptr_t resolver)
 {
-#if defined(__aarch64__)
     struct { unsigned long size, hwcap, hwcap2; } arg = { sizeof arg, getauxval(AT_HWCAP), getauxval(AT_HWCAP2) };
     return ((uintptr_t (*)(uint64_t, void *))resolver)(arg.hwcap | (1ull << 62), &arg);
-#else
-    return ((uintptr_t (*)(unsigned long))resolver)(getauxval(AT_HWCAP));
-#endif
 }
 
 static int reloc_one(relctx *c, const reloc_t *r, int rela)
@@ -750,36 +713,18 @@ static int reloc_one(relctx *c, const reloc_t *r, int rela)
     uint32_t type = ELFW(R_TYPE)(r->info);
     uint32_t sym = ELFW(R_SYM)(r->info);
     uintptr_t *P = (uintptr_t *)(m->bias + r->offset);
-#if defined(__aarch64__)
     if (type == R_AARCH64_NONE || type == 256 /* R_AARCH64_NONE of the first ABI release */) return 0;
-#else
-    if (type == R_ARM_NONE) return 0;
-#endif
     if (!in_image(m, P)) {
         set_err("%s: relocation type %u outside the image (offset 0x%lx)", m->name, type, (unsigned long)r->offset);
         return -1;
     }
     uintptr_t A = rela ? (uintptr_t)r->addend : *P, S = 0, add;
     switch (type) {
-#if defined(__aarch64__)
     case R_AARCH64_ABS64:
-#else
-    case R_ARM_ABS32:
-#endif
         add = A;
         goto symbolic;
-#if defined(__arm__)
-    case R_ARM_REL32:
-        add = A - (uintptr_t)P;
-        goto symbolic;
-#endif
-#if defined(__aarch64__)
     case R_AARCH64_GLOB_DAT:
     case R_AARCH64_JUMP_SLOT:
-#else
-    case R_ARM_GLOB_DAT:
-    case R_ARM_JUMP_SLOT:
-#endif
         /* the Android linker adds RELA addends here too; a REL word in place is not an addend */
         add = rela ? A : 0;
     symbolic:
@@ -787,37 +732,19 @@ static int reloc_one(relctx *c, const reloc_t *r, int rela)
         if (sym && sym < m->nsyms && c->done[sym] == SELF_IFUNC) defer_ifunc(c, P, S, add);
         else *P = S + add;
         break;
-#if defined(__aarch64__)
     case R_AARCH64_RELATIVE:
-#else
-    case R_ARM_RELATIVE:
-#endif
         *P = m->bias + A;
         break;
-#if defined(__aarch64__)
     case R_AARCH64_IRELATIVE:
-#else
-    case R_ARM_IRELATIVE:
-#endif
         defer_ifunc(c, P, m->bias + A, 0);
         break;
-#if defined(__aarch64__)
     case R_AARCH64_COPY:
-#else
-    case R_ARM_COPY:
-#endif
         set_err("%s: COPY relocation in a shared library", m->name);
         return -1;
-#if defined(__aarch64__)
     case R_AARCH64_TLS_DTPMOD:
     case R_AARCH64_TLS_DTPREL:
     case R_AARCH64_TLS_TPREL:
     case R_AARCH64_TLSDESC:
-#else
-    case R_ARM_TLS_DTPMOD32:
-    case R_ARM_TLS_DTPOFF32:
-    case R_ARM_TLS_TPOFF32:
-#endif
         set_err("%s: TLS relocation %u not supported", m->name, type);
         return -1;
     default:
@@ -947,7 +874,6 @@ static int relocate(relctx *c)
 /* ------------------------------------------------------------------------ */
 /* bionic's thread slots (AArch64): see so_loader.h */
 
-#if defined(__aarch64__)
 #define BIONIC_TLS_FIRST 2          /* slots 0 and 1 are glibc's TCB (dtv, unused word) */
 #define BIONIC_TLS_GUARD 5          /* TLS_SLOT_STACK_GUARD, tpidr_el0 + 0x28 */
 #define BIONIC_TLS_LAST 7           /* TLS_SLOT_ART_THREAD_SELF: the last of bionic's fixed slots */
@@ -976,7 +902,6 @@ static int bionic_tls_check(void)
             "an initial value or an alignment above 16 (so_loader.h)", (void *)&bionic_tls[0], (void *)(tp + 16));
     return -1;
 }
-#endif
 
 /* ------------------------------------------------------------------------ */
 /* bionic's TLS_SLOT_THREAD_ID (both architectures; so_loader.h) */
@@ -993,12 +918,7 @@ static int bionic_tls_check(void)
 static inline uintptr_t *thread_pointer(void)
 {
     uintptr_t *tp;
-#if defined(__aarch64__)
     __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
-#else
-    __asm__ volatile("mrc p15, 0, %0, c13, c0, 3" : "=r"(tp));
-    tp = (uintptr_t *)((uintptr_t)tp & ~(uintptr_t)3);
-#endif
     return tp;
 }
 
@@ -1279,11 +1199,7 @@ static int parse_dynamic(so_module *m)
     }
     if (!m->symtab || !m->strtab) { set_err("%s: no dynamic symbol table", m->name); return -1; }
     /* the PLT's table: DT_PLTREL says which kind; without it, the architecture's own */
-#if defined(__aarch64__)
     if (pltrel < 0) pltrel = DT_RELA;
-#else
-    if (pltrel < 0) pltrel = DT_REL;
-#endif
     if (m->jmprel && pltrel != DT_REL && pltrel != DT_RELA) {
         set_err("%s: DT_PLTREL is %ld", m->name, (long)pltrel);
         return -1;
@@ -1368,9 +1284,7 @@ static so_module *load_locked(const char *path, const so_shim *shims, int depth)
     if (m) return m;
     libmap_defaults();
 
-#if defined(__aarch64__)
     if (bionic_tls_check() < 0) return NULL;
-#endif
     so_thread_slots();
     /* segments are mapped and protected in 4 KiB pages: a kernel with larger ones (some arm64
      * kernels use 16 or 64 KiB) cannot place them */
@@ -1415,12 +1329,6 @@ static so_module *load_locked(const char *path, const so_shim *shims, int depth)
     for (int i = 0; i < eh.e_phnum; i++) {
         switch (ph[i].p_type) {
         case PT_DYNAMIC: m->dyn = (ElfW(Dyn) *)(m->bias + ph[i].p_vaddr); break;
-#if defined(__arm__)
-        case PT_ARM_EXIDX:
-            m->exidx = m->bias + ph[i].p_vaddr;
-            m->exidx_count = ph[i].p_memsz / 8;
-            break;
-#endif
         case PT_GNU_RELRO:
             m->relro_start = PAGE_DOWN(m->bias + ph[i].p_vaddr);
             m->relro_end = PAGE_DOWN(m->bias + ph[i].p_vaddr + ph[i].p_memsz);
@@ -1534,64 +1442,6 @@ void so_run_fini(so_module *m)
 }
 
 /* ------------------------------------------------------------------------ */
-/* EHABI (ARM32 only): exidx lookup. AArch64 unwinds with .eh_frame, found through
- * dl_iterate_phdr (so_dl_iterate_phdr below) */
-
-#if defined(__arm__)
-struct exidx_q { uintptr_t pc; uintptr_t exidx; int count; };
-
-static int exidx_cb(struct dl_phdr_info *info, size_t size, void *data)
-{
-    (void)size;
-    struct exidx_q *q = data;
-    int match = 0;
-    uintptr_t ex = 0; int cnt = 0;
-    for (int i = 0; i < info->dlpi_phnum; i++) {
-        const ElfW(Phdr) *p = &info->dlpi_phdr[i];
-        if (p->p_type == PT_LOAD) {
-            uintptr_t s = info->dlpi_addr + p->p_vaddr;
-            if (q->pc >= s && q->pc < s + p->p_memsz) match = 1;
-        } else if (p->p_type == PT_ARM_EXIDX) {
-            ex = info->dlpi_addr + p->p_vaddr;
-            cnt = p->p_memsz / 8;
-        }
-    }
-    if (match) { q->exidx = ex; q->count = cnt; return 1; }
-    return 0;
-}
-
-uintptr_t so_find_exidx(uintptr_t pc, int *pcount)
-{
-    for (so_module *m = g_modules; m; m = m->next) {
-        if (pc >= m->map_start && pc < m->map_start + m->map_size) {
-            *pcount = m->exidx_count;
-            return m->exidx;
-        }
-    }
-    struct exidx_q q = { pc, 0, 0 };
-    if (dl_iterate_phdr(exidx_cb, &q)) {
-        *pcount = q.count;
-        return q.exidx;
-    }
-    *pcount = 0;
-    return 0;
-}
-
-/* interposes glibc's version for the host libgcc_s unwinder (export it!) */
-__attribute__((visibility("default"))) uintptr_t __gnu_Unwind_Find_exidx(uintptr_t pc, int *pcount)
-{
-    return so_find_exidx(pc, pcount);
-}
-#else
-uintptr_t so_find_exidx(uintptr_t pc, int *pcount)
-{
-    (void)pc;
-    *pcount = 0;
-    return 0;
-}
-#endif
-
-/* ------------------------------------------------------------------------ */
 /* UA_RELAYOUT (AArch64): copies of a module's hot functions laid out together (relayout.c) */
 
 typedef struct relregion {
@@ -1620,7 +1470,6 @@ uintptr_t so_relayout_orig(uintptr_t a)
     return o ? (uintptr_t)o : a;
 }
 
-#if defined(__aarch64__)
 static void relayout_why(uint64_t start, const char *reason, void *ud)
 {
     int *n = ud;
@@ -1885,10 +1734,6 @@ int so_atomics_llsc(so_module *m)
     fprintf(stderr, "[relayout] %s: %d outline-atomic helpers go straight to their LL/SC loops (this CPU has no LSE)\n", m->name, n);
     return n;
 }
-#else
-int so_relayout(so_module *m, const char *list, int flags) { (void)m; (void)list; (void)flags; return -1; }
-int so_atomics_llsc(so_module *m) { (void)m; return -1; }
-#endif
 
 /* ------------------------------------------------------------------------ */
 /* dl* shims for Android code */
@@ -1915,11 +1760,9 @@ static const char *(*g_dlopen_rewrite)(const char *path, char *buf, size_t size)
 void so_set_dlopen_rewrite(const char *(*rewrite)(const char *, char *, size_t)) { g_dlopen_rewrite = rewrite; }
 /* ICU: Android has it as a system library (libicuuc.so, libicui18n.so), which .NET's globalization code in newer
  * IL2CPP players dlopens and probes for its versioned symbols (u_getVersion_NN); the handheld's own ICU stands in
- * for it, the newest of the usual folders. AArch64 only: ICU passes dates as doubles, which a 32-bit Android
- * (softfp) caller cannot hand to a glibc armhf library unconverted. */
+ * for it, the newest of the usual folders. */
 static int host_icu(const char *b, char *out, size_t n)
 {
-#if defined(__aarch64__)
     const char *lib = !strncmp(b, "libicuuc", 8) ? "libicuuc" : !strncmp(b, "libicui18n", 10) ? "libicui18n" : NULL;
     if (!lib) return 0;
     static const char *dirs[] = { "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu", "/usr/lib64", "/usr/lib", "/lib" };
@@ -1938,9 +1781,6 @@ static int host_icu(const char *b, char *out, size_t n)
         globfree(&g);
         if (best >= 0) return 1;
     }
-#else
-    (void)b; (void)out; (void)n;
-#endif
     return 0;
 }
 
@@ -2043,7 +1883,6 @@ void *so_dlsym(void *handle, const char *symbol)
     } else if (h->kind == H_HOST) {
         if (!shims_lookup(symbol, &p) || !p) {
             p = dlsym(h->host, symbol);
-            p = p ? so_softfp_wrap(symbol, p) : so_softfp_static(symbol);
         }
     } else if (h->kind == H_FAKE) {
         int found = 0;
@@ -2104,11 +1943,7 @@ int so_dladdr(const void *addr, Dl_info *info)
             if (s->st_shndx == SHN_UNDEF || !s->st_value) continue;
             int t = ELFW(ST_TYPE)(s->st_info);
             if (t != STT_FUNC && t != STT_OBJECT) continue;
-#if defined(__arm__)
-            uintptr_t sa = (m->bias + s->st_value) & ~(uintptr_t)1;   /* Thumb bit */
-#else
             uintptr_t sa = m->bias + s->st_value;
-#endif
             if (sa <= a && sa > best && (a < sa + s->st_size || s->st_size == 0)) {
                 best = sa;
                 info->dli_sname = m->strtab + s->st_name;
@@ -2165,11 +2000,6 @@ int so_dl_iterate_phdr(int (*cb)(struct dl_phdr_info *, size_t, void *), void *d
         if (r) return r;
     }
     return dl_iterate_phdr(cb, data);
-}
-
-uintptr_t so_dl_unwind_find_exidx(uintptr_t pc, int *pcount)
-{
-    return so_find_exidx(pc, pcount);
 }
 
 void *so_android_dlopen_ext(const char *filename, int flags, const void *extinfo)

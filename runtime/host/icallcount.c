@@ -35,12 +35,7 @@ static const char *g_names[NMAX + AMAX];
 static uint32_t g_counts[NMAX + AMAX];
 static unsigned g_n, g_an;
 static double g_api_every;        // UA_API_COUNT
-#if defined(__arm__) || defined(__aarch64__)
-#if defined(__arm__)
-#define TW 9                      // a thunk's words
-#else
 #define TW 10
-#endif
 static uint32_t *g_code;          // the thunks, TW words each
 static size_t g_code_words;
 
@@ -54,25 +49,6 @@ static uint32_t *thunk_mem(unsigned i)
     }
     return g_code + TW * i;
 }
-#endif
-#if defined(__arm__)
-static const void *thunk(unsigned i, const void *fn)
-{
-    uint32_t *t = thunk_mem(i);
-    if (!t) return NULL;
-    t[0] = 0xe92d0003u;                 // push {r0, r1}
-    t[1] = 0xe59f0010u;                 // ldr r0, [pc, #16]   (t[7]: the counter)
-    t[2] = 0xe5901000u;                 // ldr r1, [r0]
-    t[3] = 0xe2811001u;                 // add r1, r1, #1
-    t[4] = 0xe5801000u;                 // str r1, [r0]
-    t[5] = 0xe8bd0003u;                 // pop {r0, r1}
-    t[6] = 0xe59ff000u;                 // ldr pc, [pc, #0]    (t[8]: the function; a Thumb one by its bit 0)
-    t[7] = (uint32_t)(uintptr_t)&g_counts[i];
-    t[8] = (uint32_t)(uintptr_t)fn;
-    __builtin___clear_cache((char *)t, (char *)(t + 9));
-    return t;
-}
-#elif defined(__aarch64__)
 static const void *thunk(unsigned i, const void *fn)
 {
     uint32_t *t = thunk_mem(i);
@@ -89,9 +65,6 @@ static const void *thunk(unsigned i, const void *fn)
     __builtin___clear_cache((char *)t, (char *)(t + 10));
     return t;
 }
-#else
-static const void *thunk(unsigned i, const void *fn) { (void)i; (void)fn; return NULL; }
-#endif
 
 static void w_add(const char *name, const void *fn)
 {
@@ -138,7 +111,6 @@ static void *api(const char *symbol, void *found)
 void *icallcount_dlsym_hook(const char *symbol, void *found)
 {
     if (!found || found == (void *)w_add) return found;
-#if defined(__arm__) || defined(__aarch64__)
     if (strcmp(symbol, "mono_add_internal_call") && strcmp(symbol, "il2cpp_add_internal_call")) return found;
     const char *v = getenv("UA_ICALL_COUNT");
     if (!v || atof(v) <= 0) return found;
@@ -146,10 +118,6 @@ void *icallcount_dlsym_hook(const char *symbol, void *found)
     r_add = (add_icall_fn)found;
     fprintf(stderr, "[icalls] the engine's internal calls counted (UA_ICALL_COUNT=%s)\n", v);
     return (void *)w_add;
-#else
-    (void)symbol;
-    return found;
-#endif
 }
 
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
@@ -175,14 +143,10 @@ static void report(const char *tag, const char *what, unsigned from, unsigned co
 
 void *icallcount_api_hook(const char *symbol, void *found)
 {
-#if defined(__arm__) || defined(__aarch64__)
     // (the internal-call registration is left out: UA_ICALL_COUNT replaces it)
     if (found && (!strncmp(symbol, "mono_", 5) || !strncmp(symbol, "il2cpp_", 7)) &&
         strcmp(symbol, "mono_add_internal_call") && strcmp(symbol, "il2cpp_add_internal_call"))
         return api(symbol, found);
-#else
-    (void)symbol;
-#endif
     return found;
 }
 

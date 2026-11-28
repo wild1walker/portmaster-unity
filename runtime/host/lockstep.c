@@ -147,16 +147,16 @@ static int64_t virt_us(void)
     return 1000000 + (int64_t)f * g_step_us + adv;
 }
 static long g_clock_reads[6];
-static SO_ABI float w_realtime(void) { g_clock_reads[0]++; return (float)(virt_us() / 1e6); }
-static SO_ABI double w_realtime_d(void) { g_clock_reads[1]++; return virt_us() / 1e6; }
+static float w_realtime(void) { g_clock_reads[0]++; return (float)(virt_us() / 1e6); }
+static double w_realtime_d(void) { g_clock_reads[1]++; return virt_us() / 1e6; }
 static int32_t w_tickcount(void) { g_clock_reads[2]++; return (int32_t)(virt_us() / 1000); }
 static int64_t w_tickcount64(void) { g_clock_reads[3]++; return virt_us() / 1000; }
 static int64_t w_timestamp(void) { g_clock_reads[4]++; return virt_us() * 10; }
 // Time.unscaledTime / unscaledDeltaTime: Unity counts them from its real start and its first frames' real lengths
 // (6000.0 keeps the capture step only from its second frame on): from the frame count instead
-static SO_ABI float w_unscaled(void) { return (float)((double)clock_frame() * g_step_us / 1e6); }
-static SO_ABI double w_unscaled_d(void) { return (double)clock_frame() * g_step_us / 1e6; }
-static SO_ABI float w_unscaled_dt(void) { return g_freeze && __atomic_load_n(&g_frame, __ATOMIC_ACQUIRE) > g_freeze ? 0.f : (float)(g_step_us / 1e6); }
+static float w_unscaled(void) { return (float)((double)clock_frame() * g_step_us / 1e6); }
+static double w_unscaled_d(void) { return (double)clock_frame() * g_step_us / 1e6; }
+static float w_unscaled_dt(void) { return g_freeze && __atomic_load_n(&g_frame, __ATOMIC_ACQUIRE) > g_freeze ? 0.f : (float)(g_step_us / 1e6); }
 static int64_t w_filetime(void) { g_clock_reads[5]++; return (g_epoch_unix + 11644473600LL) * 10000000LL + virt_us() * 10; }
 static int64_t g_base_ns;          // the real monotonic time lockstep_init ran at: the virtual clocks' zero
 // the input events' times (getEventTime: Android's uptime, the monotonic clock in ms) on the same virtual clock as
@@ -221,11 +221,9 @@ static void note_op(uintptr_t op, int native)
     g_ops[g_nops++] = (void *)op;
     g_loads_noted++;
 }
-#if defined(__aarch64__)
 // (any arguments of the integer class, up to 8: passed through as they came)
 static uintptr_t w_load(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e, uintptr_t f, uintptr_t g, uintptr_t h)
 { uintptr_t op = r_load(a, b, c, d, e, f, g, h); note_op(op, g_ops_native); return op; }
-#endif
 static void hold_loads(long frame)
 {
     if (!g_nops || !r_progress) { g_nops = 0; return; }
@@ -244,7 +242,6 @@ static void hold_loads(long frame)
 }
 static const void *wrap_icall(const char *name, const void *fn)
 {
-#if defined(__aarch64__)
     if (g_loads && name && fn) {
         const char *c = strstr(name, "::");
         if (c && (name_is(c + 2, "LoadSceneAsyncNameIndexInternal") || name_is(c + 2, "LoadSceneAsyncNameIndexInternal_Injected"))) {
@@ -255,7 +252,6 @@ static const void *wrap_icall(const char *name, const void *fn)
         if (name_is(name, "UnityEngine.AsyncOperation::get_isDone_Injected") || (!r_isdone && name_is(name, "UnityEngine.AsyncOperation::get_isDone")))
             r_isdone = (int (*)(void *))fn;
     }
-#endif
     if (g_clock && name && fn) {
         if (name_is(name, "UnityEngine.Time::get_realtimeSinceStartup")) return (const void *)w_realtime;
         if (name_is(name, "UnityEngine.Time::get_realtimeSinceStartupAsDouble")) return (const void *)w_realtime_d;

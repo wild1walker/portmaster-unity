@@ -71,13 +71,7 @@ static void *fn(const char *name)
 #define TEX(t) CALL(glBindTexture, void (*)(GLenum, GLuint), GL_TEXTURE_2D, t)
 #define SWAP() glrec_swap()
 #define RESET() (fake_log[0] = 0)
-// glClearColor's wrapper takes the player's convention: on armhf softfp, the floats in core registers
-#if defined(__arm__)
-static unsigned fbits(float f) { unsigned u; memcpy(&u, &f, 4); return u; }
-#define CLEARCOLOR(r) ((void (*)(unsigned, unsigned, unsigned, unsigned))fn("glClearColor"))(fbits(r), 0, 0, 0)
-#else
 #define CLEARCOLOR(r) ((void (*)(GLfloat, GLfloat, GLfloat, GLfloat))fn("glClearColor"))(r, 0, 0, 0)
-#endif
 
 // the position of a token in the log (-1: not there)
 static int at(const char *s) { const char *p = strstr(fake_log, s); return p ? (int)(p - fake_log) : -1; }

@@ -16,7 +16,7 @@
 // screen, more buffers in the memory, or a copy of the frame when that cannot be); and the flips with
 // such buffers, every pan showing a whole panel at the driver's offsets. UA_FB_PACE: host flips paced at a
 // frame rate well under the refresh, and not paced near it.
-// Built and run by fbdev_test.sh (armhf under QEMU, arm64).
+// Built and run by fbdev_test.sh (arm64).
 #define _GNU_SOURCE
 #include "../fbdev.h"
 

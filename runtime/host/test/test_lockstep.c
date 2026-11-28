@@ -331,22 +331,16 @@ int main(int argc, char **argv)
         uintptr_t (*load)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t) =
             (uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t))
             icall("UnityEngine.SceneManagement.SceneManagerAPIInternal::LoadSceneAsyncNameIndexInternal_Injected");
-        typedef SO_ABI float (*rt_fn)(void);
+        typedef float (*rt_fn)(void);
         rt_fn rt = (rt_fn)icall("UnityEngine.Time::get_realtimeSinceStartup");
         int32_t (*tick)(void) = (int32_t (*)(void))icall("System.Environment::get_TickCount");
         CHECK(rt && rt != (void *)realtime_orig && tick && icall("System.Diagnostics.Stopwatch::GetTimestamp") && icall("System.DateTime::GetSystemTimeAsFileTime"),
               "the clocks not registered: realtime %p tick %p", (void *)rt, (void *)tick);
         scene();
         lockstep_init();
-#if defined(__aarch64__)
         CHECK(load && (void *)load != (void *)fake_load && load(1, 2, 3, 4, 0, 0, 0, 0) == (uintptr_t)&fake_op, "the load call not wrapped or not passed through");
-#else
-        CHECK(load == (void *)fake_load, "the load call wrapped on 32-bit");
-#endif
         frame();
-#if defined(__aarch64__)
         CHECK(progress_calls == 5, "the load not held to its read: %d looks at its progress", progress_calls);
-#endif
         CHECK(seeded == 42 && captured > 0.0166f && captured < 0.0167f, "clock: captureDeltaTime %g, seed %d", captured, seeded);
         float r1 = rt ? rt() : 0, r1b = rt ? rt() : 0; int32_t t1 = tick ? tick() : 0;
         frame();

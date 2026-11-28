@@ -21,15 +21,6 @@ int unityhooks_matches(const struct uh_row *r, uintptr_t base, size_t size) { (v
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
-#if !defined(__aarch64__)
-int main(void)
-{
-    CHECK(unityprefetch_wanted("1", "beh") && unityprefetch_wanted("beh,sprite", "sprite") && !unityprefetch_wanted("behx", "beh") &&
-          !unityprefetch_wanted("0", "beh") && !unityprefetch_wanted("sprite", "beh"), "UA_PREFETCH names");
-    printf("%s unityprefetch: %d failure(s) (the stubs: AArch64 only)\n", fails ? "FAILED" : "PASSED", fails);
-    return fails != 0;
-}
-#else
 uint64_t g_in[32], g_out[32];
 void call_stub(void *stub, uint64_t *in);
 void rec_callee(void);
@@ -307,4 +298,3 @@ int main(void)
     printf("%s unityprefetch: %d failure(s)\n", fails ? "FAILED" : "PASSED", fails);
     return fails != 0;
 }
-#endif

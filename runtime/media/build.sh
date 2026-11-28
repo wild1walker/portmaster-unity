@@ -1,41 +1,35 @@
 #!/bin/bash
-# Builds the media core: out/libuamedia.a (armhf) or out/arm64/libuamedia.a, our objects with the
-# build image's static decoder libraries merged in (libvpx, libvorbis, libogg, libopus, OpenH264),
-# out/[arm64/]licenses/ (their licence texts, to ship with a binary that links them), and the device
-# check out/[arm64/]umbench (what decoding a clip costs: `umbench <file> [offset size]`).
-#   ARCH=armhf (default): Debian bookworm cross toolchain, image ua-media-armhf (docker/Dockerfile)
-#   ARCH=arm64: native in ua-media-arm64 (docker/Dockerfile.arm64, on top of ua-build-arm64)
+# Builds the media core: out/arm64/libuamedia.a, our objects with the build image's static decoder
+# libraries merged in (libvpx, libvorbis, libogg, libopus, OpenH264), out/arm64/licenses/ (their licence
+# texts, to ship with a binary that links them), and the device check out/arm64/umbench (what decoding a
+# clip costs: `umbench <file> [offset size]`). Native in ua-media-arm64 (docker/Dockerfile.arm64, on top
+# of ua-build-arm64). (32-bit armhf was removed; the last tree with it is the tag last-armhf.)
 # ./build.sh test-ffmpeg  the decoders of the system's FFmpeg (um_ffmpeg.c) on clips made by FFmpeg's
 #   tools, in an image with Debian's FFmpeg (docker/Dockerfile.ffmpeg-test, built on first use)
-# ./build.sh test  also builds and runs the unit tests (test/, test_pmhwdec with a stand-in libpmhwdec): armhf in an arm/v7 container
-#   (Docker's emulation), arm64 natively; the GL test needs the emulated rig's image ua-emu-armhf
-#   (tools/emu) for armhf, Mesa from ua-build-arm64 for arm64.
+# ./build.sh test  also builds and runs the unit tests (test/, test_pmhwdec with a stand-in libpmhwdec),
+#   natively; the GL test with Mesa from ua-build-arm64.
 # OPENH264=0 ./build.sh  leaves OpenH264 out (H.264 then only through the system's libavcodec, when
 #   the handheld has one): for a release that must not carry an H.264 decoder. The default is in.
 # Link with: libuamedia.a -lstdc++ -ldl -lpthread -lm
 set -e
 cd "$(dirname "$0")"
-ARCH=${ARCH:-armhf}
-case "$ARCH" in
-  armhf) IMG=ua-media-armhf:2; DF=docker/Dockerfile; PLAT=; O=out; CROSS=arm-linux-gnueabihf-
-         LIBDIR=/usr/lib/arm-linux-gnueabihf; ARCHF="-march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard" ;;
-  arm64) IMG=ua-media-arm64; DF=docker/Dockerfile.arm64; PLAT="--platform linux/arm64"; O=out/arm64; CROSS=
-         LIBDIR=/usr/lib/aarch64-linux-gnu; ARCHF=
-         docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 ../docker/arm64 ;;
-  *) echo "ARCH must be armhf or arm64"; exit 1 ;;
-esac
+ARCH=${ARCH:-arm64}
+[ "$ARCH" = arm64 ] || { echo "ARCH must be arm64 (armhf was removed: tag last-armhf)"; exit 1; }
+IMG=ua-media-arm64; DF=docker/Dockerfile.arm64; PLAT="--platform linux/arm64"; O=out/arm64
+LIBDIR=/usr/lib/aarch64-linux-gnu
+docker image inspect ua-build-arm64 >/dev/null 2>&1 || docker build --platform linux/arm64 -t ua-build-arm64 ../docker/arm64
 docker image inspect $IMG >/dev/null 2>&1 || docker build $PLAT -t $IMG -f $DF docker
-docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIBDIR=$LIBDIR -e ARCHF="$ARCHF" \
+docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e LIBDIR=$LIBDIR \
   -e TEST="$1" -e OPENH264="${OPENH264:-1}" $IMG bash -c '
   set -e
   mkdir -p $O/obj $O/licenses $O/test
-  CC=${CROSS}gcc; CXX=${CROSS}g++; AR=${CROSS}ar
+  CC=gcc; CXX=g++; AR=ar
   H264=; [ "$OPENH264" = 0 ] || H264=$(ls $LIBDIR/libopenh264.a /usr/local/lib/libopenh264.a 2>/dev/null | head -1)
-  VPX=$LIBDIR/libvpx.a; VPXINC=                      # armhf: the NEON build of Debian libvpx (docker/Dockerfile)
+  VPX=$LIBDIR/libvpx.a; VPXINC=
   [ -f /opt/vpx/lib/libvpx.a ] && { VPX=/opt/vpx/lib/libvpx.a; VPXINC=-I/opt/vpx/include; }
   DEFS="-DUM_HAVE_VPX -DUM_HAVE_VORBIS -DUM_HAVE_OPUS -DUM_HAVE_MP4 -DUM_HAVE_FFMPEG"
   [ -n "$H264" ] && DEFS="$DEFS -DUM_HAVE_H264"
-  CFLAGS="-O2 -g -fPIC -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64 $ARCHF $DEFS $VPXINC -I/usr/local/include"
+  CFLAGS="-O2 -g -fPIC -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64 $DEFS $VPXINC -I/usr/local/include"
   OBJS=
   for f in um_format um_extractor um_webm um_mp4 um_codec um_surface um_vpx um_audio um_h264 um_ffmpeg um_pmhwdec um_stubs um_compat; do
     $CC $CFLAGS -c $f.c -o $O/obj/$f.o; OBJS="$OBJS $O/obj/$f.o"
@@ -65,7 +59,7 @@ docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIB
       $CC $CFLAGS -I. -o $O/test/test_pmhwdec test/test_pmhwdec.c test/clips.c test/webm_writer.c $O/libuamedia.a \
         $LIBDIR/libvorbisenc.a $VPX $LIBDIR/libvorbis.a $LIBDIR/libogg.a $LIBDIR/libopus.a $H264 -lstdc++ -ldl -lpthread -lm
     fi
-    JNI=../jni/out; [ "$O" = out/arm64 ] && JNI=../jni/out/arm64
+    JNI=../jni/out/arm64
     if [ -f $JNI/libfakejni.a ]; then
       $CC $CFLAGS -I. -o $O/test/test_media_jni test/test_media_jni.c test/clips.c test/webm_writer.c $JNI/libfakejni.a \
         $O/libuamedia.a $LIBDIR/libvorbisenc.a $VPX $LIBDIR/libvorbis.a $LIBDIR/libogg.a $LIBDIR/libopus.a \
@@ -79,22 +73,14 @@ docker run --rm $PLAT -v "$PWD/..":/w -w /w/media -e O=$O -e CROSS=$CROSS -e LIB
 '
 if [ "$1" = test-ffmpeg ]; then
   # the FFmpeg decoders against clips FFmpeg's tools make (Debian's FFmpeg in a test image)
-  P=linux/arm/v7; [ "$ARCH" = arm64 ] && P=linux/arm64
+  P=linux/arm64
   FI=ua-media-ffmpeg-$ARCH
   docker image inspect $FI >/dev/null 2>&1 || docker build --platform $P -t $FI -f docker/Dockerfile.ffmpeg-test docker
   docker run --rm --platform $P -v "$PWD":/w -w /w $FI timeout 900 sh test/ffmpeg_clips.sh /tmp/clips ./$O/test/test_media_ffmpeg
 fi
 if [ "$1" = test ]; then
-  if [ "$ARCH" = armhf ]; then
-    docker run --rm --platform linux/arm/v7 -v "$PWD":/w -w /w debian:bookworm-slim sh -c \
-      'timeout 900 ./out/test/test_media; [ ! -x ./out/test/test_media_jni ] || timeout 900 ./out/test/test_media_jni; [ ! -x ./out/test/test_media_ndk ] || timeout 900 ./out/test/test_media_ndk; sh test/run_pmhwdec.sh ./out/test'
-    docker image inspect ua-emu-armhf >/dev/null 2>&1 && \
-      docker run --rm --platform linux/arm/v7 -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless \
-        -e LIBGL_ALWAYS_SOFTWARE=1 ua-emu-armhf timeout 600 ./out/test/test_surface_gl ../../setup-rs/crates/androiddata/src/video_decode_android.shader
-  else
-    docker run --rm $PLAT -v "$PWD":/w -w /w $IMG sh -c \
-      'timeout 900 ./out/arm64/test/test_media; [ ! -x ./out/arm64/test/test_media_jni ] || timeout 900 ./out/arm64/test/test_media_jni; [ ! -x ./out/arm64/test/test_media_ndk ] || timeout 900 ./out/arm64/test/test_media_ndk; sh test/run_pmhwdec.sh ./out/arm64/test'
-    docker run --rm $PLAT -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless -e LIBGL_ALWAYS_SOFTWARE=1 \
-      $IMG timeout 600 ./out/arm64/test/test_surface_gl ../../setup-rs/crates/androiddata/src/video_decode_android.shader
-  fi
+  docker run --rm $PLAT -v "$PWD":/w -w /w $IMG sh -c \
+    'timeout 900 ./out/arm64/test/test_media; [ ! -x ./out/arm64/test/test_media_jni ] || timeout 900 ./out/arm64/test/test_media_jni; [ ! -x ./out/arm64/test/test_media_ndk ] || timeout 900 ./out/arm64/test/test_media_ndk; sh test/run_pmhwdec.sh ./out/arm64/test'
+  docker run --rm $PLAT -v "$PWD/../..":/r -w /r/runtime/media -e EGL_PLATFORM=surfaceless -e LIBGL_ALWAYS_SOFTWARE=1 \
+    $IMG timeout 600 ./out/arm64/test/test_surface_gl ../../setup-rs/crates/androiddata/src/video_decode_android.shader
 fi

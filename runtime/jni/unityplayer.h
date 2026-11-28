@@ -22,9 +22,8 @@
 extern "C" {
 #endif
 
-/* JNI_OnLoad of an Android library (FJ_ABI, softfp on ARM; integer arguments only, so either
- * ARM convention works). */
-typedef jint (FJ_ABI *up_onload_fn)(JavaVM *vm, void *reserved);
+/* JNI_OnLoad of an Android library. */
+typedef jint (*up_onload_fn)(JavaVM *vm, void *reserved);
 
 struct up_config {
     /* --- application ---------------------------------------------------------------- */

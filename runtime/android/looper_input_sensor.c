@@ -237,9 +237,9 @@ int64_t AKeyEvent_getEventTime(const AInputEvent *e) { return e ? e->eventTime :
 int32_t AMotionEvent_getAction(const AInputEvent *e) { return e ? e->action : 0; }
 size_t AMotionEvent_getPointerCount(const AInputEvent *e) { return e && e->type == AINPUT_EVENT_TYPE_MOTION; }
 int32_t AMotionEvent_getPointerId(const AInputEvent *e, size_t i) { (void)e; (void)i; return 0; }
-SOFTFP float AMotionEvent_getX(const AInputEvent *e, size_t i) { (void)i; return e ? e->x : 0; }
-SOFTFP float AMotionEvent_getY(const AInputEvent *e, size_t i) { (void)i; return e ? e->y : 0; }
-SOFTFP float AMotionEvent_getAxisValue(const AInputEvent *e, int32_t axis, size_t i)
+float AMotionEvent_getX(const AInputEvent *e, size_t i) { (void)i; return e ? e->x : 0; }
+float AMotionEvent_getY(const AInputEvent *e, size_t i) { (void)i; return e ? e->y : 0; }
+float AMotionEvent_getAxisValue(const AInputEvent *e, int32_t axis, size_t i)
 {
     (void)i;
     return !e ? 0 : axis == 0 ? e->x : axis == 1 ? e->y : 0;
@@ -295,7 +295,7 @@ ssize_t ASensorEventQueue_getEvents(ASensorEventQueue *q, ASensorEvent *ev, size
 const char *ASensor_getName(ASensor const *s) { (void)s; return "none"; }
 const char *ASensor_getVendor(ASensor const *s) { (void)s; return "android-shim"; }
 int ASensor_getType(ASensor const *s) { (void)s; return -1; }
-SOFTFP float ASensor_getResolution(ASensor const *s) { (void)s; return 0; }
+float ASensor_getResolution(ASensor const *s) { (void)s; return 0; }
 int ASensor_getMinDelay(ASensor const *s) { (void)s; return 0; }
 
 // ---- AConfiguration: the handheld's configuration -----------------------------------------

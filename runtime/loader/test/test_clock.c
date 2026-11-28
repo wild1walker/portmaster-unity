@@ -1,11 +1,8 @@
-/* test_clock: fastclock.c's clock_gettime/gettimeofday against the kernel's.
- *   UA_FAST_CLOCK=1 ./test_clock [seconds]   (=1: the counter where there is no vDSO, the RG34XX-SP;
- *                                             =force: also with a vDSO; unset: the system calls)
+/* test_clock: fastclock.c's clock_gettime/gettimeofday against the kernel's.   ./test_clock [seconds]
  * Four threads read CLOCK_MONOTONIC in turn through a shared "last value" and check that no read
  * is below one another thread saw before it (monotonic across threads); every clock is compared
- * with the kernel's own (a system call) and must be within 100 us of it, including across the
- * resyncs; gettimeofday within 100 us of CLOCK_REALTIME. Without a usable counter (or on arm64)
- * the same checks run against the system calls the functions fall back to. */
+ * with the kernel's own (a system call) and must be within 100 us of it; gettimeofday within 100 us
+ * of CLOCK_REALTIME. */
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <stdatomic.h>

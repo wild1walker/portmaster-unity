@@ -1,4 +1,4 @@
-// Device check: does 32-bit SDL2 see the built-in pad and open audio? (no window: SDL_INIT_VIDEO off)
+// Device check: does SDL2 see the built-in pad and open audio? (no window: SDL_INIT_VIDEO off)
 #include <SDL2/SDL.h>
 #include <stdio.h>
 int main(void)

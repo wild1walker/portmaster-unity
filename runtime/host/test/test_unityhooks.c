@@ -1,9 +1,8 @@
 // unityhooks.c's unit test: the jump, the trampoline and the row check, on a stand-in for
 // AdjustThreadingModeForAPI written here (the same calling convention and a prologue of the shape
-// the rows have: ARM state on 32-bit ARM, A64 on AArch64), copied into a page of its own as
-// libunity's text is: the hooked function's results, the original's through the trampoline, and
-// that a row whose hash does not match the bytes is not taken. On AArch64 also entries with
-// pc-relative instructions (branches, a call, adr, adrp): the same results through the trampoline,
+// the rows have: A64), copied into a page of its own as libunity's text is: the hooked function's
+// results, the original's through the trampoline, and that a row whose hash does not match the bytes
+// is not taken. Also entries with pc-relative instructions (branches, a call, adr, adrp): the same results through the trampoline,
 // which rewrites them; and the two kinds of entry it refuses, left as they were.
 #include <assert.h>
 #include <stdint.h>
@@ -17,12 +16,6 @@
 // the loader's accessors and the other hook files' entries (unityhooks_on_load, unityhooks_frame: not called here)
 void unitypool_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
 void unityverts_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
-void unitymath_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
-void unitybeh_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
-void unitybeh_frame(void) {}
-void unityscripts_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
-void unityscripts_frame(void) {}
-void unitylayers_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
 void fmodasync_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
 void nativebeh_on_load(uintptr_t base, size_t size) { (void)base; (void)size; }
 void nativebeh_frame(void) {}
@@ -37,58 +30,13 @@ uintptr_t so_base(so_module *m) { (void)m; return 0; }
 size_t so_size(so_module *m) { (void)m; return 0; }
 
 // stand-in (fake_adjust.S): mode 3..6 on renderer 11 -> 2, anything else -> mode
-#if defined(__arm__)
-#define FAKE_ISA ISA_ARM
-#elif defined(__aarch64__)
 #define FAKE_ISA ISA_A64
-#else
-#error "ARM or AArch64 only"
-#endif
 extern char fake_adjust[], fake_adjust_end[];
 
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
-#if defined(__arm__)
-// Thumb (fmodasync.c's validates): the stand-in at a word-aligned entry and at one that is not, each hooked; the
-// hook counts and calls the original through its trampoline
-extern char fake_validate[], fake_validate_end[], fake_armcond[], fake_armcond_end[];
-static int (*g_cond_orig)(int);
-static int g_cond_calls;
-static int cond_hook(int x) { g_cond_calls++; return g_cond_orig(x); }
-static int (*g_val_orig[2])(void *, void **);
-static int g_val_calls[2];
-static int val_hook0(void *h, void **o) { g_val_calls[0]++; return g_val_orig[0](h, o); }
-static int val_hook1(void *h, void **o) { g_val_calls[1]++; return g_val_orig[1](h, o); }
-static void test_thumb(uint8_t *lib, const size_t *at)
-{
-    // ARM: a b<cond> among the moved instructions (at[2])
-    int (*g)(int) = (int (*)(int))(uintptr_t)(lib + at[2]);
-    CHECK(g(0) == 7 && g(5) == 6, "armcond: the stand-in itself");
-    CHECK(unityhooks_hook((uintptr_t)(lib + at[2]), ISA_ARM, (void *)cond_hook, (void **)&g_cond_orig) == 0, "armcond: hook failed");
-    CHECK(g(0) == 7 && g(5) == 6 && g(-1) == 0, "armcond: through the trampoline %d %d", g(0), g(5));
-    CHECK(g_cond_calls == 3, "armcond: %d of 3 calls through the hook", g_cond_calls);
-    int (*const hook[2])(void *, void **) = { val_hook0, val_hook1 };
-    for (int k = 0; k < 2; k++) {
-        int (*f)(void *, void **) = (int (*)(void *, void **))(uintptr_t)(lib + at[k] + 1);
-        void *out = NULL, *h = &out;
-        CHECK(f(NULL, &out) == 0x24 && f(h, NULL) == 0x25 && f(h, &out) == 0 && out == h, "thumb %d: the stand-in itself", k);
-        CHECK(unityhooks_hook((uintptr_t)(lib + at[k]), ISA_THUMB, (void *)hook[k], (void **)&g_val_orig[k]) == 0,
-              "thumb %d: hook failed", k);
-        CHECK(((uintptr_t)g_val_orig[k] & 1) == 1, "thumb %d: the trampoline is not a Thumb address", k);
-        out = NULL;
-        CHECK(f(NULL, &out) == 0x24, "thumb %d: null handle", k);
-        CHECK(f(h, NULL) == 0x25, "thumb %d: null out", k);
-        CHECK(f(h, &out) == 0 && out == h, "thumb %d: the handle", k);
-        CHECK(g_val_calls[k] == 3, "thumb %d: %d of 3 calls went through the hook", k, g_val_calls[k]);
-        // a replaced function: the entry is only a jump (unityhooks_jump), here to the other hook's original
-        uint16_t j[5];
-        CHECK(thumb_jump(j, (uintptr_t)(lib + at[k]), 0) == (at[k] & 2 ? 10u : 8u), "thumb %d: the jump's length", k);
-    }
-}
-#endif
 
-#if defined(__aarch64__)
 // the stand-ins with pc-relative entries; each one's hook counts the call and returns the original's result
 extern char fake_cond[], fake_cond_end[], fake_call[], fake_call_end[], fake_addr[], fake_addr_end[],
             fake_jump[], fake_jump_end[], fake_literal[], fake_literal_end[], fake_inner[], fake_inner_end[];
@@ -142,7 +90,6 @@ static void test_relocated(uint8_t *lib, const size_t *at)
         CHECK(g_reloc_calls[k] == nin[k], "%s: %d of %d calls went through the hook", name[k], g_reloc_calls[k], nin[k]);
     }
 }
-#endif
 
 int main(void)
 {
@@ -153,7 +100,6 @@ int main(void)
     assert(lib != MAP_FAILED);
     const uint32_t off = (uint32_t)pg - 8;      // the 8 / 16 bytes the jump takes cross a page boundary
     memcpy(lib + off, fake_adjust, n);
-#if defined(__aarch64__)
     static char *const blob[R_N][2] = { { fake_cond, fake_cond_end }, { fake_call, fake_call_end }, { fake_addr, fake_addr_end },
                                         { fake_jump, fake_jump_end }, { fake_literal, fake_literal_end }, { fake_inner, fake_inner_end } };
     size_t at[R_N], next = (size_t)pg + 0x400;
@@ -164,13 +110,6 @@ int main(void)
         next = (next + len + 31) & ~(size_t)15;
     }
     assert(next <= (size_t)(2 * pg));
-#elif defined(__arm__)
-    const char *v = (const char *)((uintptr_t)fake_validate & ~(uintptr_t)1);   // (a Thumb symbol's bit 0)
-    size_t vlen = (size_t)(fake_validate_end - v), at[3] = { (size_t)pg + 0x400, (size_t)pg + 0x482, (size_t)pg + 0x500 };
-    memcpy(lib + at[2], fake_armcond, (size_t)(fake_armcond_end - fake_armcond));
-    memcpy(lib + at[0], v, vlen);                  // word-aligned entry: 8 bytes moved
-    memcpy(lib + at[1], v, vlen);                  // half-word aligned: 10 (the IT block and the next cmp)
-#endif
     mprotect(lib, 2 * pg, PROT_READ | PROT_EXEC);
     __builtin___clear_cache((char *)lib, (char *)lib + 2 * pg);
     int (*f)(int, int, int) = (int (*)(int, int, int))(uintptr_t)(lib + off);
@@ -187,9 +126,8 @@ int main(void)
     CHECK(r == NULL, "a row without the library's bytes was taken");
     r = find_row(rows, 3, (uintptr_t)lib, 2 * pg);
     CHECK(r == &rows[2], "the matching row was not found");
-    char other = FAKE_ISA == ISA_ARM ? ISA_A64 : ISA_ARM;
-    struct row wrong_isa = { "test", "isa", off, (uint32_t)n, other, h };
-    CHECK(find_row(&wrong_isa, 1, (uintptr_t)lib, 2 * pg) == NULL, "a row of the other instruction set was taken");
+    struct row wrong_isa = { "test", "isa", off, (uint32_t)n, 'a', h };     // (a 32-bit ARM row, as rows had)
+    CHECK(find_row(&wrong_isa, 1, (uintptr_t)lib, 2 * pg) == NULL, "a row of another instruction set was taken");
 
     // the hook: ClientWorkerJobs kept on renderer 11, every other result as the original's
     CHECK(unityhooks_hook((uintptr_t)(lib + off), FAKE_ISA, (void *)adjust_hook, (void **)&g_adjust_orig) == 0, "hook failed");
@@ -204,11 +142,7 @@ int main(void)
         if (f(i & 7, 11, 0) != ((i & 7) == 3 ? 3 : (i & 7) >= 4 && (i & 7) <= 6 ? 2 : (i & 7))) { CHECK(0, "call %d", i); break; }
     // the page is executable and not writable again
     CHECK(fnv1a(lib + off, n) != h, "the entry was not changed");
-#if defined(__aarch64__)
     test_relocated(lib, at);
-#elif defined(__arm__)
-    test_thumb(lib, at);
-#endif
-    printf("%s: %s\n", FAKE_ISA == ISA_ARM ? "arm, thumb" : "a64", fails ? "FAILED" : "ok");
+    printf("a64: %s\n", fails ? "FAILED" : "ok");
     return fails != 0;
 }

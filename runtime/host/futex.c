@@ -48,16 +48,8 @@
 #include "futex.h"
 #include "../loader/armtimer.h"
 
-#if defined(__arm__)
-#define NR_FUTEX 240
-#define NR_FUTEX64 422            // futex_time64 (32-bit ARM, Linux 5.1+)
-#elif defined(__aarch64__)
 #define NR_FUTEX 98
 #define NR_FUTEX64 98
-#else
-#define NR_FUTEX SYS_futex
-#define NR_FUTEX64 SYS_futex
-#endif
 
 // the loader's (hybris_compat.c); absent in the unit test
 void bionic_sem_stats(unsigned long long *spun, unsigned long long *slept) __attribute__((weak));

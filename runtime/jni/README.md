@@ -1,7 +1,7 @@
 # jni/: fake JavaVM/JNIEnv + Unity's Java player in C
 
-Two layers, both built into `out/libfakejni.a` (armhf, glibc ≤ 2.36, Debian bookworm cross gcc)
-or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-build-arm64` image):
+Two layers, both built into `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the
+`ua-build-arm64` image):
 
 | File | What |
 |---|---|
@@ -16,37 +16,19 @@ or `out/arm64/libfakejni.a` (aarch64, glibc ≤ 2.31, native gcc of the `ua-buil
 | `up_tls.c` | The system trust store as Android's Java side gives it to libunity's unitytls (2018.4+): TrustManagerFactory, X509TrustManager, Certificate/X509Certificate, KeyStore("AndroidCAStore"), over the handheld's CA bundle ([docs/plugins.md](../../docs/plugins.md#https)). |
 | `up_http.c` | `com.unity3d.player.UnityWebRequest` (2017.4 - 2018.4) and the header map libunity gives it: no network by default, real requests through the system's libcurl with `UA_HTTP=1`. |
 | `up_fmod.c` | `org.fmod.FMOD` (and `org.fmod.AudioDevice`), the Java side of FMOD Engine's Android libraries, for games whose port supplies them ([docs/plugins.md](../../docs/plugins.md#fmod)). |
-| `include/jni.h` | AOSP `jni.h`, patched so that every function-table slot carries `JNI_ABI` (see ABI below; empty on AArch64). |
+| `include/jni.h` | AOSP `jni.h` (its 32-bit `JNI_ABI` patch went with armhf). |
 | `test/` | Unit tests (see Tests). |
-| `build.sh`, `Makefile`, `docker/Dockerfile` | Build in docker image `ua-jni-build` (bookworm + gcc-arm-linux-gnueabihf + qemu-user), or with `ARCH=arm64` in `ua-build-arm64` (`../docker/arm64`). |
+| `build.sh`, `Makefile` | Build in `ua-build-arm64` (`../docker/arm64`). |
 
 ```
-./build.sh                    # builds out/libfakejni.a, out/test_*; runs both tests (arm/v7 container)
-./build.sh out/libfakejni.a   # library only
-ARCH=arm64 ./build.sh         # out/arm64/libfakejni.a + tests, built and run natively (no QEMU)
+./build.sh                    # out/arm64/libfakejni.a + tests, built and run natively
+./build.sh all                # library and test binaries only
 ```
 
 ## ABI (important)
-### 32-bit ARM
-The Android libraries are armeabi-v7a, which uses **softfp**: float/double arguments and results
-go in core registers (libunity's ELF flags say "soft-float ABI"). The host is armhf (VFP registers).
-- Every JNI function we hand out is compiled `__attribute__((pcs("aapcs")))` (`JNI_ABI`/`FJ_ABI`).
-  Because the attribute sits on the slots in `include/jni.h`, host C code that calls through
-  `(*env)->CallFloatMethod(...)` also uses the right convention automatically.
-- Natives registered by Unity are called with `fj_invoke_native()` (formerly `fj_invoke_softfp`, still
-  an alias): arguments are laid out as base-AAPCS words (64-bit values in even register pairs /
-  8-byte-aligned stack slots) and passed to a `pcs("aapcs")` function pointer; the result is read
-  from r0/r0:r1. This handles any signature of up to 40 words. Use `fj_call_native*()`, never cast
-  `fj_native()` to a hard-float type.
-- C handlers (`fj_fn`) are only called by fakejni and use the normal host ABI.
-- Varargs (`Call*Method(...)`, `NewObject(...)`) and `va_list` (`...V`) are decoded per signature with
-  `va_arg` (int-promoted Z/B/C/S, `jlong`, `double` for F, `double` for D, pointers). `...A` variants
-  copy the `jvalue[]`.
-- `JNI_OnLoad` pointers are typed `up_onload_fn` (FJ_ABI; integer-only, so either ABI works).
-
-### AArch64
+(The 32-bit ARM softfp layer went with armhf, 2026-11-28: tag `last-armhf`.)
 arm64-v8a libraries and aarch64 Linux share AAPCS64 (floats and doubles in v registers on both
-sides), so `JNI_ABI`/`FJ_ABI` are empty and every JNI table function is plain C.
+sides), so every JNI table function is plain C.
 - `fj_invoke_native()` places the decoded arguments as AAPCS64 does: integers and pointers in
   x0-x7 (env and self first; narrow types sign/zero-extended), floats in s0-s7 (single precision,
   not promoted) and doubles in d0-d7, and each argument after its register class runs out in the
@@ -57,9 +39,9 @@ sides), so `JNI_ABI`/`FJ_ABI` are empty and every JNI table function is plain C.
 - Varargs and `va_list`: `va_list` is a struct on AArch64 (passed by reference to a copy, the same
   on bionic and glibc); the `...V` functions take it as `va_list` and `decode_va` reads it with
   `va_arg` per signature (int-promoted Z/B/C/S, `jlong`, `double` for F and D, pointers), exactly as
-  on ARM. Host callers of `fj_call_native(...)` must pass objects as pointers (`NULL`, never `0`).
+  before. Host callers of `fj_call_native(...)` must pass objects as pointers (`NULL`, never `0`).
 - `Build.CPU_ABI`/`CPU_ABI2` and `System.getProperty("os.arch")` follow the build: `arm64-v8a`/""/
-  `aarch64` on AArch64, `armeabi-v7a`/`armeabi`/`armv7l` on ARM.
+  `aarch64`.
 
 ## fakejni model
 - **Handles**: every `jobject` is a pointer to an internal object (plain object, class, string,
@@ -223,10 +205,9 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   RFC 2202/4231 HMAC, the "abc" digests, a billing listener, a review task, the notification manager and
   its builder, a Play Games sign-in task).
 
-## Tests (`./build.sh` in an arm/v7 container, `ARCH=arm64 ./build.sh` natively in ua-build-arm64)
-- `test/test_fakejni.c` + `test/android_side.c`: on ARM android_side is compiled **`-mfloat-abi=softfp
-  -ffreestanding`**, like NDK code, and linked with `--no-warn-mismatch`; on AArch64 it is ordinary
-  code (same ABI as the host). It calls every Call*
+## Tests (`./build.sh`, natively in ua-build-arm64)
+- `test/test_fakejni.c` + `test/android_side.c`: android_side is ordinary code (the same ABI as the
+  host). It calls every Call*
   family (plain varargs, `V` through real `va_list`, `A`, Nonvirtual, Static) with mixed
   I/J/F/D/L/Z/B/C/S arguments, float/double returns and field setters, plus NewObject with a float,
   virtual dispatch, exceptions, placeholders, absent classes, strings (UTF-16, modified UTF-8,
@@ -235,7 +216,7 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
   including a float; `fsum`: 10 floats, float result), called from the Java side and from C. The
   host side calls the natives through `fj_call_native(_a)`, covers refcount freeing, direct
   buffers and boxing, and runs 4 threads.
-- `test/test_unityplayer.c` + `test/fake_unity.c` (softfp on ARM): a fake libmain/libunity that
+- `test/test_unityplayer.c` + `test/fake_unity.c`: a fake libmain/libunity that
   registers the natives of one of 8 Unity versions (2017.4.9, 2017.4.40, 2018.4, 2019.4, 2020.3,
   2021.3, 2022.3, 6000.6: names and signatures as `pmu-dev jni-tables` lists them for each
   player; 6000.6's per-instance natives on `UnityPlayerForActivityOrService`) and
@@ -268,8 +249,7 @@ for (;;) { up_poll(); /* SDL events -> */ up_inject_key(1, 0, UP_ACTION_DOWN, UP
 - Both pass (0 failures) on both architectures: `test_unityplayer` prints one line per version and
   `PASSED: 0 failure(s) in 8 Unity version shapes`. They also pass with `FJ_TRACE=1`. The tests
   assume the default FJ_* modes: `FJ_NOFREE`/`FJ_STRICT` intentionally break their
-  refcount/placeholder checks. (Docker's arm/v7 emulation on a Mac has crashed in the thread part
-  of the armhf tests before; the same binaries pass on the device.)
+  refcount/placeholder checks.
 
 ## Unity versions (2017.4 to 2022.3; 5.6 - 2017.2 and 2023.1 - 6000.6 below)
 The runtime was written against 2017.4.9 (Cuphead); `docs/compat` surveys the Android players of

@@ -9,7 +9,7 @@
 // assemblies), and the game's AKRESULT and AkCallbackType constants as const lines; Wwise's C#
 // integration has a different set in every version, so nothing here lists them. Each entry point
 // is a trampoline (wwise_tramp.S) whose arguments the dispatcher reads by that signature, as the
-// caller passed them (the armeabi-v7a player's softfp Mono, or AAPCS64), and answers:
+// caller passed them (AAPCS64), and answers:
 //   - the calls of the engine's API that matter (below, by name with CSharp_ and __SWIG_<n> cut
 //     off): Init/Term/IsInitialized, base paths and language, LoadBank (by name, ID or memory;
 //     with a cookie: the bank callback), UnloadBank/PrepareBank, PostEvent (a new playing ID; with
@@ -878,31 +878,6 @@ static uint64_t encode(char ret, ua_ak_value r)
     case 'v': return 0;
     default: return r.u;             // l, d
     }
-}
-
-// 32-bit ARM, base AAPCS (the caller's r0-r3 and stack arguments as one run of words)
-uint64_t ua_ak_dispatch32(unsigned k, const uint32_t *w);
-uint64_t ua_ak_dispatch32(unsigned k, const uint32_t *w)
-{
-    entry *e = &g_ent[k];
-    ua_ak_value a[AK_MAXARGS];
-    int wi = 0;
-    for (int i = 0; i < e->n; i++) {
-        int n = e->cnt[i];
-        switch (e->kind[i]) {
-        case 'b': case 'i': a[i].i = (int32_t)w[wi++]; break;
-        case 'u': a[i].u = w[wi++]; break;
-        case 'p': case 'r': case 'z': a[i].u = 0; a[i].p = (void *)(uintptr_t)w[wi++]; break;
-        case 'f': a[i].u = 0; memcpy(&a[i].f, &w[wi++], 4); break;
-        case 'l': wi = (wi + 1) & ~1; a[i].u = w[wi] | (uint64_t)w[wi + 1] << 32; wi += 2; break;
-        case 'd': wi = (wi + 1) & ~1; memcpy(&a[i].d, &w[wi], 8); wi += 2; break;
-        case 's': case 'F': a[i].p = (void *)&w[wi]; wi += n; break;                      // by value: its words
-        case 'S': wi = (wi + 1) & ~1; a[i].p = (void *)&w[wi]; wi += n; break;
-        case 'D': wi = (wi + 1) & ~1; a[i].p = (void *)&w[wi]; wi += 2 * n; break;
-        default: a[i].u = 0;
-        }
-    }
-    return encode(e->ret, call(e, a));
 }
 
 // AArch64, AAPCS64: x0-x7 (regs[0..7]), d0-d7 (regs[8..15]), 8-byte stack slots

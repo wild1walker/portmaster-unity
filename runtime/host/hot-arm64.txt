@@ -28,7 +28,6 @@ obj_unref
 mutex_of
 gcbudget_frame
 elem_slot
-unityscripts_frame
 vm_GetEnv
 h_release
 w_glVertexAttribPointer
@@ -58,7 +57,6 @@ jitlog_frame
 unity_main
 choreo_run
 w_glBindTexture
-unitybeh_frame
 quality_frame
 nativebeh_frame
 attr_set
@@ -67,7 +65,6 @@ jitwarm_frame
 bound_slot
 need_ctx
 class_get
-unityicalls_frame
 icallcount_frame
 j_ExceptionCheck
 ds_find
@@ -128,7 +125,6 @@ w_glEnableVertexAttribArray
 w_glClearStencil
 invalidated
 glrec_attrib_hook.isra.0
-unitylayers_frame
 w_glClearDepthf
 w_glBlendEquationSeparate
 w_DisableVertexAttribArray

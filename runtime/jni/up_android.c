@@ -724,7 +724,6 @@ static int apk_read_asset(const char *apk, const char *name, char **out, size_t 
  * lines, a key the data has replaced, as if the data had them: Unity's settings it reads before the command line
  * (the memorysetup-* sizes of its allocators: MemoryManager reads them before the command line is parsed, so
  * -memorysetup-... in UA_UNITY_ARGS comes too late). The APK is not changed. */
-#if defined(__aarch64__)
 /* the 64-bit build's default when UA_BOOT_CONFIG is unset: Unity's main, thread and graphics allocators take
  * memory in 1 MB blocks instead of 16 MB (a block stays while anything in it lives; docs/mono-arm64.md, "Unity's
  * allocator blocks"). Where allocations lie, not what the engine computes. UA_BOOT_CONFIG=0 (or any value of
@@ -732,14 +731,11 @@ static int apk_read_asset(const char *apk, const char *name, char **out, size_t 
 static const char BOOT_CONFIG_DEFAULT[] =
     "memorysetup-main-allocator-block-size=1048576 memorysetup-thread-allocator-block-size=1048576 "
     "memorysetup-gfx-main-allocator-block-size=1048576 memorysetup-gfx-thread-allocator-block-size=1048576";
-#endif
 
 static void boot_config_merge(stream *s)
 {
     const char *e = getenv("UA_BOOT_CONFIG");
-#if defined(__aarch64__)
     if (!e) e = BOOT_CONFIG_DEFAULT;
-#endif
     if (!e || !*e || !strcmp(e, "0")) return;
     char *spec = strdup(e);
     size_t cap = s->len + strlen(e) + 64;
@@ -895,15 +891,9 @@ H(sys_millis)    { struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); retur
 H(sys_idHash)    { return fj_i((jint)((uintptr_t)a[0].l >> 3)); }
 /* What an Android device running the player's ABI reports: the libraries are built for the
  * same architecture as this program. */
-#if defined(__aarch64__)
 #define UP_OS_ARCH "aarch64"
 #define UP_CPU_ABI "arm64-v8a"
 #define UP_CPU_ABI2 ""
-#else
-#define UP_OS_ARCH "armv7l"
-#define UP_CPU_ABI "armeabi-v7a"
-#define UP_CPU_ABI2 "armeabi"
-#endif
 
 H(sys_getProperty)
 {

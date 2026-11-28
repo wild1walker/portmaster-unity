@@ -13,7 +13,7 @@
 //
 // Declarations follow the NDK headers (NdkMediaCodec.h, NdkMediaExtractor.h, NdkMediaFormat.h,
 // NdkMediaError.h, NdkImageReader.h, NdkImage.h, NdkMediaDataSource.h); only scalars and pointers
-// cross the ABI, except AMediaFormat_setFloat / getFloat's out value (softfp on 32-bit ARM).
+// cross the ABI, and AMediaFormat_setFloat / getFloat's float.
 // AMediaCodecBufferInfo has the media core's um_buffer_info layout.
 #include "android_shims.h"
 #include "shim_internal.h"
@@ -199,7 +199,7 @@ bool AMediaFormat_getString(AMediaFormat *f, const char *name, const char **out)
 }
 void AMediaFormat_setInt32(AMediaFormat *f, const char *name, int32_t v) { if (fmt(f)) um_format_set_int32(f->f, name, v); }
 void AMediaFormat_setInt64(AMediaFormat *f, const char *name, int64_t v) { if (fmt(f)) um_format_set_int64(f->f, name, v); }
-SOFTFP void AMediaFormat_setFloat(AMediaFormat *f, const char *name, float v) { if (fmt(f)) um_format_set_float(f->f, name, v); }
+void AMediaFormat_setFloat(AMediaFormat *f, const char *name, float v) { if (fmt(f)) um_format_set_float(f->f, name, v); }
 void AMediaFormat_setString(AMediaFormat *f, const char *name, const char *v) { if (fmt(f)) um_format_set_string(f->f, name, v); }
 void AMediaFormat_setBuffer(AMediaFormat *f, const char *name, const void *data, size_t size)
 {

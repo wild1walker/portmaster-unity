@@ -85,7 +85,7 @@ int main(int argc, char **argv)
     setenv("UA_FUTEX_STATS", argc > 2 ? argv[2] : "1", 1);
     const so_shim *t = futex_table();
     if (!t[0].name || strcmp(t[0].name, "syscall")) {
-        // QEMU's 32-bit ARM user mode cannot read the generic timer: futex.c stays off there
+        // a kernel that does not let user space read the generic timer: futex.c stays off there
         printf("SKIP: no wrapper (the ARM timer is not readable here; run this on the handheld)\n");
         return 0;
     }

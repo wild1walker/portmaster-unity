@@ -1,8 +1,7 @@
 /*
  * fakejni.c - JavaVM / JNIEnv in C (see fakejni.h for the model).
  *
- * Layout reference: Android libnativehelper include_jni/jni.h (vendored in include/, with the
- * JNI_ABI attribute, softfp on 32-bit ARM, added to every slot). Ideas from FalsoJNI (Vita) and gmloader;
+ * Layout reference: Android libnativehelper include_jni/jni.h (vendored in include/). Ideas from FalsoJNI (Vita) and gmloader;
  * the code is our own.
  */
 #define _GNU_SOURCE
@@ -1054,18 +1053,6 @@ void fj_throw(JNIEnv *env, const char *cls, const char *msg)
  * JNI signature: they are laid out where the callee's calling convention expects them, then the
  * function is called through a pointer type whose fixed parameter list is long enough for any
  * signature (FJ_MAXARGS arguments after env and self). */
-#if defined(__arm__)
-/* armeabi-v7a, base AAPCS ("softfp"): every argument is a run of 32-bit words in r0-r3, then on
- * the stack; 64-bit values start at an even word (register pair / 8-byte aligned slot). The
- * result comes back in r0 or r0:r1. */
-typedef uint64_t (__attribute__((pcs("aapcs"))) *fn_words_t)(
-    uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-    uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-    uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-    uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-    uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
-#define NWORDS 40
-#elif defined(__aarch64__)
 /* arm64-v8a, AAPCS64 (Android and Linux use the same one): the first 8 integer and pointer
  * arguments go in x0-x7, the first 8 float and double arguments in v0-v7 (a float as single
  * precision in s<n>, not promoted), and every argument after its register class has run out
@@ -1089,7 +1076,6 @@ typedef double (*fn_a64_d_t)(A64_PARAMS);
     st[0], st[1], st[2], st[3], st[4], st[5], st[6], st[7], st[8], st[9], st[10], st[11], st[12],   \
     st[13], st[14], st[15], st[16], st[17], st[18], st[19], st[20], st[21], st[22], st[23], st[24], \
     st[25]
-#endif
 
 /* The raw result (r0:r1, x0, or the bits of d0 whose low half is s0) as the signature's type. */
 static jvalue ret_from_bits(char r, uint64_t bits)
@@ -1106,7 +1092,7 @@ static jvalue ret_from_bits(char r, uint64_t bits)
     case 'F': memcpy(&v.f, &lo, 4); break;
     case 'J': v.j = (jlong)bits; break;
     case 'D': memcpy(&v.d, &bits, 8); break;
-    default:  v.l = (jobject)(uintptr_t)bits; break;   /* r0 on ARM (uintptr_t is 32-bit), x0 on AArch64 */
+    default:  v.l = (jobject)(uintptr_t)bits; break;   /* x0 */
     }
     return v;
 }
@@ -1116,46 +1102,6 @@ jvalue fj_invoke_native(void *fn, JNIEnv *env, jobject self, const char *sig, co
     fj_sig s = parse_sig(sig);
     jvalue none; none.j = 0;
     if (!fn) return none;
-#if defined(__arm__)
-    uint32_t w[NWORDS];
-    int k = 0;
-    memset(w, 0, sizeof w);
-    w[k++] = (uint32_t)(uintptr_t)env;
-    w[k++] = (uint32_t)(uintptr_t)self;
-    for (int i = 0; i < s.nargs; i++) {
-        char t = s.a[i];
-        if (t == 'J' || t == 'D') {
-            if (k & 1) k++;                       /* doublewords: even reg pair / 8-aligned stack */
-            if (k + 2 > NWORDS) goto toolong;
-            uint64_t b; memcpy(&b, &args[i].j, 8);
-            w[k++] = (uint32_t)b; w[k++] = (uint32_t)(b >> 32);
-        } else {
-            if (k + 1 > NWORDS) goto toolong;
-            uint32_t x;
-            switch (t) {
-            case 'Z': x = args[i].z; break;
-            case 'B': x = (uint32_t)(int32_t)args[i].b; break;
-            case 'C': x = args[i].c; break;
-            case 'S': x = (uint32_t)(int32_t)args[i].s; break;
-            case 'F': memcpy(&x, &args[i].f, 4); break;
-            case 'I': x = (uint32_t)args[i].i; break;
-            default:  x = (uint32_t)(uintptr_t)args[i].l; break;
-            }
-            w[k++] = x;
-        }
-    }
-    {
-        fn_words_t f = (fn_words_t)fn;
-        uint64_t r = f(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11],
-                       w[12], w[13], w[14], w[15], w[16], w[17], w[18], w[19], w[20], w[21], w[22],
-                       w[23], w[24], w[25], w[26], w[27], w[28], w[29], w[30], w[31], w[32], w[33],
-                       w[34], w[35], w[36], w[37], w[38], w[39]);
-        return ret_from_bits(s.ret, r);
-    }
-toolong:
-    fj_log("fj_invoke_native: too many argument words for %s", sig);
-    return none;
-#elif defined(__aarch64__)
     uint64_t x[8], st[NSTACK];
     double v[8];
     int nx = 0, nv = 0, ns = 0;
@@ -1193,12 +1139,6 @@ toolong:
         return ret_from_bits(s.ret, bits);
     }
     return ret_from_bits(s.ret, ((fn_a64_x_t)fn)(A64_ARGS(x, v, st)));
-#else
-    /* other architectures (no Android player to run): natives cannot be called */
-    (void)env; (void)self; (void)args; (void)s;
-    fj_log("fj_invoke_native: unsupported on this architecture (%s)", sig);
-    return none;
-#endif
 }
 
 enum { CALL_VIRTUAL, CALL_NONVIRTUAL, CALL_STATIC, CALL_CTOR };
@@ -1433,16 +1373,16 @@ jvalue fj_call_native(const char *cls, const char *name, const char *sig, jobjec
 
 #define ENV_UNUSED (void)env
 
-static jint FJ_ABI j_GetVersion(JNIEnv *env) { ENV_UNUSED; TRACE("GetVersion"); return JNI_VERSION_1_6; }
+static jint j_GetVersion(JNIEnv *env) { ENV_UNUSED; TRACE("GetVersion"); return JNI_VERSION_1_6; }
 
-static jclass FJ_ABI j_DefineClass(JNIEnv *env, const char *name, jobject loader, const jbyte *buf, jsize len)
+static jclass j_DefineClass(JNIEnv *env, const char *name, jobject loader, const jbyte *buf, jsize len)
 {
     ENV_UNUSED; (void)loader; (void)buf;
     fj_log("UNSUPPORTED DefineClass(%s, %d bytes)", name ? name : "?", (int)len);
     return NULL;
 }
 
-static jclass FJ_ABI j_FindClass(JNIEnv *env, const char *name)
+static jclass j_FindClass(JNIEnv *env, const char *name)
 {
     if (!name) return NULL;
     fj_class *c = class_get(name, 0);
@@ -1463,7 +1403,7 @@ static jclass FJ_ABI j_FindClass(JNIEnv *env, const char *name)
     return (jclass)c;
 }
 
-static jmethodID FJ_ABI j_FromReflectedMethod(JNIEnv *env, jobject m)
+static jmethodID j_FromReflectedMethod(JNIEnv *env, jobject m)
 {
     ENV_UNUSED;
     fj_obj *o = O(m);
@@ -1471,7 +1411,7 @@ static jmethodID FJ_ABI j_FromReflectedMethod(JNIEnv *env, jobject m)
     return o ? (jmethodID)o->data : NULL;
 }
 
-static jfieldID FJ_ABI j_FromReflectedField(JNIEnv *env, jobject f)
+static jfieldID j_FromReflectedField(JNIEnv *env, jobject f)
 {
     ENV_UNUSED;
     fj_obj *o = O(f);
@@ -1479,7 +1419,7 @@ static jfieldID FJ_ABI j_FromReflectedField(JNIEnv *env, jobject f)
     return o ? (jfieldID)o->data : NULL;
 }
 
-static jobject FJ_ABI j_ToReflectedMethod(JNIEnv *env, jclass cls, jmethodID mid, jboolean isStatic)
+static jobject j_ToReflectedMethod(JNIEnv *env, jclass cls, jmethodID mid, jboolean isStatic)
 {
     ENV_UNUSED; (void)cls; (void)isStatic;
     fj_obj *o = obj_alloc(C_Method, K_OBJECT);
@@ -1488,7 +1428,7 @@ static jobject FJ_ABI j_ToReflectedMethod(JNIEnv *env, jclass cls, jmethodID mid
     return add_local(o);
 }
 
-static jobject FJ_ABI j_ToReflectedField(JNIEnv *env, jclass cls, jfieldID fid, jboolean isStatic)
+static jobject j_ToReflectedField(JNIEnv *env, jclass cls, jfieldID fid, jboolean isStatic)
 {
     ENV_UNUSED; (void)cls; (void)isStatic;
     fj_obj *o = obj_alloc(C_Field, K_OBJECT);
@@ -1497,7 +1437,7 @@ static jobject FJ_ABI j_ToReflectedField(JNIEnv *env, jclass cls, jfieldID fid, 
     return add_local(o);
 }
 
-static jclass FJ_ABI j_GetSuperclass(JNIEnv *env, jclass cls)
+static jclass j_GetSuperclass(JNIEnv *env, jclass cls)
 {
     ENV_UNUSED;
     fj_class *c = CL(cls);
@@ -1505,7 +1445,7 @@ static jclass FJ_ABI j_GetSuperclass(JNIEnv *env, jclass cls)
     return c ? (jclass)c->super : NULL;
 }
 
-static jboolean FJ_ABI j_IsAssignableFrom(JNIEnv *env, jclass a, jclass b)
+static jboolean j_IsAssignableFrom(JNIEnv *env, jclass a, jclass b)
 {
     ENV_UNUSED;
     fj_class *ca = CL(a), *cb = CL(b);
@@ -1514,7 +1454,7 @@ static jboolean FJ_ABI j_IsAssignableFrom(JNIEnv *env, jclass a, jclass b)
     return r;
 }
 
-static jint FJ_ABI j_Throw(JNIEnv *env, jthrowable t)
+static jint j_Throw(JNIEnv *env, jthrowable t)
 {
     ENV_UNUSED;
     TRACE("Throw %p", t);
@@ -1522,14 +1462,14 @@ static jint FJ_ABI j_Throw(JNIEnv *env, jthrowable t)
     return JNI_OK;
 }
 
-static jint FJ_ABI j_ThrowNew(JNIEnv *env, jclass cls, const char *msg)
+static jint j_ThrowNew(JNIEnv *env, jclass cls, const char *msg)
 {
     fj_class *c = CL(cls);
     fj_throw(env, c ? c->name : "java/lang/RuntimeException", msg);
     return JNI_OK;
 }
 
-static jthrowable FJ_ABI j_ExceptionOccurred(JNIEnv *env)
+static jthrowable j_ExceptionOccurred(JNIEnv *env)
 {
     ENV_UNUSED;
     fj_thread *t = TH();
@@ -1537,7 +1477,7 @@ static jthrowable FJ_ABI j_ExceptionOccurred(JNIEnv *env)
     return t->exc ? add_local(t->exc) : NULL;
 }
 
-static void FJ_ABI j_ExceptionDescribe(JNIEnv *env)
+static void j_ExceptionDescribe(JNIEnv *env)
 {
     ENV_UNUSED;
     fj_thread *t = TH();
@@ -1547,21 +1487,21 @@ static void FJ_ABI j_ExceptionDescribe(JNIEnv *env)
     }
 }
 
-static void FJ_ABI j_ExceptionClear(JNIEnv *env)
+static void j_ExceptionClear(JNIEnv *env)
 {
     ENV_UNUSED;
     TRACE("ExceptionClear");
     set_exception(TH(), NULL);
 }
 
-static void FJ_ABI j_FatalError(JNIEnv *env, const char *msg)
+static void j_FatalError(JNIEnv *env, const char *msg)
 {
     ENV_UNUSED;
     fj_log("FatalError: %s", msg ? msg : "");
     abort();
 }
 
-static jint FJ_ABI j_PushLocalFrame(JNIEnv *env, jint cap)
+static jint j_PushLocalFrame(JNIEnv *env, jint cap)
 {
     ENV_UNUSED;
     TRACE("PushLocalFrame %d", cap);
@@ -1569,7 +1509,7 @@ static jint FJ_ABI j_PushLocalFrame(JNIEnv *env, jint cap)
     return JNI_OK;
 }
 
-static jobject FJ_ABI j_PopLocalFrame(JNIEnv *env, jobject result)
+static jobject j_PopLocalFrame(JNIEnv *env, jobject result)
 {
     ENV_UNUSED;
     TRACE("PopLocalFrame %p", result);
@@ -1581,21 +1521,21 @@ static jobject FJ_ABI j_PopLocalFrame(JNIEnv *env, jobject result)
     return r;
 }
 
-static jobject FJ_ABI j_NewGlobalRef(JNIEnv *env, jobject obj)
+static jobject j_NewGlobalRef(JNIEnv *env, jobject obj)
 {
     ENV_UNUSED;
     TRACE("NewGlobalRef %p", obj);
     return fj_global(obj);
 }
 
-static void FJ_ABI j_DeleteGlobalRef(JNIEnv *env, jobject obj)
+static void j_DeleteGlobalRef(JNIEnv *env, jobject obj)
 {
     ENV_UNUSED;
     TRACE("DeleteGlobalRef %p", obj);
     fj_release(obj);
 }
 
-static void FJ_ABI j_DeleteLocalRef(JNIEnv *env, jobject obj)
+static void j_DeleteLocalRef(JNIEnv *env, jobject obj)
 {
     ENV_UNUSED;
     fj_obj *o = O(obj);
@@ -1603,23 +1543,23 @@ static void FJ_ABI j_DeleteLocalRef(JNIEnv *env, jobject obj)
     if (!del_local(o)) TRACE("DeleteLocalRef %p: not a local ref of this thread (ignored)", obj);
 }
 
-static jboolean FJ_ABI j_IsSameObject(JNIEnv *env, jobject a, jobject b)
+static jboolean j_IsSameObject(JNIEnv *env, jobject a, jobject b)
 {
     ENV_UNUSED;
     TRACE("IsSameObject %p %p", a, b);
     return a == b;
 }
 
-static jobject FJ_ABI j_NewLocalRef(JNIEnv *env, jobject obj)
+static jobject j_NewLocalRef(JNIEnv *env, jobject obj)
 {
     ENV_UNUSED;
     TRACE("NewLocalRef %p", obj);
     return add_local(O(obj));
 }
 
-static jint FJ_ABI j_EnsureLocalCapacity(JNIEnv *env, jint cap) { ENV_UNUSED; (void)cap; return JNI_OK; }
+static jint j_EnsureLocalCapacity(JNIEnv *env, jint cap) { ENV_UNUSED; (void)cap; return JNI_OK; }
 
-static jobject FJ_ABI j_AllocObject(JNIEnv *env, jclass cls)
+static jobject j_AllocObject(JNIEnv *env, jclass cls)
 {
     ENV_UNUSED;
     fj_class *c = CL(cls);
@@ -1658,7 +1598,7 @@ static jobject new_object_common(JNIEnv *env, jclass cls, jmethodID mid, const j
     return o;
 }
 
-static jobject FJ_ABI j_NewObjectV(JNIEnv *env, jclass cls, jmethodID mid, va_list ap)
+static jobject j_NewObjectV(JNIEnv *env, jclass cls, jmethodID mid, va_list ap)
 {
     fj_method *m = M(mid);
     jvalue a[FJ_MAXARGS];
@@ -1666,7 +1606,7 @@ static jobject FJ_ABI j_NewObjectV(JNIEnv *env, jclass cls, jmethodID mid, va_li
     return new_object_common(env, cls, mid, a, "NewObjectV");
 }
 
-static jobject FJ_ABI j_NewObject(JNIEnv *env, jclass cls, jmethodID mid, ...)
+static jobject j_NewObject(JNIEnv *env, jclass cls, jmethodID mid, ...)
 {
     fj_method *m = M(mid);
     jvalue a[FJ_MAXARGS];
@@ -1677,7 +1617,7 @@ static jobject FJ_ABI j_NewObject(JNIEnv *env, jclass cls, jmethodID mid, ...)
     return new_object_common(env, cls, mid, a, "NewObject");
 }
 
-static jobject FJ_ABI j_NewObjectA(JNIEnv *env, jclass cls, jmethodID mid, const jvalue *args)
+static jobject j_NewObjectA(JNIEnv *env, jclass cls, jmethodID mid, const jvalue *args)
 {
     fj_method *m = M(mid);
     jvalue a[FJ_MAXARGS];
@@ -1685,7 +1625,7 @@ static jobject FJ_ABI j_NewObjectA(JNIEnv *env, jclass cls, jmethodID mid, const
     return new_object_common(env, cls, mid, a, "NewObjectA");
 }
 
-static jclass FJ_ABI j_GetObjectClass(JNIEnv *env, jobject obj)
+static jclass j_GetObjectClass(JNIEnv *env, jobject obj)
 {
     ENV_UNUSED;
     jclass c = fj_object_class(obj);
@@ -1693,7 +1633,7 @@ static jclass FJ_ABI j_GetObjectClass(JNIEnv *env, jobject obj)
     return c;
 }
 
-static jboolean FJ_ABI j_IsInstanceOf(JNIEnv *env, jobject obj, jclass cls)
+static jboolean j_IsInstanceOf(JNIEnv *env, jobject obj, jclass cls)
 {
     ENV_UNUSED;
     if (!obj) return JNI_TRUE;   /* JNI: null is an instance of every class */
@@ -1728,13 +1668,13 @@ static jmethodID get_method(jclass cls, const char *name, const char *sig, int i
     return (jmethodID)m;
 }
 
-static jmethodID FJ_ABI j_GetMethodID(JNIEnv *env, jclass cls, const char *name, const char *sig)
+static jmethodID j_GetMethodID(JNIEnv *env, jclass cls, const char *name, const char *sig)
 {
     ENV_UNUSED;
     return get_method(cls, name, sig, 0, "GetMethodID");
 }
 
-static jmethodID FJ_ABI j_GetStaticMethodID(JNIEnv *env, jclass cls, const char *name, const char *sig)
+static jmethodID j_GetStaticMethodID(JNIEnv *env, jclass cls, const char *name, const char *sig)
 {
     ENV_UNUSED;
     return get_method(cls, name, sig, 1, "GetStaticMethodID");
@@ -1743,27 +1683,27 @@ static jmethodID FJ_ABI j_GetStaticMethodID(JNIEnv *env, jclass cls, const char 
 /* --- Call<Type>Method families --- */
 
 #define CALL_FAMILY(T, jt, fld)                                                                 \
-static jt FJ_ABI j_Call##T##Method(JNIEnv *env, jobject o, jmethodID m, ...)                    \
+static jt j_Call##T##Method(JNIEnv *env, jobject o, jmethodID m, ...)                    \
 { va_list ap; va_start(ap, m); jvalue r = invoke_v(env, o, m, ap, CALL_VIRTUAL, "Call" #T "Method"); \
   va_end(ap); return r.fld; }                                                                   \
-static jt FJ_ABI j_Call##T##MethodV(JNIEnv *env, jobject o, jmethodID m, va_list ap)            \
+static jt j_Call##T##MethodV(JNIEnv *env, jobject o, jmethodID m, va_list ap)            \
 { return invoke_v(env, o, m, ap, CALL_VIRTUAL, "Call" #T "MethodV").fld; }                        \
-static jt FJ_ABI j_Call##T##MethodA(JNIEnv *env, jobject o, jmethodID m, const jvalue *a)       \
+static jt j_Call##T##MethodA(JNIEnv *env, jobject o, jmethodID m, const jvalue *a)       \
 { return invoke_a(env, o, m, a, CALL_VIRTUAL, "Call" #T "MethodA").fld; }                         \
-static jt FJ_ABI j_CallNonvirtual##T##Method(JNIEnv *env, jobject o, jclass c, jmethodID m, ...) \
+static jt j_CallNonvirtual##T##Method(JNIEnv *env, jobject o, jclass c, jmethodID m, ...) \
 { (void)c; va_list ap; va_start(ap, m);                                                         \
   jvalue r = invoke_v(env, o, m, ap, CALL_NONVIRTUAL, "CallNonvirtual" #T "Method");             \
   va_end(ap); return r.fld; }                                                                   \
-static jt FJ_ABI j_CallNonvirtual##T##MethodV(JNIEnv *env, jobject o, jclass c, jmethodID m, va_list ap) \
+static jt j_CallNonvirtual##T##MethodV(JNIEnv *env, jobject o, jclass c, jmethodID m, va_list ap) \
 { (void)c; return invoke_v(env, o, m, ap, CALL_NONVIRTUAL, "CallNonvirtual" #T "MethodV").fld; }  \
-static jt FJ_ABI j_CallNonvirtual##T##MethodA(JNIEnv *env, jobject o, jclass c, jmethodID m, const jvalue *a) \
+static jt j_CallNonvirtual##T##MethodA(JNIEnv *env, jobject o, jclass c, jmethodID m, const jvalue *a) \
 { (void)c; return invoke_a(env, o, m, a, CALL_NONVIRTUAL, "CallNonvirtual" #T "MethodA").fld; }   \
-static jt FJ_ABI j_CallStatic##T##Method(JNIEnv *env, jclass c, jmethodID m, ...)                \
+static jt j_CallStatic##T##Method(JNIEnv *env, jclass c, jmethodID m, ...)                \
 { va_list ap; va_start(ap, m); jvalue r = invoke_v(env, c, m, ap, CALL_STATIC, "CallStatic" #T "Method"); \
   va_end(ap); return r.fld; }                                                                   \
-static jt FJ_ABI j_CallStatic##T##MethodV(JNIEnv *env, jclass c, jmethodID m, va_list ap)       \
+static jt j_CallStatic##T##MethodV(JNIEnv *env, jclass c, jmethodID m, va_list ap)       \
 { return invoke_v(env, c, m, ap, CALL_STATIC, "CallStatic" #T "MethodV").fld; }                   \
-static jt FJ_ABI j_CallStatic##T##MethodA(JNIEnv *env, jclass c, jmethodID m, const jvalue *a)  \
+static jt j_CallStatic##T##MethodA(JNIEnv *env, jclass c, jmethodID m, const jvalue *a)  \
 { return invoke_a(env, c, m, a, CALL_STATIC, "CallStatic" #T "MethodA").fld; }
 
 CALL_FAMILY(Object, jobject, l)
@@ -1776,23 +1716,23 @@ CALL_FAMILY(Long, jlong, j)
 CALL_FAMILY(Float, jfloat, f)
 CALL_FAMILY(Double, jdouble, d)
 
-static void FJ_ABI j_CallVoidMethod(JNIEnv *env, jobject o, jmethodID m, ...)
+static void j_CallVoidMethod(JNIEnv *env, jobject o, jmethodID m, ...)
 { va_list ap; va_start(ap, m); invoke_v(env, o, m, ap, CALL_VIRTUAL, "CallVoidMethod"); va_end(ap); }
-static void FJ_ABI j_CallVoidMethodV(JNIEnv *env, jobject o, jmethodID m, va_list ap)
+static void j_CallVoidMethodV(JNIEnv *env, jobject o, jmethodID m, va_list ap)
 { invoke_v(env, o, m, ap, CALL_VIRTUAL, "CallVoidMethodV"); }
-static void FJ_ABI j_CallVoidMethodA(JNIEnv *env, jobject o, jmethodID m, const jvalue *a)
+static void j_CallVoidMethodA(JNIEnv *env, jobject o, jmethodID m, const jvalue *a)
 { invoke_a(env, o, m, a, CALL_VIRTUAL, "CallVoidMethodA"); }
-static void FJ_ABI j_CallNonvirtualVoidMethod(JNIEnv *env, jobject o, jclass c, jmethodID m, ...)
+static void j_CallNonvirtualVoidMethod(JNIEnv *env, jobject o, jclass c, jmethodID m, ...)
 { (void)c; va_list ap; va_start(ap, m); invoke_v(env, o, m, ap, CALL_NONVIRTUAL, "CallNonvirtualVoidMethod"); va_end(ap); }
-static void FJ_ABI j_CallNonvirtualVoidMethodV(JNIEnv *env, jobject o, jclass c, jmethodID m, va_list ap)
+static void j_CallNonvirtualVoidMethodV(JNIEnv *env, jobject o, jclass c, jmethodID m, va_list ap)
 { (void)c; invoke_v(env, o, m, ap, CALL_NONVIRTUAL, "CallNonvirtualVoidMethodV"); }
-static void FJ_ABI j_CallNonvirtualVoidMethodA(JNIEnv *env, jobject o, jclass c, jmethodID m, const jvalue *a)
+static void j_CallNonvirtualVoidMethodA(JNIEnv *env, jobject o, jclass c, jmethodID m, const jvalue *a)
 { (void)c; invoke_a(env, o, m, a, CALL_NONVIRTUAL, "CallNonvirtualVoidMethodA"); }
-static void FJ_ABI j_CallStaticVoidMethod(JNIEnv *env, jclass c, jmethodID m, ...)
+static void j_CallStaticVoidMethod(JNIEnv *env, jclass c, jmethodID m, ...)
 { va_list ap; va_start(ap, m); invoke_v(env, c, m, ap, CALL_STATIC, "CallStaticVoidMethod"); va_end(ap); }
-static void FJ_ABI j_CallStaticVoidMethodV(JNIEnv *env, jclass c, jmethodID m, va_list ap)
+static void j_CallStaticVoidMethodV(JNIEnv *env, jclass c, jmethodID m, va_list ap)
 { invoke_v(env, c, m, ap, CALL_STATIC, "CallStaticVoidMethodV"); }
-static void FJ_ABI j_CallStaticVoidMethodA(JNIEnv *env, jclass c, jmethodID m, const jvalue *a)
+static void j_CallStaticVoidMethodA(JNIEnv *env, jclass c, jmethodID m, const jvalue *a)
 { invoke_a(env, c, m, a, CALL_STATIC, "CallStaticVoidMethodA"); }
 
 /* --- fields --- */
@@ -1920,9 +1860,9 @@ jfieldID fj_field_compatible(jclass cls, const char *name, const char *sig, int 
     return best ? (jfieldID)best : get_field(cls, name, sig, is_static, "ReflectionHelper.getFieldID");
 }
 
-static jfieldID FJ_ABI j_GetFieldID(JNIEnv *env, jclass cls, const char *name, const char *sig)
+static jfieldID j_GetFieldID(JNIEnv *env, jclass cls, const char *name, const char *sig)
 { ENV_UNUSED; return get_field(cls, name, sig, 0, "GetFieldID"); }
-static jfieldID FJ_ABI j_GetStaticFieldID(JNIEnv *env, jclass cls, const char *name, const char *sig)
+static jfieldID j_GetStaticFieldID(JNIEnv *env, jclass cls, const char *name, const char *sig)
 { ENV_UNUSED; return get_field(cls, name, sig, 1, "GetStaticFieldID"); }
 
 static jvalue field_get(jobject obj, jfieldID fid, int is_static, const char *api)
@@ -1971,13 +1911,13 @@ static void field_set(jobject obj, jfieldID fid, jvalue v, int is_static, const 
 }
 
 #define FIELD_FAMILY(T, jt, fld)                                                              \
-static jt FJ_ABI j_Get##T##Field(JNIEnv *env, jobject o, jfieldID f)                          \
+static jt j_Get##T##Field(JNIEnv *env, jobject o, jfieldID f)                          \
 { ENV_UNUSED; return field_get(o, f, 0, "Get" #T "Field").fld; }                              \
-static void FJ_ABI j_Set##T##Field(JNIEnv *env, jobject o, jfieldID f, jt v)                  \
+static void j_Set##T##Field(JNIEnv *env, jobject o, jfieldID f, jt v)                  \
 { ENV_UNUSED; jvalue x; x.j = 0; x.fld = v; field_set(o, f, x, 0, "Set" #T "Field"); }        \
-static jt FJ_ABI j_GetStatic##T##Field(JNIEnv *env, jclass c, jfieldID f)                     \
+static jt j_GetStatic##T##Field(JNIEnv *env, jclass c, jfieldID f)                     \
 { ENV_UNUSED; return field_get(c, f, 1, "GetStatic" #T "Field").fld; }                        \
-static void FJ_ABI j_SetStatic##T##Field(JNIEnv *env, jclass c, jfieldID f, jt v)             \
+static void j_SetStatic##T##Field(JNIEnv *env, jclass c, jfieldID f, jt v)             \
 { ENV_UNUSED; jvalue x; x.j = 0; x.fld = v; field_set(c, f, x, 1, "SetStatic" #T "Field"); }
 
 FIELD_FAMILY(Object, jobject, l)
@@ -1994,7 +1934,7 @@ FIELD_FAMILY(Double, jdouble, d)
 
 static const char empty_utf[] = "";
 
-static jstring FJ_ABI j_NewString(JNIEnv *env, const jchar *u, jsize len)
+static jstring j_NewString(JNIEnv *env, const jchar *u, jsize len)
 {
     ENV_UNUSED;
     if (!u && len) return NULL;
@@ -2003,7 +1943,7 @@ static jstring FJ_ABI j_NewString(JNIEnv *env, const jchar *u, jsize len)
     return add_local(s);
 }
 
-static jsize FJ_ABI j_GetStringLength(JNIEnv *env, jstring str)
+static jsize j_GetStringLength(JNIEnv *env, jstring str)
 {
     ENV_UNUSED;
     fj_obj *s = STR(str, "GetStringLength");
@@ -2011,7 +1951,7 @@ static jsize FJ_ABI j_GetStringLength(JNIEnv *env, jstring str)
     return s ? s->u.s.len : 0;
 }
 
-static const jchar *FJ_ABI j_GetStringChars(JNIEnv *env, jstring str, jboolean *isCopy)
+static const jchar *j_GetStringChars(JNIEnv *env, jstring str, jboolean *isCopy)
 {
     ENV_UNUSED;
     fj_obj *s = STR(str, "GetStringChars");
@@ -2022,13 +1962,13 @@ static const jchar *FJ_ABI j_GetStringChars(JNIEnv *env, jstring str, jboolean *
     return c;
 }
 
-static void FJ_ABI j_ReleaseStringChars(JNIEnv *env, jstring str, const jchar *chars)
+static void j_ReleaseStringChars(JNIEnv *env, jstring str, const jchar *chars)
 {
     ENV_UNUSED; (void)str;
     free((void *)chars);
 }
 
-static jstring FJ_ABI j_NewStringUTF(JNIEnv *env, const char *utf)
+static jstring j_NewStringUTF(JNIEnv *env, const char *utf)
 {
     ENV_UNUSED;
     if (!utf) { TRACE("NewStringUTF(NULL) -> null"); return NULL; }
@@ -2037,7 +1977,7 @@ static jstring FJ_ABI j_NewStringUTF(JNIEnv *env, const char *utf)
     return r;
 }
 
-static jsize FJ_ABI j_GetStringUTFLength(JNIEnv *env, jstring str)
+static jsize j_GetStringUTFLength(JNIEnv *env, jstring str)
 {
     ENV_UNUSED;
     fj_obj *s = STR(str, "GetStringUTFLength");
@@ -2046,7 +1986,7 @@ static jsize FJ_ABI j_GetStringUTFLength(JNIEnv *env, jstring str)
     return n;
 }
 
-static const char *FJ_ABI j_GetStringUTFChars(JNIEnv *env, jstring str, jboolean *isCopy)
+static const char *j_GetStringUTFChars(JNIEnv *env, jstring str, jboolean *isCopy)
 {
     ENV_UNUSED;
     fj_obj *s = STR(str, "GetStringUTFChars");
@@ -2059,13 +1999,13 @@ static const char *FJ_ABI j_GetStringUTFChars(JNIEnv *env, jstring str, jboolean
     return r;
 }
 
-static void FJ_ABI j_ReleaseStringUTFChars(JNIEnv *env, jstring str, const char *chars)
+static void j_ReleaseStringUTFChars(JNIEnv *env, jstring str, const char *chars)
 {
     ENV_UNUSED; (void)str;
     if (chars && chars != empty_utf) free((void *)chars);
 }
 
-static void FJ_ABI j_GetStringRegion(JNIEnv *env, jstring str, jsize start, jsize len, jchar *buf)
+static void j_GetStringRegion(JNIEnv *env, jstring str, jsize start, jsize len, jchar *buf)
 {
     fj_obj *s = STR(str, "GetStringRegion");
     if (!s || !buf) return;
@@ -2076,7 +2016,7 @@ static void FJ_ABI j_GetStringRegion(JNIEnv *env, jstring str, jsize start, jsiz
     memcpy(buf, s->u.s.chars + start, len * sizeof(jchar));
 }
 
-static void FJ_ABI j_GetStringUTFRegion(JNIEnv *env, jstring str, jsize start, jsize len, char *buf)
+static void j_GetStringUTFRegion(JNIEnv *env, jstring str, jsize start, jsize len, char *buf)
 {
     fj_obj *s = STR(str, "GetStringUTFRegion");
     if (!s || !buf) return;
@@ -2087,7 +2027,7 @@ static void FJ_ABI j_GetStringUTFRegion(JNIEnv *env, jstring str, jsize start, j
     utf16_to_utf8(s->u.s.chars + start, len, buf, 1);
 }
 
-static const jchar *FJ_ABI j_GetStringCritical(JNIEnv *env, jstring str, jboolean *isCopy)
+static const jchar *j_GetStringCritical(JNIEnv *env, jstring str, jboolean *isCopy)
 {
     ENV_UNUSED;
     fj_obj *s = STR(str, "GetStringCritical");
@@ -2096,12 +2036,12 @@ static const jchar *FJ_ABI j_GetStringCritical(JNIEnv *env, jstring str, jboolea
     return s ? s->u.s.chars : nothing;
 }
 
-static void FJ_ABI j_ReleaseStringCritical(JNIEnv *env, jstring str, const jchar *c)
+static void j_ReleaseStringCritical(JNIEnv *env, jstring str, const jchar *c)
 { ENV_UNUSED; (void)str; (void)c; }
 
 /* --- arrays --- */
 
-static jsize FJ_ABI j_GetArrayLength(JNIEnv *env, jarray arr)
+static jsize j_GetArrayLength(JNIEnv *env, jarray arr)
 {
     ENV_UNUSED;
     fj_obj *a = ARR(arr, "GetArrayLength");
@@ -2109,7 +2049,7 @@ static jsize FJ_ABI j_GetArrayLength(JNIEnv *env, jarray arr)
     return a ? a->u.a.len : 0;
 }
 
-static jobjectArray FJ_ABI j_NewObjectArray(JNIEnv *env, jsize len, jclass cls, jobject init)
+static jobjectArray j_NewObjectArray(JNIEnv *env, jsize len, jclass cls, jobject init)
 {
     ENV_UNUSED;
     fj_class *c = CL(cls);
@@ -2123,7 +2063,7 @@ static jobjectArray FJ_ABI j_NewObjectArray(JNIEnv *env, jsize len, jclass cls, 
     return add_local(a);
 }
 
-static jobject FJ_ABI j_GetObjectArrayElement(JNIEnv *env, jobjectArray arr, jsize i)
+static jobject j_GetObjectArrayElement(JNIEnv *env, jobjectArray arr, jsize i)
 {
     fj_obj *a = ARR(arr, "GetObjectArrayElement");
     if (!a) return NULL;
@@ -2139,7 +2079,7 @@ static jobject FJ_ABI j_GetObjectArrayElement(JNIEnv *env, jobjectArray arr, jsi
     return r;
 }
 
-static void FJ_ABI j_SetObjectArrayElement(JNIEnv *env, jobjectArray arr, jsize i, jobject v)
+static void j_SetObjectArrayElement(JNIEnv *env, jobjectArray arr, jsize i, jobject v)
 {
     fj_obj *a = ARR(arr, "SetObjectArrayElement");
     if (!a) return;
@@ -2176,15 +2116,15 @@ static void prim_region(JNIEnv *env, jarray arr, jsize start, jsize len, void *b
 }
 
 #define ARRAY_FAMILY(T, jt, sigc)                                                                    \
-static jt##Array FJ_ABI j_New##T##Array(JNIEnv *env, jsize len)                                      \
+static jt##Array j_New##T##Array(JNIEnv *env, jsize len)                                      \
 { ENV_UNUSED; TRACE("New" #T "Array %d", (int)len); return add_local(array_new(sigc, len)); }        \
-static jt *FJ_ABI j_Get##T##ArrayElements(JNIEnv *env, jt##Array a, jboolean *c)                     \
+static jt *j_Get##T##ArrayElements(JNIEnv *env, jt##Array a, jboolean *c)                     \
 { ENV_UNUSED; return prim_elems(a, sigc[0], c, "Get" #T "ArrayElements"); }                          \
-static void FJ_ABI j_Release##T##ArrayElements(JNIEnv *env, jt##Array a, jt *e, jint mode)           \
+static void j_Release##T##ArrayElements(JNIEnv *env, jt##Array a, jt *e, jint mode)           \
 { ENV_UNUSED; (void)a; (void)e; (void)mode; }                                                        \
-static void FJ_ABI j_Get##T##ArrayRegion(JNIEnv *env, jt##Array a, jsize s, jsize l, jt *b)          \
+static void j_Get##T##ArrayRegion(JNIEnv *env, jt##Array a, jsize s, jsize l, jt *b)          \
 { prim_region(env, a, s, l, b, 0, "Get" #T "ArrayRegion"); }                                         \
-static void FJ_ABI j_Set##T##ArrayRegion(JNIEnv *env, jt##Array a, jsize s, jsize l, const jt *b)    \
+static void j_Set##T##ArrayRegion(JNIEnv *env, jt##Array a, jsize s, jsize l, const jt *b)    \
 { prim_region(env, a, s, l, (void *)b, 1, "Set" #T "ArrayRegion"); }
 
 ARRAY_FAMILY(Boolean, jboolean, "Z")
@@ -2196,7 +2136,7 @@ ARRAY_FAMILY(Long, jlong, "J")
 ARRAY_FAMILY(Float, jfloat, "F")
 ARRAY_FAMILY(Double, jdouble, "D")
 
-static void *FJ_ABI j_GetPrimitiveArrayCritical(JNIEnv *env, jarray arr, jboolean *isCopy)
+static void *j_GetPrimitiveArrayCritical(JNIEnv *env, jarray arr, jboolean *isCopy)
 {
     ENV_UNUSED;
     fj_obj *a = ARR(arr, "GetPrimitiveArrayCritical");
@@ -2205,12 +2145,12 @@ static void *FJ_ABI j_GetPrimitiveArrayCritical(JNIEnv *env, jarray arr, jboolea
     return a ? a->u.a.data : NULL;
 }
 
-static void FJ_ABI j_ReleasePrimitiveArrayCritical(JNIEnv *env, jarray arr, void *p, jint mode)
+static void j_ReleasePrimitiveArrayCritical(JNIEnv *env, jarray arr, void *p, jint mode)
 { ENV_UNUSED; (void)arr; (void)p; (void)mode; }
 
 /* --- natives --- */
 
-static jint FJ_ABI j_RegisterNatives(JNIEnv *env, jclass cls, const JNINativeMethod *ms, jint n)
+static jint j_RegisterNatives(JNIEnv *env, jclass cls, const JNINativeMethod *ms, jint n)
 {
     ENV_UNUSED;
     fj_class *c = CL(cls);
@@ -2236,7 +2176,7 @@ static jint FJ_ABI j_RegisterNatives(JNIEnv *env, jclass cls, const JNINativeMet
     return JNI_OK;
 }
 
-static jint FJ_ABI j_UnregisterNatives(JNIEnv *env, jclass cls)
+static jint j_UnregisterNatives(JNIEnv *env, jclass cls)
 {
     ENV_UNUSED;
     fj_class *c = CL(cls);
@@ -2249,10 +2189,10 @@ static jint FJ_ABI j_UnregisterNatives(JNIEnv *env, jclass cls)
     return JNI_OK;
 }
 
-static jint FJ_ABI j_MonitorEnter(JNIEnv *env, jobject o) { ENV_UNUSED; TRACE("MonitorEnter %p (no-op)", o); return JNI_OK; }
-static jint FJ_ABI j_MonitorExit(JNIEnv *env, jobject o) { ENV_UNUSED; TRACE("MonitorExit %p (no-op)", o); return JNI_OK; }
+static jint j_MonitorEnter(JNIEnv *env, jobject o) { ENV_UNUSED; TRACE("MonitorEnter %p (no-op)", o); return JNI_OK; }
+static jint j_MonitorExit(JNIEnv *env, jobject o) { ENV_UNUSED; TRACE("MonitorExit %p (no-op)", o); return JNI_OK; }
 
-static jint FJ_ABI j_GetJavaVM(JNIEnv *env, JavaVM **vm)
+static jint j_GetJavaVM(JNIEnv *env, JavaVM **vm)
 {
     ENV_UNUSED;
     TRACE("GetJavaVM");
@@ -2260,10 +2200,10 @@ static jint FJ_ABI j_GetJavaVM(JNIEnv *env, JavaVM **vm)
     return JNI_OK;
 }
 
-static jweak FJ_ABI j_NewWeakGlobalRef(JNIEnv *env, jobject o) { ENV_UNUSED; TRACE("NewWeakGlobalRef %p", o); return fj_global(o); }
-static void FJ_ABI j_DeleteWeakGlobalRef(JNIEnv *env, jweak o) { ENV_UNUSED; TRACE("DeleteWeakGlobalRef %p", o); fj_release(o); }
+static jweak j_NewWeakGlobalRef(JNIEnv *env, jobject o) { ENV_UNUSED; TRACE("NewWeakGlobalRef %p", o); return fj_global(o); }
+static void j_DeleteWeakGlobalRef(JNIEnv *env, jweak o) { ENV_UNUSED; TRACE("DeleteWeakGlobalRef %p", o); fj_release(o); }
 
-static jboolean FJ_ABI j_ExceptionCheck(JNIEnv *env)
+static jboolean j_ExceptionCheck(JNIEnv *env)
 {
     ENV_UNUSED;
     jboolean r = TH()->exc != NULL;
@@ -2271,7 +2211,7 @@ static jboolean FJ_ABI j_ExceptionCheck(JNIEnv *env)
     return r;
 }
 
-static jobject FJ_ABI j_NewDirectByteBuffer(JNIEnv *env, void *addr, jlong cap)
+static jobject j_NewDirectByteBuffer(JNIEnv *env, void *addr, jlong cap)
 {
     ENV_UNUSED;
     fj_obj *o = obj_alloc(C_ByteBuffer, K_OBJECT);
@@ -2282,14 +2222,14 @@ static jobject FJ_ABI j_NewDirectByteBuffer(JNIEnv *env, void *addr, jlong cap)
     return r;
 }
 
-static void *FJ_ABI j_GetDirectBufferAddress(JNIEnv *env, jobject buf)
+static void *j_GetDirectBufferAddress(JNIEnv *env, jobject buf)
 {
     ENV_UNUSED;
     TRACE("GetDirectBufferAddress %p", buf);
     return fj_data(buf);
 }
 
-static jlong FJ_ABI j_GetDirectBufferCapacity(JNIEnv *env, jobject buf)
+static jlong j_GetDirectBufferCapacity(JNIEnv *env, jobject buf)
 {
     ENV_UNUSED;
     TRACE("GetDirectBufferCapacity %p", buf);
@@ -2297,7 +2237,7 @@ static jlong FJ_ABI j_GetDirectBufferCapacity(JNIEnv *env, jobject buf)
     return fj_get_field(buf, "capacity", "J").j;
 }
 
-static jobjectRefType FJ_ABI j_GetObjectRefType(JNIEnv *env, jobject o)
+static jobjectRefType j_GetObjectRefType(JNIEnv *env, jobject o)
 {
     ENV_UNUSED;
     fj_obj *p = O(o);
@@ -2389,9 +2329,9 @@ static const struct JNINativeInterface g_fns = {
 /* JavaVM                                                                                  */
 /* ======================================================================================= */
 
-static jint FJ_ABI vm_DestroyJavaVM(JavaVM *vm) { (void)vm; fj_log("DestroyJavaVM (ignored)"); return JNI_OK; }
+static jint vm_DestroyJavaVM(JavaVM *vm) { (void)vm; fj_log("DestroyJavaVM (ignored)"); return JNI_OK; }
 
-static jint FJ_ABI vm_AttachCurrentThread(JavaVM *vm, JNIEnv **penv, void *args)
+static jint vm_AttachCurrentThread(JavaVM *vm, JNIEnv **penv, void *args)
 {
     (void)vm; (void)args;
     fj_thread *t = TH();
@@ -2402,7 +2342,7 @@ static jint FJ_ABI vm_AttachCurrentThread(JavaVM *vm, JNIEnv **penv, void *args)
     return JNI_OK;
 }
 
-static jint FJ_ABI vm_DetachCurrentThread(JavaVM *vm)
+static jint vm_DetachCurrentThread(JavaVM *vm)
 {
     (void)vm;
     fj_thread *t = TH();
@@ -2412,7 +2352,7 @@ static jint FJ_ABI vm_DetachCurrentThread(JavaVM *vm)
     return JNI_OK;
 }
 
-static jint FJ_ABI vm_GetEnv(JavaVM *vm, void **penv, jint version)
+static jint vm_GetEnv(JavaVM *vm, void **penv, jint version)
 {
     (void)vm;
     fj_thread *t = TH();      /* auto-attach: always succeeds */

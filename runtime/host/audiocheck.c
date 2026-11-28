@@ -1,4 +1,4 @@
-// Device check: can a 32-bit (armhf) SDL2 program open audio with the given driver while the
+// Device check: can an SDL2 program open audio with the given driver while the
 // system sound server runs? Plays one second of silence. Usage: SDL_AUDIODRIVER=x ./audiocheck
 #include <SDL2/SDL.h>
 #include <stdio.h>

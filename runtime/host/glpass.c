@@ -539,8 +539,7 @@ static void cleared_buffer(GLenum buffer)
     make_pending();
     if (buffer == GL_COLOR) written(GL_DRAW_FRAMEBUFFER, g_cur);
 }
-// (glClearBufferfi clears depth and stencil only: not wrapped here; it takes a float, and a host
-// wrapper calling another one would need the softfp convention on armhf, SO_ABI)
+// (glClearBufferfi clears depth and stencil only: not wrapped here)
 static void w_ClearBufferfv(GLenum b, GLint d, const float *v) { cleared_buffer(b); r_ClearBufferfv(b, d, v); }
 static void w_ClearBufferiv(GLenum b, GLint d, const GLint *v) { cleared_buffer(b); r_ClearBufferiv(b, d, v); }
 static void w_ClearBufferuiv(GLenum b, GLint d, const GLuint *v) { cleared_buffer(b); r_ClearBufferuiv(b, d, v); }

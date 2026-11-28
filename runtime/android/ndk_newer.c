@@ -19,14 +19,14 @@
 // ---- ANativeWindow frame rate --------------------------------------------------------------
 // Unity 2021.3+ and Swappy look ANativeWindow_setFrameRate up and call it with the target frame
 // rate; the host's display has one mode, so the hint changes nothing (a phone with one mode
-// accepts it the same way). frameRate is a float: SOFTFP on armhf.
-SOFTFP int32_t ANativeWindow_setFrameRate(ANativeWindow *w, float frameRate, int8_t compatibility)
+// accepts it the same way).
+int32_t ANativeWindow_setFrameRate(ANativeWindow *w, float frameRate, int8_t compatibility)
 {
     if (!w || frameRate < 0 || isnan(frameRate)) return -EINVAL;
     SHIM_TRACE("ANativeWindow_setFrameRate(%.2f, %d)", (double)frameRate, compatibility);
     return 0;
 }
-SOFTFP int32_t ANativeWindow_setFrameRateWithChangeStrategy(ANativeWindow *w, float frameRate, int8_t compatibility, int8_t strategy)
+int32_t ANativeWindow_setFrameRateWithChangeStrategy(ANativeWindow *w, float frameRate, int8_t compatibility, int8_t strategy)
 {
     (void)strategy;
     return ANativeWindow_setFrameRate(w, frameRate, compatibility);
@@ -85,7 +85,7 @@ int AThermal_registerThermalStatusListener(AThermalManager *m, AThermal_StatusCa
 int AThermal_unregisterThermalStatusListener(AThermalManager *m, AThermal_StatusCallback cb, void *data)
 { (void)data; return m && cb ? 0 : EINVAL; }
 // NaN: "not supported by the device" (Android's own answer without a thermal HAL)
-SOFTFP float AThermal_getThermalHeadroom(AThermalManager *m, int forecastSeconds) { (void)m; (void)forecastSeconds; return NAN; }
+float AThermal_getThermalHeadroom(AThermalManager *m, int forecastSeconds) { (void)m; (void)forecastSeconds; return NAN; }
 int AThermal_getThermalHeadroomThresholds(AThermalManager *m, const void **outThresholds, size_t *size)
 {
     (void)m;

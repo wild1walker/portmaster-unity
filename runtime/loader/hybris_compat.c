@@ -9,11 +9,9 @@
  * import analysis in ../spec/imports.md.
  *
  * Resolution order (main program): android/egl/jni shims, then bionic_shims (below: ours first,
- * then libhybris's), then the host. Every function handed out goes through so_softfp_wrap(),
- * which adds a softfp -> hardfp thunk for the names that pass floats (32-bit ARM only).
+ * then libhybris's), then the host.
  *
- * Both of bionic's ARM ABIs are handled: 32-bit ARM (LP32) and arm64 (LP64). Types whose bionic
- * layout differs from glibc's, and the arch each difference applies to, are noted where they are
+ * bionic's arm64 ABI (LP64). Types whose bionic layout differs from glibc's are noted where they are
  * translated; the rest (struct stat on arm64, dirent, tm, timespec, addrinfo after libhybris's
  * swap, Dl_info, dl_phdr_info, stack_t, siginfo_t, ucontext_t, pthread_attr_t behind libhybris's
  * pointer, the attribute objects glibc writes itself) match or never reach glibc as bionic objects.
@@ -21,8 +19,8 @@
  * Players after 2017.4 (NDK r16b-r23b) add: bionic's own fortify entry points (__FD_SET_chk,
  * __strlen_chk, ...), android_set_abort_message, __mmap2, sys_signame/sys_siglist, and calls whose
  * flag values or 32-bit structures differ from glibc's (nftw/ftw, fnmatch, pathconf, newlocale,
- * getpw*, statvfs, mknod, the mbstate_t string conversions, sem_open). See "newer players" below;
- * the float-returning ones (wcstod, strtold_l, ...) are softfp wrappers in softfp.c. Older ones
+ * getpw*, statvfs, mknod, the mbstate_t string conversions, sem_open). See "newer players" below.
+ * Older ones
  * (5.6 - 2017.1) import the SHA1Init/SHA1Update/SHA1Final that bionic's libc exported then.
  */
 #include "../thirdparty/libhybris/hybris/common/hooks.c"
@@ -53,7 +51,6 @@ int __cxa_atexit(void (*)(void *), void *, void *);
 /* so_loader.c: the dynamic linker's functions for Android code */
 int so_dladdr(const void *addr, Dl_info *info);
 int so_dl_iterate_phdr(int (*cb)(struct dl_phdr_info *, size_t, void *), void *data);
-uintptr_t so_dl_unwind_find_exidx(uintptr_t pc, int *pcount);
 void *so_android_dlopen_ext(const char *filename, int flags, const void *extinfo);
 
 /* ---- data the Android libraries import ------------------------------------------------- */
@@ -139,11 +136,7 @@ static int bionic_fstatfs(int fd, struct statfs64 *st) { return fstatfs64(fd, st
  * { flags, handler, mask, restorer } on arm64. The *64 functions of API 28 are left out. */
 typedef unsigned long bionic_sigset_t;
 #define BSIG_BITS (8 * sizeof(bionic_sigset_t))
-#if defined(__LP64__)
 struct bionic_sigaction { int flags; void *handler; bionic_sigset_t mask; void *restorer; };
-#else
-struct bionic_sigaction { void *handler; bionic_sigset_t mask; int flags; void *restorer; };
-#endif
 
 static void mask_in(sigset_t *g, const bionic_sigset_t *b)
 {
@@ -393,16 +386,11 @@ static int bionic_getnameinfo(const struct sockaddr *sa, socklen_t len, char *ho
 
 /* Android system properties: SO_PROP_<name with '.' -> '_'> from the environment, else these */
 static const char *const default_props[][2] = {
-#if defined(__aarch64__)
     /* 64-bit Android starts at 5.0 (API 21); 22 is what the fake Java side reports */
     { "ro.build.version.sdk", "22" }, { "ro.build.version.release", "5.1.1" },
     { "ro.product.cpu.abi", "arm64-v8a" }, { "ro.product.cpu.abi2", "" },
     { "ro.product.cpu.abilist", "arm64-v8a" }, { "ro.product.cpu.abilist64", "arm64-v8a" },
     { "ro.product.cpu.abilist32", "" },
-#else
-    { "ro.build.version.sdk", "19" }, { "ro.build.version.release", "4.4.4" },
-    { "ro.product.cpu.abi", "armeabi-v7a" }, { "ro.product.cpu.abi2", "armeabi" },
-#endif
     { "ro.product.model", "RG34XX-SP" }, { "ro.product.manufacturer", "Anbernic" },
     { "ro.product.brand", "Anbernic" }, { "ro.product.device", "rgsp" },
     { "ro.hardware", "sun50iw9" }, { "ro.board.platform", "sun50iw9" },
@@ -986,13 +974,6 @@ static size_t bionic_fwrite_chk(const void *buf, size_t size, size_t count, FILE
     return fwrite(buf, size, count, _get_actual_fp(fp));
 }
 
-#if defined(__arm__)
-/* bionic's raw mmap2 system call (offset in 4096-byte units), which Mono's libraries call directly */
-static void *bionic_mmap2(void *addr, size_t size, int prot, int flags, int fd, size_t pgoff)
-{
-    return (void *)syscall(SYS_mmap2, addr, size, prot, flags, fd, pgoff);
-}
-#endif
 
 /* ---- SHA1Init / SHA1Update / SHA1Final: the NetBSD-style SHA-1 old bionic libcs exported, which
  * libunity 5.6 - 2017.1 imports. SHA1_CTX is bionic's: uint32_t state[5], count[2]; uint8_t
@@ -1176,121 +1157,8 @@ static locale_t bionic_newlocale(int mask, const char *name, locale_t base)
     return l;
 }
 
-#if !defined(__LP64__)
-/* ---- 32-bit ARM structure layouts ---------------------------------------------------------------- */
 
-/* struct passwd: bionic's LP32 one has no pw_gecos ({ name, passwd, uid, gid, dir, shell }); glibc's
- * has it before pw_dir. The strings stay where glibc put them (the caller's buffer for the _r forms,
- * glibc's static one otherwise); the non-_r results are per thread, as in bionic. */
-struct bionic_passwd { char *pw_name, *pw_passwd; uid_t pw_uid; gid_t pw_gid; char *pw_dir, *pw_shell; };
-static __thread struct bionic_passwd t_passwd;
-static struct bionic_passwd *passwd_out(struct bionic_passwd *b, const struct passwd *g)
-{
-    b->pw_name = g->pw_name;
-    b->pw_passwd = g->pw_passwd;
-    b->pw_uid = g->pw_uid;
-    b->pw_gid = g->pw_gid;
-    b->pw_dir = g->pw_dir;
-    b->pw_shell = g->pw_shell;
-    return b;
-}
-static struct bionic_passwd *bionic_getpwuid(uid_t uid)
-{
-    struct passwd *g = getpwuid(uid);
-    return g ? passwd_out(&t_passwd, g) : NULL;
-}
-static struct bionic_passwd *bionic_getpwnam(const char *name)
-{
-    struct passwd *g = getpwnam(name);
-    return g ? passwd_out(&t_passwd, g) : NULL;
-}
-static int bionic_getpwuid_r(uid_t uid, struct bionic_passwd *pw, char *buf, size_t n, struct bionic_passwd **res)
-{
-    struct passwd g, *gr = NULL;
-    int r = getpwuid_r(uid, &g, buf, n, &gr);
-    *res = r == 0 && gr ? passwd_out(pw, &g) : NULL;
-    return r;
-}
-static int bionic_getpwnam_r(const char *name, struct bionic_passwd *pw, char *buf, size_t n, struct bionic_passwd **res)
-{
-    struct passwd g, *gr = NULL;
-    int r = getpwnam_r(name, &g, buf, n, &gr);
-    *res = r == 0 && gr ? passwd_out(pw, &g) : NULL;
-    return r;
-}
-
-/* struct statvfs (and statvfs64, the same in bionic): eleven unsigned longs, 44 bytes, its block and
- * file counts being unsigned long (fsblkcnt_t, fsfilcnt_t); glibc's 32-bit one has an int after f_fsid
- * and six spare ints (72 bytes), its statvfs64 64-bit counts. On arm64 both are glibc's layout. */
-struct bionic_statvfs {
-    unsigned long f_bsize, f_frsize, f_blocks, f_bfree, f_bavail, f_files, f_ffree, f_favail, f_fsid, f_flag, f_namemax;
-};
-static void statvfs_out(struct bionic_statvfs *b, const struct statvfs64 *g)
-{
-    b->f_bsize = g->f_bsize;
-    b->f_frsize = g->f_frsize;
-    b->f_blocks = (unsigned long)g->f_blocks;      /* truncated as bionic does */
-    b->f_bfree = (unsigned long)g->f_bfree;
-    b->f_bavail = (unsigned long)g->f_bavail;
-    b->f_files = (unsigned long)g->f_files;
-    b->f_ffree = (unsigned long)g->f_ffree;
-    b->f_favail = (unsigned long)g->f_favail;
-    b->f_fsid = g->f_fsid;
-    b->f_flag = g->f_flag;
-    b->f_namemax = g->f_namemax;
-}
-static int bionic_statvfs(const char *path, struct bionic_statvfs *b)
-{
-    struct statvfs64 g;
-    int r = statvfs64(path, &g);
-    if (r == 0) statvfs_out(b, &g);
-    return r;
-}
-static int bionic_fstatvfs(int fd, struct bionic_statvfs *b)
-{
-    struct statvfs64 g;
-    int r = fstatvfs64(fd, &g);
-    if (r == 0) statvfs_out(b, &g);
-    return r;
-}
-
-/* dev_t is 32 bits in bionic's LP32 ABI, 64 in glibc's: in mknod the high word would be r3's leftover
- * (glibc then fails with EINVAL), in mknodat a stack word */
-static int bionic_mknod(const char *path, mode_t mode, uint32_t dev) { return mknod(path, mode, (dev_t)dev); }
-static int bionic_mknodat(int dirfd, const char *path, mode_t mode, uint32_t dev) { return mknodat(dirfd, path, mode, (dev_t)dev); }
-
-/* the string conversions with a state: bionic's mbstate_t is 4 bytes here, glibc writes 8. The
- * per-thread glibc state of mbrtowc above stands in for the caller's; NULL keeps glibc's internal one.
- * bionic resets a state on an invalid sequence, so this one is reset then too. */
-static mbstate_t *tls_state(const void *ps) { return ps ? &tls_mbstate : NULL; }
-static size_t mbs_done(size_t r, const void *ps)
-{
-    if (r == (size_t)-1 && ps) memset(&tls_mbstate, 0, sizeof tls_mbstate);
-    return r;
-}
-static size_t bionic_mbrlen(const char *s, size_t n, void *ps) { return mbs_done(mbrlen(s, n, tls_state(ps)), ps); }
-static size_t bionic_mbsrtowcs(wchar_t *d, const char **s, size_t n, void *ps)
-{
-    return mbs_done(mbsrtowcs(d, s, n, tls_state(ps)), ps);
-}
-static size_t bionic_mbsnrtowcs(wchar_t *d, const char **s, size_t nms, size_t n, void *ps)
-{
-    return mbs_done(mbsnrtowcs(d, s, nms, n, tls_state(ps)), ps);
-}
-static size_t bionic_wcsrtombs(char *d, const wchar_t **s, size_t n, void *ps)
-{
-    return mbs_done(wcsrtombs(d, s, n, tls_state(ps)), ps);
-}
-static size_t bionic_wcsnrtombs(char *d, const wchar_t **s, size_t nwc, size_t n, void *ps)
-{
-    return mbs_done(wcsnrtombs(d, s, nwc, n, tls_state(ps)), ps);
-}
-static int bionic_mbsinit(const void *ps) { return ps ? mbsinit(&tls_mbstate) : 1; }
-#endif
-
-#if defined(__aarch64__)
-/* bionic's FP_* values differ from glibc's (FP_INFINITE 1, NAN 2, NORMAL 4, SUBNORMAL 8, ZERO 16).
- * On 32-bit ARM the softfp wrappers translate them (softfp.c); here they are shims. */
+/* bionic's FP_* values differ from glibc's (FP_INFINITE 1, NAN 2, NORMAL 4, SUBNORMAL 8, ZERO 16): shims. */
 static int bionic_fp_class(int c)
 {
     switch (c)
@@ -1305,7 +1173,6 @@ static int bionic_fp_class(int c)
 static int bionic_fpclassifyd(double x) { return bionic_fp_class(fpclassify(x)); }
 static int bionic_fpclassifyf(float x) { return bionic_fp_class(fpclassify(x)); }
 static int bionic_fpclassifyl(long double x) { return bionic_fp_class(fpclassify(x)); }
-#endif
 
 // bionic takes any thread stack size from its 16 KB PTHREAD_STACK_MIN; glibc refuses one below its
 // own minimum with EINVAL (on aarch64 128 KB, from the 64 KB page size), and the thread is then never
@@ -1329,14 +1196,6 @@ static const so_shim ours[] = {
     { "__aeabi_atexit", (void *)bionic_aeabi_atexit }, { "bsd_signal", (void *)bionic_bsd_signal },
     { "dladdr", (void *)so_dladdr }, { "dl_iterate_phdr", (void *)so_dl_iterate_phdr },
     { "android_dlopen_ext", (void *)so_android_dlopen_ext },
-#if defined(__arm__)
-    /* the EHABI unwinders Android code links (libgcc's, LLVM libunwind) find a frame's .ARM.exidx
-     * through bionic's __gnu_Unwind_Find_exidx; glibc's own one only knows glibc's modules, so a
-     * C++ exception (IL2CPP's managed exceptions are C++ throws) would find no handler in a
-     * loader module and terminate */
-    { "dl_unwind_find_exidx", (void *)so_dl_unwind_find_exidx },
-    { "__gnu_Unwind_Find_exidx", (void *)so_dl_unwind_find_exidx },
-#endif
     { "stat", (void *)bionic_stat }, { "lstat", (void *)bionic_lstat }, { "fstat", (void *)bionic_fstat },
     { "fstatat", (void *)bionic_fstatat }, { "statfs", (void *)bionic_statfs }, { "fstatfs", (void *)bionic_fstatfs },
     { "stat64", (void *)bionic_stat }, { "lstat64", (void *)bionic_lstat }, { "fstat64", (void *)bionic_fstat },
@@ -1390,23 +1249,8 @@ static const so_shim ours[] = {
     { "pathconf", (void *)bionic_pathconf }, { "fpathconf", (void *)bionic_fpathconf },
     { "sem_open", (void *)bionic_sem_open }, { "sem_close", (void *)bionic_sem_close },
     { "sem_unlink", (void *)bionic_sem_unlink }, { "newlocale", (void *)bionic_newlocale },
-#if defined(__arm__)
-    /* without a vDSO for 32-bit processes (64-bit kernels before 5.3): the timer's counter (fastclock.c) */
-    { "clock_gettime", (void *)fastclock_gettime }, { "gettimeofday", (void *)fastclock_gettimeofday }, { "time", (void *)fastclock_time },
-    { "__mmap2", (void *)bionic_mmap2 },
-    { "getpwuid", (void *)bionic_getpwuid }, { "getpwnam", (void *)bionic_getpwnam },
-    { "getpwuid_r", (void *)bionic_getpwuid_r }, { "getpwnam_r", (void *)bionic_getpwnam_r },
-    { "statvfs", (void *)bionic_statvfs }, { "fstatvfs", (void *)bionic_fstatvfs },
-    { "statvfs64", (void *)bionic_statvfs }, { "fstatvfs64", (void *)bionic_fstatvfs },
-    { "mknod", (void *)bionic_mknod }, { "mknodat", (void *)bionic_mknodat },
-    { "mbrlen", (void *)bionic_mbrlen }, { "mbsrtowcs", (void *)bionic_mbsrtowcs },
-    { "mbsnrtowcs", (void *)bionic_mbsnrtowcs }, { "wcsrtombs", (void *)bionic_wcsrtombs },
-    { "wcsnrtombs", (void *)bionic_wcsnrtombs }, { "mbsinit", (void *)bionic_mbsinit },
-#endif
-#if defined(__aarch64__)
     { "__fpclassifyd", (void *)bionic_fpclassifyd }, { "__fpclassify", (void *)bionic_fpclassifyd },
     { "__fpclassifyf", (void *)bionic_fpclassifyf }, { "__fpclassifyl", (void *)bionic_fpclassifyl },
-#endif
     { NULL, NULL }
 };
 
@@ -1433,7 +1277,7 @@ const so_shim *bionic_compat_table(void)
             for (const so_shim *s = ours; s->name && !dup; s++) dup = !strcmp(s->name, lists[l][i].name);
             if (dup) continue;
             table[k].name = lists[l][i].name;
-            table[k].fn = so_softfp_wrap(lists[l][i].name, lists[l][i].func);
+            table[k].fn = lists[l][i].func;
             k++;
         }
     table[k].name = NULL;

@@ -17,8 +17,7 @@
 //                           present function (egl_glue_set_present: UA_GL_DRIVER=mesa, host/gldriver.c)
 //                           it is Unity's window: the window hook runs, and each swap of it is that
 //                           function (the host copies the frame to the framebuffer)
-//   eglGetProcAddress       returns the wrappers for the wrapped names, else the real function
-//                           passed through the loader's so_softfp_wrap() (float-taking GL calls);
+//   eglGetProcAddress       returns the wrappers for the wrapped names, else the real function;
 //                           NULL for Android's frame-timestamp queries (EGL_ANDROID_get_frame_timestamps)
 //   eglPresentationTimeANDROID  a no-op that succeeds (Swappy's EGL table needs it; Swappy stays off)
 // With a host display (egl_glue_set_host_display, egl_host_shims[]: an SDL2 window on Wayland,
@@ -92,9 +91,7 @@ static void (*g_swap_hook)(void *ctx), (*g_swap_done_hook)(void *ctx, int ok);
 static void (*g_window_hook)(void);
 static void *g_swap_ctx, *g_swap_done_ctx;
 
-// The loader's softfp wrapper for float-taking GL entry points (loader/so_loader.h); weak so the
-// glue also links without the loader (tests).
-void *so_softfp_wrap(const char *name, void *fn) __attribute__((weak));
+// The loader's shim lookup (loader/so_loader.h); weak so the glue also links without the loader (tests).
 void *so_shim_lookup(const char *name) __attribute__((weak));
 
 static void load_real(void)
@@ -415,8 +412,6 @@ static eglproc shim_eglGetProcAddress(const char *name)
     if (!ensure() || !real.GetProcAddress) return NULL;
     eglproc p = real.GetProcAddress(name);
     if (!p) SHIM_TRACE("eglGetProcAddress(%s) = NULL", name);
-    // GL functions taking floats need a softfp->hardfp thunk for Unity's armeabi-v7a code.
-    if (p && so_softfp_wrap) p = (eglproc)so_softfp_wrap(name, (void *)p);
     return p;
 }
 

@@ -26,9 +26,6 @@ int unityhooks_jump(uintptr_t fn, char isa, void *to) { (void)fn; (void)isa; (vo
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
-#if !defined(__aarch64__)
-int main(void) { printf("PASSED nativebeh: 0 failure(s) (the loop: AArch64 only)\n"); return 0; }
-#else
 // --- the world
 #define NB 40
 static U g_b[NB];                   // behaviours by id (0: none)
@@ -427,4 +424,3 @@ int main(void)
     printf("%s nativebeh: %d failure(s)\n", fails ? "FAILED" : "PASSED", fails);
     return fails != 0;
 }
-#endif

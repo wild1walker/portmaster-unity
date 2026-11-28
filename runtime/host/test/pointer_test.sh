@@ -6,11 +6,11 @@
 # glmemo.c's (test_glmemo.c with fake_memo_gl.c), glstate.c's (test_glstate.c with fake_state_gl.c) and
 # glarena.c's (test_glarena.c with fake_arena_gl.c; test_arenascan.c: its wide index scan against the plain one), glspec.c's (test_glspec.c with fake_spec_gl.c) and glhooks.c's
 # UA_GL_PROGCACHE (test_progcache.c with fake_progcache_gl.c), gldriver.c's frame copy (test_gldriver.c) and glreplay --info.
-# ARCH=armhf (default): built in
-# ua-host-armhf, run in an arm/v7 container; ARCH=arm64: built and run in ua-build-arm64.
+# Built and run in ua-build-arm64.
 set -e
 cd "$(dirname "$0")/.."
-ARCH=${ARCH:-armhf}
+ARCH=${ARCH:-arm64}
+[ "$ARCH" = arm64 ] || { echo "ARCH must be arm64 (armhf was removed: tag last-armhf)"; exit 1; }
 PASS_TESTS="same late drawn colour partial mask dither upload delete invalidate blit otherfb depth inval_late renderbuffer foreign nothread off"
 RENAME_TESTS="grab copyback notcopy params queries delete context near nearoff check off"
 run='set -e
@@ -87,39 +87,19 @@ REPLAY='t=/tmp/glreplay_test.gz; LD_LIBRARY_PATH=$O/rec $O/test_glrec file $t >/
   $O/glpixdiff $t.d $t.e > $t.r 2>&1 || :; grep -q "the call that made it" $t.r || { echo "FAIL glpixdiff: the changed draw not named"; ok=0; };
   if [ $ok = 1 ]; then echo "ok glreplay --hash"; else cat $t.r; head -20 $t.a $t.d $t.e; fi; rm -f $t $t.a $t.b $t.c $t.d $t.e $t.r'
 MEMO='skip uniform texture param targetparam target noinval blend depth ubo ubochange ubofresh vbo vbochange second clear upload feedback recover respecify check checkdiff es2 off withrec external'
-if [ "$ARCH" = arm64 ]; then
-  docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
-    for s in off mouse touch keymap keymapstick swap dstick dstickauto toggle es2; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done
-    for s in off type draw es2 msaa pads done cancel 0; do LD_LIBRARY_PATH=\$O \$O/test_osk \$s; done
-    for s in off on; do LD_LIBRARY_PATH=\$O/msaa \$O/test_msaafix \$s; done
-    for s in draws off limit gpu gpu2 gpuoff game; do LD_LIBRARY_PATH=\$O/trace \$O/test_gltrace \$s; done
-    for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread dsinval dsinval_tex dsinval_bound dsinval_sample off; do LD_LIBRARY_PATH=\$O/opt \$O/test_glopt \$s; done
-    for s in $PASS_TESTS; do LD_LIBRARY_PATH=\$O/pass \$O/test_glpass \$s; done
-    for s in $RENAME_TESTS; do LD_LIBRARY_PATH=\$O/rename \$O/test_glrename \$s; done
-    for s in $RECS; do LD_LIBRARY_PATH=\$O/rec \$O/test_glrec \$s; done
-    $REPLAY
-    for s in $MEMO; do LD_LIBRARY_PATH=\$O/memo \$O/test_glmemo \$s; done
-    for s in random count off; do LD_LIBRARY_PATH=\$O/state \$O/test_glstate \$s; done
-    for s in arena small nosubdata shadow orphan cached cachedsmall range widerange norange off; do LD_LIBRARY_PATH=\$O/arena \$O/test_glarena \$s; done; \$O/test_arenascan
-    for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=\$O/spec \$O/test_glspec \$s; done
-    for s in $PCS; do d=\$(mktemp -d); LD_LIBRARY_PATH=\$O/pc \$O/test_progcache \$s \$d; rm -rf \$d; done
-    \$O/test_gldriver"
-  exit
-fi
-docker run --rm -v "$PWD/..":/w -w /w/host ua-host-armhf sh -c "O=out/test CC=arm-linux-gnueabihf-gcc; $run"
-docker run --rm --platform linux/arm/v7 -v "$PWD/..":/w -w /w/host debian:bookworm-slim sh -c \
-  'for s in off mouse touch keymap keymapstick swap dstick dstickauto toggle es2; do LD_LIBRARY_PATH=out/test out/test/test_pointer $s; done
-   for s in off type draw es2 msaa pads done cancel 0; do LD_LIBRARY_PATH=out/test out/test/test_osk $s; done
-   for s in off on; do LD_LIBRARY_PATH=out/test/msaa out/test/test_msaafix $s; done
-   for s in draws off limit gpu gpu2 gpuoff game; do LD_LIBRARY_PATH=out/test/trace out/test/test_gltrace $s; done
-   for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread dsinval dsinval_tex dsinval_bound dsinval_sample off; do LD_LIBRARY_PATH=out/test/opt out/test/test_glopt $s; done
-   for s in '"$PASS_TESTS"'; do LD_LIBRARY_PATH=out/test/pass out/test/test_glpass $s; done
-   for s in '"$RENAME_TESTS"'; do LD_LIBRARY_PATH=out/test/rename out/test/test_glrename $s; done
-   for s in '"$RECS"'; do LD_LIBRARY_PATH=out/test/rec out/test/test_glrec $s; done
-   O=out/test; '"$REPLAY"'
-   for s in '"$MEMO"'; do LD_LIBRARY_PATH=out/test/memo out/test/test_glmemo $s; done
-   for s in random count off; do LD_LIBRARY_PATH=out/test/state out/test/test_glstate $s; done
-   for s in arena small nosubdata shadow orphan cached cachedsmall range widerange norange off; do LD_LIBRARY_PATH=out/test/arena out/test/test_glarena $s; done; out/test/test_arenascan
-   for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=out/test/spec out/test/test_glspec $s; done
-   for s in '"$PCS"'; do d=$(mktemp -d); LD_LIBRARY_PATH=out/test/pc out/test/test_progcache $s $d; rm -rf $d; done
-   out/test/test_gldriver'
+docker run --rm --platform linux/arm64 -v "$PWD/..":/w -w /w/host ua-build-arm64 sh -c "O=out/arm64/test CC=gcc; $run
+  for s in off mouse touch keymap keymapstick swap dstick dstickauto toggle es2; do LD_LIBRARY_PATH=\$O \$O/test_pointer \$s; done
+  for s in off type draw es2 msaa pads done cancel 0; do LD_LIBRARY_PATH=\$O \$O/test_osk \$s; done
+  for s in off on; do LD_LIBRARY_PATH=\$O/msaa \$O/test_msaafix \$s; done
+  for s in draws off limit gpu gpu2 gpuoff game; do LD_LIBRARY_PATH=\$O/trace \$O/test_gltrace \$s; done
+  for s in restore depthwrite stencilwrite stencilkeep partial unityclear colourclear invalidate delete clearbuffer blit renderbuffer sameclear sameclear_off nothread dsinval dsinval_tex dsinval_bound dsinval_sample off; do LD_LIBRARY_PATH=\$O/opt \$O/test_glopt \$s; done
+  for s in $PASS_TESTS; do LD_LIBRARY_PATH=\$O/pass \$O/test_glpass \$s; done
+  for s in $RENAME_TESTS; do LD_LIBRARY_PATH=\$O/rename \$O/test_glrename \$s; done
+  for s in $RECS; do LD_LIBRARY_PATH=\$O/rec \$O/test_glrec \$s; done
+  $REPLAY
+  for s in $MEMO; do LD_LIBRARY_PATH=\$O/memo \$O/test_glmemo \$s; done
+  for s in random count off; do LD_LIBRARY_PATH=\$O/state \$O/test_glstate \$s; done
+  for s in arena small nosubdata shadow orphan cached cachedsmall range widerange norange off; do LD_LIBRARY_PATH=\$O/arena \$O/test_glarena \$s; done; \$O/test_arenascan
+  for s in source binary stale unlit wcomp float cache off; do LD_LIBRARY_PATH=\$O/spec \$O/test_glspec \$s; done
+  for s in $PCS; do d=\$(mktemp -d); LD_LIBRARY_PATH=\$O/pc \$O/test_progcache \$s \$d; rm -rf \$d; done
+  \$O/test_gldriver"

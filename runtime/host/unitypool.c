@@ -52,14 +52,11 @@ struct layout {
     uint32_t k_size, k_cap, k_age;                    // PruneFreeBuffers' floats (bits): min(size * k_size, k_cap) + age >= k_age
 };
 static const struct layout g_layouts[] = {
-    // AcquireBuffer: usage <= 8 && (0x112 >> usage) & 1 -> exact size; else key max(caps[0x470], size),
-    // limit max(caps[0x470], 3 * size / 2). ReleaseBuffer and UpdateLiveSetFromPending: pending while
-    // drawn <= frame && done < drawn. PruneFreeBuffers: 11 usages, 1/6000, 50, 59.
-    { "6000.0.61f1 armeabi-v7a", 0x8, 0xc, 0x10, 0x24, 0x0, 0xa4, 0x470, 0x112, 11, 0x392ec33e, 0x42480000, 0x426c0000 },
-    // The arm64-v8a player (the IL2CPP variant, which Hollow Knight's 64-bit build runs): the same code with
-    // 64-bit sizes: AcquireBuffer(size_t size, usage, GfxBuffer *, bool clear) compares x registers, key
-    // max(caps[0x4f0], size), limit max(caps[0x4f0], 3 * size / 2); the free maps' keys are size_t; the
-    // prune converts the 64-bit size to float. Frames stay 32-bit.
+    // The arm64-v8a player (the IL2CPP variant, which Hollow Knight's 64-bit build runs). AcquireBuffer(size_t
+    // size, usage, GfxBuffer *, bool clear): usage <= 8 && (0x112 >> usage) & 1 -> exact size; else key
+    // max(caps[0x4f0], size), limit max(caps[0x4f0], 3 * size / 2); the free maps' keys are size_t.
+    // ReleaseBuffer and UpdateLiveSetFromPending: pending while drawn <= frame && done < drawn.
+    // PruneFreeBuffers: 11 usages, 1/6000, 50, 59 (the 64-bit size converted to float). Frames are 32-bit.
     { "6000.0.61f1 arm64-v8a", 0x10, 0x18, 0x20, 0x34, 0x0, 0x148, 0x4f0, 0x112, 11, 0x392ec33e, 0x42480000, 0x426c0000 },
 };
 enum { F_ACQUIRE, F_RELEASE, F_LIVE, F_PRUNE, F_CLEAR, F_INVALIDATE, F_DTOR, F_CAPS, F_N };
@@ -70,14 +67,6 @@ static const char *const g_func[F_N] = {
     "GetGraphicsCaps",
 };
 static const struct uh_row g_rows[] = {
-    { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::AcquireBuffer", 0xb25f14, 0x1dc, 'a', 0x02282da5ddc26fb7ull },
-    { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::ReleaseBuffer", 0xb256d0, 0x108, 'a', 0x9257caca5a3e9b9full },
-    { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::UpdateLiveSetFromPending", 0xb26284, 0x12c, 'a', 0x95e1ef6e46250dc5ull },
-    { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::PruneFreeBuffers", 0xb263b0, 0x1e4, 'a', 0xcc74cefef26c54aaull },
-    { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::Clear", 0xb25d90, 0x184, 'a', 0x57cb448e156a8a00ull },
-    { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::InvalidateAll", 0xb26670, 0x114, 'a', 0xa68615524fed3633ull },
-    { "6000.0.61f1 armeabi-v7a", "BufferManagerGLES::~BufferManagerGLES", 0xb25ca4, 0xec, 'a', 0xfdaf38fb8faf3ebbull },
-    { "6000.0.61f1 armeabi-v7a", "GetGraphicsCaps", 0x4a48b8, 0xc, 't', 0xb47c84086130b794ull },
     { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::AcquireBuffer", 0x109df1c, 0x1dc, 'x', 0x959f53acc1d92af4ull },
     { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::ReleaseBuffer", 0x109d6f8, 0x11c, 'x', 0x0736dfacaa7b4cafull },
     { "6000.0.61f1 arm64-v8a", "BufferManagerGLES::UpdateLiveSetFromPending", 0x109e280, 0x140, 'x', 0x01f87a95288332d3ull },

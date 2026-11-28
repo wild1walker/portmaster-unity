@@ -77,7 +77,7 @@ int main(int argc, char **argv)
     void (*Attach)(unsigned, unsigned, unsigned, unsigned, int) = fn(t, "glFramebufferTexture2D");
     void (*Invalidate)(unsigned, int, const unsigned *) = fn(t, "glInvalidateFramebuffer");
     void (*Delete)(int, const unsigned *) = fn(t, "glDeleteTextures");
-    void (SO_ABI *ClearBufferfi)(unsigned, int, float, int) = fn(t, "glClearBufferfi");   // (softfp on armhf, as the player calls it)
+    void (*ClearBufferfi)(unsigned, int, float, int) = fn(t, "glClearBufferfi");
     void (*Blit)(int, int, int, int, int, int, int, int, unsigned, unsigned) = fn(t, "glBlitFramebuffer");
     void (*BindTex)(unsigned, unsigned) = fn(t, "glBindTexture");
     void (*Active)(unsigned) = fn(t, "glActiveTexture");

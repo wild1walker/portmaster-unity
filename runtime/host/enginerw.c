@@ -47,7 +47,6 @@
 enum { ISA_A64 = 'x' };
 #define row uh_row
 
-#if defined(__aarch64__)
 static const struct row g_count[] = {
     { "6000.0.61f1 arm64-v8a", "DirectorManager::ExecutePrepareFrames", 0x9af89c, 0x200, ISA_A64, 0x0e779fe165394f3dull },
     { "6000.0.61f1 arm64-v8a", "PlayableOutput::PrepareTraverse", 0x9b1a30, 0x174, ISA_A64, 0x70970997fc7be978ull },
@@ -614,7 +613,6 @@ static void dpw_report(unsigned long nf)
 // that call: two outputs ahead PRFM of the output's lines; one ahead its Animator (read from +0x78, as the getter
 // does) and its source handle (+0x28) PRFM'd. Scratch x9 - x12, x16, x17 (the getter reads only x0; the loop holds
 // nothing in them across a call). Loads of the array (up to its count) and of +0x78 / +0x28 of outputs in it only.
-#if defined(__aarch64__)
 __asm__(
     "    .text\n"
     "    .p2align 3\n"
@@ -647,7 +645,6 @@ __asm__(
     "ua_erw_anim17_end:\n"
 );
 extern const uint8_t ua_erw_anim17_start[], ua_erw_anim17_tail[], ua_erw_anim17_end[];
-#endif
 struct anim17 { struct row fn, getter; uint32_t call; };
 static const struct anim17 g_anim17[] = {
     { { "2017.4.40f1 arm64-v8a", "Animator::BuildJobs", 0x3e0964, 0x364, ISA_A64, 0x2cf5027e2ab0b7c2ull },
@@ -668,7 +665,6 @@ static void anim17_match(uintptr_t base, size_t size)
 }
 static void anim17_patch(uintptr_t base, size_t size)
 {
-#if defined(__aarch64__)
     if (!g_a17) return;
     long pg = sysconf(_SC_PAGESIZE);
     uint8_t *page = unityprefetch_near(base, base + size, (size_t)pg);
@@ -685,9 +681,6 @@ static void anim17_patch(uintptr_t base, size_t size)
     mprotect((void *)a, (size_t)pg, PROT_READ | PROT_EXEC);
     __builtin___clear_cache((char *)at, (char *)(at + 4));
     fprintf(stderr, "[enginerw] UA_PREFETCH anim: %s's loop fetches ahead (libunity %s)\n", g_a17->fn.func, g_a17->fn.unity);
-#else
-    (void)base; (void)size;
-#endif
 }
 
 // --- UA_ALLOC_STATS: MemoryManager::Allocate(this, size, align, MemLabelId (x3; its identifier the low 16 bits),
@@ -880,11 +873,9 @@ static void alloc_patch(uintptr_t base)
         fprintf(stderr, "[enginerw] UA_ALLOC_STATS: hook failed\n"); g_alloc_secs = 0;
     }
 }
-#endif
 
 void enginerw_on_load_match(uintptr_t base, size_t size)
 {
-#if defined(__aarch64__)
     anchor_match(base, size);
     cull_match(base, size);
     dpw_match(base, size);
@@ -909,15 +900,11 @@ void enginerw_on_load_match(uintptr_t base, size_t size)
         n += g_matched[i];
     }
     fprintf(stderr, "[enginerw] UA_ENGINE_COUNT: %d functions of this libunity.so match their rows\n", n);
-#else
-    (void)base; (void)size;
-#endif
 }
 
 void enginerw_on_load_patch(uintptr_t base, size_t size)
 {
     (void)size;
-#if defined(__aarch64__)
     anchor_patch(base);
     cull_patch(base);
     dpw_patch(base, size);
@@ -936,14 +923,10 @@ void enginerw_on_load_patch(uintptr_t base, size_t size)
         memcpy(&s[10], &o, 8);              // before the function's first call: hooks go in before libunity runs
         __builtin___clear_cache((char *)s, (char *)(s + 12));
     }
-#else
-    (void)base;
-#endif
 }
 
 void enginerw_frame(void)
 {
-#if defined(__aarch64__)
     static unsigned long frames;
     static struct timespec t0;
     if (g_count_secs <= 0 && !g_anchor_mode && !g_cull_mode && !g_dpw_mode && g_alloc_secs <= 0 && !g_oh_mode) return;
@@ -970,5 +953,4 @@ void enginerw_frame(void)
     }
     fprintf(stderr, "\n");
     t0 = t; f0 = frames;
-#endif
 }

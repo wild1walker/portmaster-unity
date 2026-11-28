@@ -6,7 +6,7 @@
 
 // for the host's dlsym hook (so_set_dlsym_hook): mono_jit_init_version (installed after it) and mono_domain_unload
 void *monoinvoke_dlsym_hook(const char *symbol, void *found);
-// for the loader's load hook: UA_MONO_TLS, libmono's thread-local reads patched once it is relocated
+// for the loader's load hook (nothing patched on arm64 yet)
 #include "../loader/so_loader.h"
 void monoinvoke_on_load(so_module *m);
 
@@ -34,17 +34,6 @@ struct monoinvoke_env {
 // the replacement for mono_jit_runtime_invoke with env (copied); monoinvoke_off() turns it into a plain pass-through
 void *(*monoinvoke_start(const struct monoinvoke_env *env))(void *, void *, void **, void **);
 void monoinvoke_off(void);
-#if defined(__arm__)
-#include <stdint.h>
-// UA_MONO_DIV: Mono 2.6's integer division helpers (mono_idiv, mono_irem, mono_idiv_un, mono_irem_un) and the hooks'
-// replacements: monoinvoke_div_start gives the replacements for these originals, with the CPU's SDIV/UDIV (hw) or
-// the C divide (the unit test's way in; at load the originals are libmono's own)
-struct monoinvoke_div {
-    int32_t (*idiv)(int32_t, int32_t), (*irem)(int32_t, int32_t);
-    uint32_t (*idiv_un)(uint32_t, uint32_t), (*irem_un)(uint32_t, uint32_t);
-};
-void monoinvoke_div_start(const struct monoinvoke_div *orig, int hw, struct monoinvoke_div *fast);
-#endif
 // libunity's mono_runtime_invoke (the dlsym hook's answer; see monoinvoke.c, "the dispatch thunk"): libmono's own until
 // monoinvoke_start with the thunk's fields, and after monoinvoke_off
 void *monoinvoke_thunk(void *method, void *obj, void **params, void **exc);

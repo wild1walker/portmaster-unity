@@ -1,13 +1,12 @@
 # android/: Android API shims (liblog, libandroid, OpenSL ES, libmediandk, EGL glue)
 
-C shims for the Android-only libraries that Unity 2017.4.9f1's ARMv7 player
-(`libunity.so`, `libmain.so`, `libmono.so`) imports or dlopens, built for armhf glibc
-(Debian bookworm cross toolchain, glibc symbols up to 2.34), or for aarch64 glibc (arm64-v8a
+C shims for the Android-only libraries that Unity's Android player
+(`libunity.so`, `libmain.so`, `libmono.so`) imports or dlopens, built for aarch64 glibc (arm64-v8a
 players; native gcc of the `ua-build-arm64` image, glibc symbols up to 2.28).
 
 ```
 ./build.sh                   # -> out/libandroidshims.a (+ out/obj/*.o), out/test/*
-./build.sh test              # also runs the unit tests under QEMU (no GPU), twice: SDL "disk" and "dummy" audio
+./build.sh test              # also runs the unit tests natively (no GPU), twice: SDL "disk" and "dummy" audio
 ARCH=arm64 ./build.sh test   # the same under out/arm64/, built and run natively in ua-build-arm64
 ```
 Link the host with `out/libandroidshims.a` (or `out/arm64/libandroidshims.a`) `-lSDL2 -ldl -lpthread -lm`.
@@ -72,7 +71,7 @@ Notes from the disassembly (with the symbols in `Symbols/armeabi-v7a/libunity.sy
 | Input | Minimal: `AInputEvent_*`, `AKeyEvent_*`, `AMotionEvent_*` getters over our own event struct (`android_input_event_new_key()` builds one). `AInputQueue_*` are inert stubs. |
 | AConfiguration | Every getter and setter of `configuration.h` (API 9-34) and `diff`/`match`/`isBetterThan`: landscape, mdpi (160 dpi: the window's size in dp), no touch, no keys, D-pad, en-US, left to right, not round, screen size and "long" from the window, the reported API level (26 when the host set none). |
 | OpenSL ES | Implemented on SDL2: engine, output mix, audio player with a PCM buffer queue (`SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE` or `_BUFFERQUEUE`, 8/16/32-bit int and float PCM). Interfaces: Object, Engine, OutputMix, Play, BufferQueue/AndroidSimpleBufferQueue, Volume, AndroidConfiguration. Stubbed with `SL_RESULT_FEATURE_UNSUPPORTED`: audio recorder (`SL_IID_RECORD` exists but recording does not), MIDI, LED/vibra, listener/3D, metadata extractor, URI/fd players, effects. |
-| libmediandk | `media_ndk.c`: AMediaExtractor (fd ranges, paths, `AMediaDataSource`), AMediaFormat, AMediaCodec over the media core (`../media`, referenced weakly) when the program links it, as ua_host does: Unity 2022.3's VideoPlayer path, with the video decoder's output the window of a Java `Surface(SurfaceTexture)` (`ANativeWindow_fromSurface` gives such a Surface a window of its own, `android_window_media_surface()`). Without the core every call fails the way the NDK reports failure (constructors NULL, status calls `AMEDIA_ERROR_UNSUPPORTED` (-10002), getters false / -1 / 0, out-pointers cleared, NULL objects accepted), which this folder's tests check. `AImageReader`/`AImage` (the Vulkan video path) are failing stubs either way; `AImage_deleteAsync` closes its fence fd. The `AMEDIAFORMAT_KEY_*` constants are `const char *` variables with the NDK's strings ("mime", "durationUs", "rotation-degrees", ...). `AMediaFormat_setFloat` is `SOFTFP`. In `android_shims[]` (DT_NEEDED imports resolve through the global tables) and `android_mediandk_shims[]` (dlopen). |
+| libmediandk | `media_ndk.c`: AMediaExtractor (fd ranges, paths, `AMediaDataSource`), AMediaFormat, AMediaCodec over the media core (`../media`, referenced weakly) when the program links it, as ua_host does: Unity 2022.3's VideoPlayer path, with the video decoder's output the window of a Java `Surface(SurfaceTexture)` (`ANativeWindow_fromSurface` gives such a Surface a window of its own, `android_window_media_surface()`). Without the core every call fails the way the NDK reports failure (constructors NULL, status calls `AMEDIA_ERROR_UNSUPPORTED` (-10002), getters false / -1 / 0, out-pointers cleared, NULL objects accepted), which this folder's tests check. `AImageReader`/`AImage` (the Vulkan video path) are failing stubs either way; `AImage_deleteAsync` closes its fence fd. The `AMEDIAFORMAT_KEY_*` constants are `const char *` variables with the NDK's strings ("mime", "durationUs", "rotation-degrees", ...). In `android_shims[]` (DT_NEEDED imports resolve through the global tables) and `android_mediandk_shims[]` (dlopen). |
 | Choreographer | `choreographer.c`: `AChoreographer_*` (API 24-33): frame callbacks (32- and 64-bit frame times, delayed), vsync callbacks with their `AChoreographerFrameCallbackData` (one timeline: deadline the next vsync, expected presentation the one after), refresh rate callbacks (once after registering, again when the period changes). Callbacks run on the thread whose looper made the choreographer, at vsync times shared with the Java Choreographer of runtime/jni (below). |
 | Newer NDK functions | `ndk_newer.c`: `ANativeWindow_setFrameRate*` (accepted, nothing changes: one display mode), `ATrace_*` (never enabled), `APerformanceHint_*`/`AWorkDuration_*` (a manager without sessions: `createSession` NULL, update rate -1, as without the power HAL's hint support), `AThermal_*` (status NONE, headroom NaN: unknown), `AHardwareBuffer_*` (no gralloc: allocation fails, describe clears). |
 | API level | `android_shims_set_api_level(api)`: each function above is present from the API level Android added it in (`NDK_API_LEVELS` in `shim_tables.c`) and NULL below the reported level, in the import table and for dlsym alike, as on a phone of that level. |
@@ -108,8 +107,7 @@ android_vsync_set_refresh_rate(display_hz);  // the vsync clock of both choreogr
 - `android_shims.h` takes `so_shim` from `../loader/so_loader.h` when that file exists (checked
   with `__has_include`), so both headers can be included in any order.
 - Our `eglGetProcAddress` wrapper returns the EGL wrappers for their names, otherwise the real
-  result passed through the loader's `so_softfp_wrap()` (weak reference: used when linked with
-  the loader). It overlaps with the loader's `so_egl_get_proc_address`; whichever table is
+  result. It overlaps with the loader's `so_egl_get_proc_address`; whichever table is
   registered first wins, and both give the same result.
 - `egl_glue_set_swap_hook(fn, ctx)` runs `fn` on Unity's render thread before every
   `eglSwapBuffers` (a place to pump input or measure frames).
@@ -240,9 +238,9 @@ vsyncs); 2020.3 turns Swappy off itself below API 23.
 `CLOCK_MONOTONIC` (`android_vsync_set_refresh_rate(hz)`, which ua_host calls with the display's
 rate; runtime/jni's Java Choreographer reads `android_vsync_period_ns()` when the program links these
 shims). A frame callback posted at t, or due at t + delay, runs at the first vsync after it, with that
-vsync as its frame time; one posted while callbacks run goes to the next vsync. On 32-bit ARM the
-`long` frame time of `AChoreographer_postFrameCallback` is truncated as on Android (NDK issue 868),
-`postFrameCallback64` (API 29) has all of it.
+vsync as its frame time; one posted while callbacks run goes to the next vsync.
+`postFrameCallback64` (API 29) gives the frame time as 64 bits, as `AChoreographer_postFrameCallback`'s
+`long` does on arm64.
 
 **Which thread**: `AChoreographer_getInstance()` is the calling thread's, as on Android. On a thread
 with an ALooper the callbacks run inside its `ALooper_pollOnce`/`pollAll` (a timerfd on the looper);
@@ -277,21 +275,10 @@ reach the speaker (`OpenSL: SDL_AUDIODRIVER=dummy was asked for (silence) and th
 it: no output ...`). tools/device's silent runs set `ANDROID_SLES_OUTPUT=none` as well as the dummy
 driver. The test (build.sh test) runs both cases with a stand-in `aplay` that must never start.
 
-## ABI: softfp vs hardfp
-
-Unity's armeabi-v7a libraries use the base AAPCS (no `Tag_ABI_VFP_args`): float and double
-arguments and return values go in core registers. This code is armhf (VFP registers). Every shim
-with floating-point arguments or results is marked `SOFTFP` (`__attribute__((pcs("aapcs")))`):
-`ASensor_getResolution`, `AMotionEvent_getX/getY/getAxisValue` and `AMediaFormat_setFloat`. EGL, OpenSL ES and liblog have
-no floating-point parameters (varargs always use the base convention). GLES does: Unity gets
-GL functions through dlsym/eglGetProcAddress, and the loader's `softfp_gl.c`/`so_softfp_wrap()`
-provides the thunks; our `eglGetProcAddress` wrapper routes results through it.
-
 ## AArch64 (arm64-v8a players)
 
-arm64-v8a code and aarch64 Linux share AAPCS64, so `SOFTFP` is empty and no thunks are needed:
-an arm64 loader need not define `so_softfp_wrap` (`egl_glue.c` references it weakly), and if it
-does, it must return the function unchanged. What else changes with the word
+arm64-v8a code and aarch64 Linux share AAPCS64: shims with float arguments are plain C (the 32-bit
+players' softfp layer went with armhf, tag `last-armhf`). What else changes with the word
 size was checked against the NDK headers: every declaration here uses pointer-sized fields where
 the NDK does (`SLDataSource`, `SLDataLocator_OutputMix`, the interface vtables and handles,
 `ANativeWindow_Buffer.bits`), fixed-width integers elsewhere; `AAsset_seek/getLength/...` use
@@ -312,7 +299,7 @@ a period change, Swappy's threads: a looper in `ALooper_pollAll(-1)` with callba
 thread under a lock the callback takes, woken to stop; a host looper's jobs); the API level gating of
 the newer functions in both tables; AConfiguration's fields, `diff` and `match`; the handheld answers
 of `ANativeWindow_setFrameRate`, ATrace, APerformanceHint, AThermal and AHardwareBuffer (through the
-tables, softfp on ARM); the window and egl_glue against `test/fake_egl.c` (fbdev size
+tables); the window and egl_glue against `test/fake_egl.c` (fbdev size
 follows the buffer geometry, attribute filtering and retries, single-sampled configs when asked
 for, swap hook, eglGetProcAddress, its
 hidden frame-timestamp functions and the no-op presentation time; with a host display: every mapping above, `eglSurfaceAttrib` and
@@ -322,9 +309,7 @@ sequence failing cleanly); the same EGL against Mesa with real SDL windows (X11,
 `runtime/host/test/display_test.sh`;
 OpenSL ES driven like FMOD (resolved through `android_sles_shims` like dlsym, 4 buffers, 40
 callbacks), checking SDL's disk-driver output sample by sample (sequence order, no gaps, -602 mB
-gives half amplitude). The armhf test binary runs in the `ua-android-shims` image (which carries
-the armhf multiarch runtime) under Docker Desktop's QEMU; the aarch64 one runs natively in
-`ua-build-arm64`.
+gives half amplitude). The test binary runs natively in `ua-build-arm64`.
 
 OpenSL ES layouts, constants and interface IDs follow the NDK's `OpenSLES.h`,
 `OpenSLES_Android.h` and AOSP's `OpenSLES_IID.cpp`; `sles_min.h` declares only what we

@@ -475,7 +475,6 @@ UNI_V(1uiv, GLuint, (void)0) UNI_V(2uiv, GLuint, (void)0) UNI_V(3uiv, GLuint, (v
     }
 UNI_M(2fv) UNI_M(3fv) UNI_M(4fv) UNI_M(2x3fv) UNI_M(3x2fv) UNI_M(2x4fv) UNI_M(4x2fv) UNI_M(3x4fv) UNI_M(4x3fv)
 #undef UNI_M
-// (the scalar float ones take floats: the player calls them with softfp on armhf, SO_ABI)
 static void h_Uniform4f(GLint loc, float a, float b, float c, float d)
 {
     prog_t *p = cur_spec();
@@ -483,16 +482,16 @@ static void h_Uniform4f(GLint loc, float a, float b, float c, float d)
     float v[4] = { a, b, c, d };
     w_Uniform4fv(loc, 1, v);
 }
-static SO_ABI void w_Uniform4f(GLint loc, float a, float b, float c, float d) { h_Uniform4f(loc, a, b, c, d); }
+static void w_Uniform4f(GLint loc, float a, float b, float c, float d) { h_Uniform4f(loc, a, b, c, d); }
 static void h_Uniform3f(GLint loc, float a, float b, float c)
 { prog_t *p = cur_spec(); if (!p) { r_Uniform3f(loc, a, b, c); return; } float v[3] = { a, b, c }; w_Uniform3fv(loc, 1, v); }
-static SO_ABI void w_Uniform3f(GLint loc, float a, float b, float c) { h_Uniform3f(loc, a, b, c); }
+static void w_Uniform3f(GLint loc, float a, float b, float c) { h_Uniform3f(loc, a, b, c); }
 static void h_Uniform2f(GLint loc, float a, float b)
 { prog_t *p = cur_spec(); if (!p) { r_Uniform2f(loc, a, b); return; } float v[2] = { a, b }; w_Uniform2fv(loc, 1, v); }
-static SO_ABI void w_Uniform2f(GLint loc, float a, float b) { h_Uniform2f(loc, a, b); }
+static void w_Uniform2f(GLint loc, float a, float b) { h_Uniform2f(loc, a, b); }
 static void h_Uniform1f(GLint loc, float a)
 { prog_t *p = cur_spec(); if (!p) { r_Uniform1f(loc, a); return; } w_Uniform1fv(loc, 1, &a); }
-static SO_ABI void w_Uniform1f(GLint loc, float a) { h_Uniform1f(loc, a); }
+static void w_Uniform1f(GLint loc, float a) { h_Uniform1f(loc, a); }
 static void w_Uniform1i(GLint loc, GLint a) { prog_t *p = cur_spec(); if (!p) { r_Uniform1i(loc, a); return; } w_Uniform1iv(loc, 1, &a); }
 static void w_Uniform2i(GLint loc, GLint a, GLint b)
 { prog_t *p = cur_spec(); if (!p) { r_Uniform2i(loc, a, b); return; } GLint v[2] = { a, b }; w_Uniform2iv(loc, 1, v); }

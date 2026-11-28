@@ -11,11 +11,8 @@
 // from plugins.map (pmu android-data writes it beside the APK). Glibc libraries found in lib/
 // are mapped even without a map line.
 //
-// 32-bit ARM: Mono (armeabi-v7a) passes float and double arguments in core registers (softfp), a
-// glibc armhf library expects them in VFP registers. For every entry point with such arguments the
-// map has a `sig` line (from the game's DllImport declarations); this file builds a thunk for it
-// that moves the arguments as the VFP variant of the AAPCS wants them, and calls the library. On
-// AArch64 both sides use AAPCS64 and nothing is converted.
+// Mono (arm64-v8a) and a glibc aarch64 library share AAPCS64: calls go to the library unconverted
+// (`sig` lines of older maps, argument classes for the 32-bit player's softfp thunks, are ignored).
 //
 // FMOD: Unity's StreamingAssets path is "jar:file://<apk or obb>!/assets" on Android, which FMOD's
 // file system cannot open; the wrappers below give FMOD the file on disk (android-data puts the
@@ -142,18 +139,13 @@ static int elf_read(const char *path, elf_facts *f)
     return 1;
 }
 
-#if defined(__aarch64__)
 #define HOST_MACHINE EM_AARCH64
-#else
-#define HOST_MACHINE EM_ARM
-#endif
 
 // ------------------------------------------------------------------------------------- the map
 
 typedef struct { char name[128], use[8], arg[256]; } map_ent;
 typedef struct { char module[128], entry[128], ret[8], args[160]; } sig_ent;
 static map_ent *g_map; static int g_nmap;
-static sig_ent *g_sig; static int g_nsig;
 // fn <module> <entry> <result> <args> / const <module> <name> <value>: a stub built from the game's
 // own entry points (wwise)
 static sig_ent *g_fn; static int g_nfn;
@@ -179,11 +171,9 @@ static void read_map(const char *path)
             snprintf(m->name, sizeof m->name, "%s", b);
             snprintf(m->use, sizeof m->use, "%s", c);
             snprintf(m->arg, sizeof m->arg, "%s", n >= 4 ? d : "");
-        } else if (n >= 5 && (!strcmp(a, "sig") || !strcmp(a, "fn"))) {
-            sig_ent **t = !strcmp(a, "sig") ? &g_sig : &g_fn;
-            int *cnt = !strcmp(a, "sig") ? &g_nsig : &g_nfn;
-            *t = realloc(*t, (*cnt + 1) * sizeof **t);
-            sig_ent *s = &(*t)[(*cnt)++];
+        } else if (n >= 5 && !strcmp(a, "fn")) {
+            g_fn = realloc(g_fn, (g_nfn + 1) * sizeof *g_fn);
+            sig_ent *s = &g_fn[g_nfn++];
             snprintf(s->module, sizeof s->module, "%s", b);
             snprintf(s->entry, sizeof s->entry, "%s", c);
             snprintf(s->ret, sizeof s->ret, "%s", d);
@@ -197,7 +187,7 @@ static void read_map(const char *path)
         }
     }
     fclose(f);
-    LOG("%s: %d libraries, %d float signatures%s\n", path, g_nmap, g_nsig, g_nfn ? ", a stub's entry points" : "");
+    LOG("%s: %d libraries%s\n", path, g_nmap, g_nfn ? ", a stub's entry points" : "");
 }
 
 static void map_variants(const char *name, const char *target)
@@ -345,40 +335,6 @@ static void apply_map(void)
     }
 }
 
-// the sig lines of host-mapped libraries become thunks, found before the library's own symbols
-static void apply_sigs(void)
-{
-    so_shim *tab = calloc(g_nsig + 1, sizeof *tab);
-    int n = 0, missing = 0, unsupported = 0;
-    for (int i = 0; i < g_nsig; i++) {
-        sig_ent *s = &g_sig[i];
-        char base[128];
-        norm_name(s->module, base, sizeof base);
-        const char *target = NULL;
-        for (int k = 0; k < g_nhost; k++) if (!strcmp(g_host[k].base, base)) target = g_host[k].target;
-        if (!target) continue;
-        void *h = dlopen(target, RTLD_NOW | RTLD_GLOBAL);
-        void *fn = h ? dlsym(h, s->entry) : NULL;
-        if (!fn) { missing++; continue; }
-        void *t = plugins_thunk(fn, s->ret, s->args);
-        if (!t) { unsupported++; LOG("%s %s(%s): no thunk (unsupported or none left)\n", s->module, s->entry, s->args); continue; }
-        if (t == fn) continue;
-        tab[n].name = strdup(s->entry);
-        tab[n].fn = t;
-        n++;
-    }
-    if (n) so_add_shims(tab);
-    else free(tab);
-    if (n || missing || unsupported)
-        LOG("%d softfp thunks for float arguments%s (%d entry points not in the libraries, %d unsupported)\n", n,
-#if defined(__arm__) && defined(__ARM_PCS_VFP)
-            "",
-#else
-            " (none needed on this architecture)",
-#endif
-            missing, unsupported);
-}
-
 void plugins_init(const char *root, const char *libdir)
 {
     if (!realpath(root, g_root)) snprintf(g_root, sizeof g_root, "%s", root);
@@ -389,7 +345,6 @@ void plugins_init(const char *root, const char *libdir)
     read_map(mp);
     scan_libdir();
     apply_map();
-    apply_sigs();
 }
 
 // ------------------------------------------------------------------------------------- FMOD paths
@@ -453,7 +408,7 @@ static loadbank_fn r_loadbank;
 static createsound_fn r_createsound, r_createstream, r_createsound4, r_createstream4;
 static loadplugin_fn r_loadplugin, r_loadplugin4;
 
-static SO_ABI int w_loadbank(void *sys, const char *name, unsigned flags, void **bank)
+static int w_loadbank(void *sys, const char *name, unsigned flags, void **bank)
 {
     char b[PATH_MAX];
     return r_loadbank(sys, fmod_path("bank", name, b, sizeof b), flags, bank);
@@ -462,7 +417,7 @@ static SO_ABI int w_loadbank(void *sys, const char *name, unsigned flags, void *
 #define FMOD_OPENMEMORY_POINT 0x10000000u
 #define FMOD_OPENUSER 0x00000008u
 #define SOUND_W(w, r, what)                                                                         \
-    static SO_ABI int w(void *sys, const char *name, unsigned mode, void *ex, void **snd)           \
+    static int w(void *sys, const char *name, unsigned mode, void *ex, void **snd)           \
     {                                                                                               \
         char b[PATH_MAX];                                                                           \
         if (!(mode & (FMOD_OPENMEMORY | FMOD_OPENMEMORY_POINT | FMOD_OPENUSER)))                    \
@@ -475,7 +430,7 @@ SOUND_W(w_createsound4, r_createsound4, "sound")
 SOUND_W(w_createstream4, r_createstream4, "stream")
 // a plugin path of the desktop layout (<dataPath>/Plugins/libx.so): the library in lib/
 #define PLUGIN_W(w, r)                                                                              \
-    static SO_ABI int w(void *sys, const char *name, unsigned *h, unsigned prio)                    \
+    static int w(void *sys, const char *name, unsigned *h, unsigned prio)                    \
     {                                                                                               \
         char b[PATH_MAX + 260];                                                                     \
         if (name && !is_file(name)) {                                                               \
@@ -501,183 +456,6 @@ void *plugins_dlsym_hook(const char *sym, void *p)
     WRAP("FMOD_System_LoadPlugin", r_loadplugin4, w_loadplugin4)
 #undef WRAP
     return p;
-}
-
-// ------------------------------------------------------------------------------------- softfp thunks
-
-#if defined(__arm__) && defined(__ARM_PCS_VFP)
-#define TH_N 256            // thunks available
-#define TH_WORDS 32         // softfp argument words read: r0-r3 and 28 stack words
-#define TH_STACK 32         // hard-float stack words passed
-#define TH_MAXARGS 24             /* = SIG_MAXARGS */
-
-typedef struct { void *fn; char ret; int n; char k[TH_MAXARGS]; unsigned char c[TH_MAXARGS]; } th_sig;
-static th_sig th_sigs[TH_N];
-static int th_used;
-static pthread_mutex_t th_mu = PTHREAD_MUTEX_INITIALIZER;
-
-typedef struct {
-    uint32_t core[4], stk[TH_STACK];
-    union { uint32_t s[16]; double d[8]; } v;
-    int ncrn, nsaa, vfp_off, err;
-    unsigned used;          // single-precision VFP registers taken (bit per s register)
-} th_frame;
-
-static void put_core(th_frame *f, const uint32_t *w, int nw, int align8, int composite)
-{
-    if (align8 && (f->ncrn & 1)) f->ncrn++;
-    if (f->ncrn + nw <= 4) { memcpy(&f->core[f->ncrn], w, 4 * nw); f->ncrn += nw; return; }
-    if (composite && f->ncrn < 4 && f->nsaa == 0) {        // C.5: split between r3.. and the stack
-        int r = 4 - f->ncrn;
-        memcpy(&f->core[f->ncrn], w, 4 * r);
-        memcpy(&f->stk[0], w + r, 4 * (nw - r));
-        f->ncrn = 4; f->nsaa = nw - r;
-        return;
-    }
-    f->ncrn = 4;
-    if (align8) f->nsaa = (f->nsaa + 1) & ~1;
-    if (f->nsaa + nw > TH_STACK) { f->err = 1; return; }
-    memcpy(&f->stk[f->nsaa], w, 4 * nw);
-    f->nsaa += nw;
-}
-
-// a VFP candidate (float, double, or a homogeneous aggregate of n of them): the lowest free run of
-// s registers (d registers: even-aligned pairs), else the stack and no more VFP registers (C.2.cp)
-static void put_vfp(th_frame *f, const uint32_t *w, int ne, int dbl)
-{
-    int need = ne * (dbl ? 2 : 1);
-    if (!f->vfp_off)
-        for (int s = 0; s + need <= 16; s += dbl ? 2 : 1) {
-            unsigned mask = ((1u << need) - 1) << s;
-            if (f->used & mask) continue;
-            memcpy(&f->v.s[s], w, 4 * need);
-            f->used |= mask;
-            return;
-        }
-    f->vfp_off = 1;
-    if (dbl) f->nsaa = (f->nsaa + 1) & ~1;
-    if (f->nsaa + need > TH_STACK) { f->err = 1; return; }
-    memcpy(&f->stk[f->nsaa], w, 4 * need);
-    f->nsaa += need;
-}
-
-#define S8(x) x, x, x, x, x, x, x, x
-typedef uint64_t (*hf_u)(uint32_t, uint32_t, uint32_t, uint32_t, S8(double), S8(uint32_t), S8(uint32_t), S8(uint32_t), S8(uint32_t));
-typedef float (*hf_f)(uint32_t, uint32_t, uint32_t, uint32_t, S8(double), S8(uint32_t), S8(uint32_t), S8(uint32_t), S8(uint32_t));
-typedef double (*hf_d)(uint32_t, uint32_t, uint32_t, uint32_t, S8(double), S8(uint32_t), S8(uint32_t), S8(uint32_t), S8(uint32_t));
-#define CALLARGS(f) f.core[0], f.core[1], f.core[2], f.core[3], \
-    f.v.d[0], f.v.d[1], f.v.d[2], f.v.d[3], f.v.d[4], f.v.d[5], f.v.d[6], f.v.d[7], \
-    f.stk[0], f.stk[1], f.stk[2], f.stk[3], f.stk[4], f.stk[5], f.stk[6], f.stk[7], \
-    f.stk[8], f.stk[9], f.stk[10], f.stk[11], f.stk[12], f.stk[13], f.stk[14], f.stk[15], \
-    f.stk[16], f.stk[17], f.stk[18], f.stk[19], f.stk[20], f.stk[21], f.stk[22], f.stk[23], \
-    f.stk[24], f.stk[25], f.stk[26], f.stk[27], f.stk[28], f.stk[29], f.stk[30], f.stk[31]
-
-// lays out the base-AAPCS words of a softfp call (w: r0-r3, then the stack) for the VFP variant
-static int th_layout(const th_sig *s, const uint32_t *w, th_frame *f)
-{
-    memset(f, 0, sizeof *f);
-    int wi = 0;
-    for (int i = 0; i < s->n; i++) {
-        int c = s->c[i];
-        switch (s->k[i]) {
-        case 'i': put_core(f, w + wi, 1, 0, 0); wi += 1; break;
-        case 'l': wi = (wi + 1) & ~1; put_core(f, w + wi, 2, 1, 0); wi += 2; break;
-        case 's': put_core(f, w + wi, c, 0, 1); wi += c; break;
-        case 'S': wi = (wi + 1) & ~1; put_core(f, w + wi, c, 1, 1); wi += c; break;
-        case 'f': put_vfp(f, w + wi, 1, 0); wi += 1; break;
-        case 'd': wi = (wi + 1) & ~1; put_vfp(f, w + wi, 1, 1); wi += 2; break;
-        case 'F': put_vfp(f, w + wi, c, 0); wi += c; break;
-        case 'D': wi = (wi + 1) & ~1; put_vfp(f, w + wi, c, 1); wi += 2 * c; break;
-        default: f->err = 1;
-        }
-        if (wi > TH_WORDS) f->err = 1;
-    }
-    return !f->err;
-}
-
-static uint64_t th_call(const th_sig *s, const uint32_t *w)
-{
-    th_frame f;
-    th_layout(s, w, &f);                // (checked when the thunk was made)
-    switch (s->ret) {
-    case 'f': { float r = ((hf_f)s->fn)(CALLARGS(f)); uint32_t b; memcpy(&b, &r, 4); return b; }
-    case 'd': { double r = ((hf_d)s->fn)(CALLARGS(f)); uint64_t b; memcpy(&b, &r, 8); return b; }
-    default: return ((hf_u)s->fn)(CALLARGS(f));
-    }
-}
-
-#define TA uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5, uint32_t a6, uint32_t a7, \
-    uint32_t a8, uint32_t a9, uint32_t a10, uint32_t a11, uint32_t a12, uint32_t a13, uint32_t a14, uint32_t a15, \
-    uint32_t a16, uint32_t a17, uint32_t a18, uint32_t a19, uint32_t a20, uint32_t a21, uint32_t a22, uint32_t a23, \
-    uint32_t a24, uint32_t a25, uint32_t a26, uint32_t a27, uint32_t a28, uint32_t a29, uint32_t a30, uint32_t a31
-#define TW a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15, a16, a17, a18, a19, a20, a21, a22, \
-    a23, a24, a25, a26, a27, a28, a29, a30, a31
-// each entry reads its caller's 32 argument words (the words past the real arguments are the
-// caller's frame: read, never used) and runs its signature
-#define B4(s) ((s[0] - '0') * 64 + (s[1] - '0') * 16 + (s[2] - '0') * 4 + (s[3] - '0'))   /* "0123" -> 27 */
-#define TH(k) static SO_ABI uint64_t th_e##k(TA) { uint32_t w[TH_WORDS] = { TW }; return th_call(&th_sigs[B4(#k)], w); }
-#define TH4(k) TH(k##0) TH(k##1) TH(k##2) TH(k##3)
-#define TH16(k) TH4(k##0) TH4(k##1) TH4(k##2) TH4(k##3)
-#define TH64(k) TH16(k##0) TH16(k##1) TH16(k##2) TH16(k##3)
-TH64(0) TH64(1) TH64(2) TH64(3)
-#define E(k) (void *)th_e##k,
-#define E4(k) E(k##0) E(k##1) E(k##2) E(k##3)
-#define E16(k) E4(k##0) E4(k##1) E4(k##2) E4(k##3)
-#define E64(k) E16(k##0) E16(k##1) E16(k##2) E16(k##3)
-static void *const th_entry[TH_N] = { E64(0) E64(1) E64(2) E64(3) };
-#endif
-
-#define SIG_MAXARGS 24
-typedef struct { char ret; int n; char k[SIG_MAXARGS]; unsigned char c[SIG_MAXARGS]; int floats; } sig_parsed;
-
-// "i,f,F3,s2" -> classes; 0 if malformed (the same check on every architecture)
-static int sig_parse(const char *ret, const char *args, sig_parsed *s)
-{
-    memset(s, 0, sizeof *s);
-    if (!ret || !args || !strchr("vilfd", ret[0]) || !ret[0] || ret[1]) return 0;
-    s->ret = ret[0];
-    s->floats = s->ret == 'f' || s->ret == 'd';
-    if (!strcmp(args, "-")) return 1;
-    const char *p = args;
-    while (*p) {
-        if (s->n >= SIG_MAXARGS) return 0;
-        char k = *p++;
-        int c = 1;
-        if (!strchr("ilfdFDsS", k)) return 0;
-        if (strchr("FDsS", k)) { c = (int)strtol(p, (char **)&p, 10); if (c < 1 || c > 16) return 0; }
-        if (strchr("FD", k) && c > 4) return 0;                // not a homogeneous aggregate
-        s->floats |= strchr("fdFD", k) != NULL;
-        s->k[s->n] = k; s->c[s->n] = (unsigned char)c; s->n++;
-        if (*p == ',') p++;
-        else if (*p) return 0;
-    }
-    return 1;
-}
-
-void *plugins_thunk(void *fn, const char *ret, const char *args)
-{
-    sig_parsed sp;
-    if (!fn || !sig_parse(ret, args, &sp)) return NULL;
-    if (!sp.floats) return fn;                      // nothing to convert
-#if defined(__arm__) && defined(__ARM_PCS_VFP)
-    th_sig s;
-    memset(&s, 0, sizeof s);
-    s.fn = fn;
-    s.ret = sp.ret;
-    s.n = sp.n;
-    memcpy(s.k, sp.k, sizeof s.k);
-    memcpy(s.c, sp.c, sizeof s.c);
-    uint32_t w[TH_WORDS] = { 0 };
-    th_frame f;
-    if (!th_layout(&s, w, &f)) return NULL;         // more argument words than a thunk carries
-    pthread_mutex_lock(&th_mu);
-    int k = th_used < TH_N ? th_used++ : -1;
-    if (k >= 0) th_sigs[k] = s;
-    pthread_mutex_unlock(&th_mu);
-    return k >= 0 ? th_entry[k] : NULL;
-#else
-    return fn;                                      // AAPCS64 on both sides
-#endif
 }
 
 // ------------------------------------------------------------------------------------- stubs

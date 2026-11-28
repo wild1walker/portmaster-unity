@@ -8,8 +8,8 @@ draws the frames with, `Hidden/VideoDecodeAndroid`, is not in a desktop build's 
 converter adds our own (`convert/pmunity/video.py`, `video_decode_android.shader`).
 
 ```
-./build.sh                 # -> out/libuamedia.a (+ out/licenses/, out/umbench); ARCH=arm64 -> out/arm64/
-./build.sh test            # + unit tests (armhf in an arm/v7 container, arm64 natively; GL test with Mesa)
+./build.sh                 # -> out/arm64/libuamedia.a (+ out/arm64/licenses/, out/arm64/umbench)
+./build.sh test            # + unit tests (natively; GL test with Mesa)
 ./build.sh test-ffmpeg     # the system-FFmpeg decoders on clips made by Debian's FFmpeg tools
 ```
 Link with `libuamedia.a -lstdc++ -ldl -lpthread -lm` (`../host/build.sh` does). `../build.sh`
@@ -34,7 +34,7 @@ builds it after `jni/` (the Java-side test links `libfakejni.a`).
 | `um_stubs.c`, `um_compat.c` | builds without a backend; libvorbis' finite-math names on Ubuntu 20.04 |
 | `umbench.c` | device check: what decoding a clip costs (`umbench <file> [offset size]`) |
 | `test/` | unit tests on clips the tests make (below) |
-| `docker/` | build images (Debian bookworm armhf cross + Debian's static decoder libraries; arm64 on `ua-build-arm64`), the FFmpeg test image |
+| `docker/` | the build image (on `ua-build-arm64`), the FFmpeg test image |
 
 ## What Unity does (read from libunity, 2017.4 with symbols; checked against later players' bindings)
 
@@ -97,10 +97,10 @@ pictures through EGLImage + shader with Mesa: every pixel equals the desktop for
 
 | codec | container | decoder | licence | linked |
 |---|---|---|---|---|
-| VP8, VP9 | WebM, Matroska | libvpx (`OMX.google.vp8.decoder`, `...vp9...`) | BSD-3-Clause | static (arm64: Debian's `libvpx-dev`; armhf: Debian's source package of it built for ARMv7 with NEON in the image, `docker/Dockerfile`: Debian's own armhf build is plain C) |
+| VP8, VP9 | WebM, Matroska | libvpx (`OMX.google.vp8.decoder`, `...vp9...`) | BSD-3-Clause | static (the image's `libvpx-dev`) |
 | Vorbis | WebM, Matroska | libvorbis + libogg | BSD-3-Clause | static |
 | Opus | WebM, Matroska | libopus | BSD-3-Clause | static |
-| H.264 | MP4, MOV, Matroska | OpenH264 (`OMX.google.h264.decoder`) | BSD-2-Clause | static (Debian's `libopenh264-dev` on armhf; built from Debian's source package for arm64) |
+| H.264 | MP4, MOV, Matroska | OpenH264 (`OMX.google.h264.decoder`) | BSD-2-Clause | static (built from Debian's source package) |
 | H.264 with B-frames, interlaced, > 8 bit; HEVC; AAC; MP3 | MP4, MOV, Matroska | the system's libavcodec (`ffmpeg.*`) | LGPL (the firmware's, or a port's own build) | `dlopen` when present, or `UM_FFMPEG=<path>`; never shipped by this repository |
 | H.264, HEVC, VP8 on the handheld's hardware decoder (Allwinner video engine, Rockchip MPP, V4L2) | MP4, MOV, Matroska | [libpmhwdec](https://github.com/Knifethrower/pmhwdec) (`pmhwdec.*`), tried before the software decoders | LGPL-2.1-or-later (a port's own copy) | `dlopen` from the library path or `UM_PMHWDEC=<path>`; never shipped by this repository |
 | AAC, MP3 without libavcodec | | silence of the right length | ours | |
@@ -113,8 +113,7 @@ What each covers:
   pictures differ slightly (38-79 dB against libavcodec's on x264 clips), so such streams go to the
   system's libavcodec when the firmware has one. The sound needs the system's libavcodec (no
   permissive AAC decoder is bundled); without it the clip plays silently rather than not at all.
-  A 32-bit runtime finds a system FFmpeg only in a 32-bit userland that has one (rare); arm64
-  firmwares usually have libavcodec.
+  arm64 firmwares usually have libavcodec.
 - Clips a game ships untranscoded play when their codec is in the table (VP9 / Opus WebM, HEVC with
   libavcodec, ...).
 - **Hardware decoding**: a port that ships libpmhwdec gets H.264, HEVC and VP8 pictures from the

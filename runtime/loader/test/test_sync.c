@@ -2,7 +2,7 @@
 // statically initialized objects first touched by several threads at once (the libhybris race),
 // objects at 4 mod 8 (bionic aligns them to 4 only; arm64 keeps its pointer in the first 8-byte
 // aligned word), a static recursive initializer there, producer / consumer on a static condition,
-// relative timed waits. Run under arm/v7 emulation (armhf) or natively (arm64).
+// relative timed waits. Run natively (arm64).
 #include "../so_loader.h"
 #include <errno.h>
 #include <pthread.h>
@@ -11,15 +11,9 @@
 #include <string.h>
 #include <time.h>
 
-#if defined(__LP64__)                 /* bionic's sizes, in 32-bit words */
 #define MUTEX_WORDS 10
 #define COND_WORDS 12
 #define RWLOCK_WORDS 14
-#else
-#define MUTEX_WORDS 1
-#define COND_WORDS 1
-#define RWLOCK_WORDS 10
-#endif
 typedef struct { int32_t w[MUTEX_WORDS]; } b_mutex;
 typedef struct { int32_t w[COND_WORDS]; } b_cond;
 typedef struct { int32_t w[RWLOCK_WORDS]; } b_rwlock;
@@ -94,10 +88,8 @@ int main(void)
     rw_rd = find("pthread_rwlock_rdlock"); rw_wr = find("pthread_rwlock_wrlock"); rw_unlock = find("pthread_rwlock_unlock");
     rw_destroy = find("pthread_rwlock_destroy");
     int fail = 0;
-#if defined(__LP64__)
     if (((uintptr_t)&S.mtx & 7) != 4 || ((uintptr_t)&S.rec & 7) != 4 || ((uintptr_t)&S.rw & 7) != 4)
     { printf("FAIL test layout\n"); fail++; }
-#endif
     pthread_barrier_init(&bar, NULL, NT);
     for (int round = 0; round < 300; round++)
     {

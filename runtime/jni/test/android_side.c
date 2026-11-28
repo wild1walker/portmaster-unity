@@ -1,9 +1,6 @@
 /*
- * "Android side" of the fakejni test. On 32-bit ARM it is compiled with -mfloat-abi=softfp
- * -ffreestanding so it calls the JNI table exactly like code built by the NDK for armeabi-v7a
- * (floats/doubles in core registers), and its natives are softfp functions. No libc headers
- * (they would need the soft-float stubs); printf/strcmp are declared by hand (variadic or
- * integer-only: same ABI). On AArch64 it is ordinary code: arm64-v8a and the host share AAPCS64.
+ * "Android side" of the fakejni test, built freestanding like NDK code: no libc headers;
+ * printf/strcmp are declared by hand. arm64-v8a and the host share AAPCS64.
  */
 #include "../include/jni.h"
 
@@ -21,7 +18,7 @@ static int fails;
 
 static int feq(double a, double b) { double d = a - b; return d < 1e-5 && d > -1e-5; }
 
-/* ---------- natives (softfp) ---------- */
+/* ---------- natives ---------- */
 static jdouble nat_mixed(JNIEnv *env, jclass cls, jint i, jlong j, jfloat f, jdouble d, jobject o, jint k)
 {
     (void)cls;
@@ -49,8 +46,7 @@ static jstring nat_str(JNIEnv *env, jclass cls, jstring a, jint n)
 }
 
 /* More arguments than registers. AArch64: env, cls, a, c, e, g, i, k fill x0-x7 and b..s fill
- * v0-v7, so m, o, p, q, r, t (a float), u, v go to the stack, in that order. ARM softfp: r0-r3
- * then 8-byte aligned stack words. Each argument has its own weight, so any misplaced one shows. */
+ * v0-v7, so m, o, p, q, r, t (a float), u, v go to the stack, in that order. Each argument has its own weight, so any misplaced one shows. */
 static jdouble nat_wide(JNIEnv *env, jclass cls, jint a, jfloat b, jlong c, jdouble d, jint e, jfloat f,
                         jlong g, jdouble h, jint i, jfloat j, jlong k, jdouble l, jint m, jfloat n,
                         jboolean o, jbyte p, jchar q, jshort r, jdouble s, jfloat t, jobject u, jint v)
@@ -182,7 +178,7 @@ int android_side_run(JavaVM *vm)
     jfieldID ftouch = (*env)->GetFieldID(env, calc, "touched", "D");
     CHECK(feq((*env)->GetDoubleField(env, obj, ftouch), 10.0));
 
-    /* fields with float/double (softfp setters) */
+    /* fields with float/double */
     jfieldID fval = (*env)->GetFieldID(env, calc, "val", "I");
     CHECK((*env)->GetIntField(env, obj, fval) == 42);
     (*env)->SetIntField(env, obj, fval, 43);

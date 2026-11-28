@@ -163,21 +163,8 @@ static int g_time;
 static double g_tick_ns;
 static unsigned long long g_ticks[MAXOP];
 static int g_counter;               // the counter can be read (probed)
-#if defined(__arm__)
-static inline uint64_t counter(void)
-{
-    uint32_t lo, hi;
-    __asm__ volatile("isb\n\tmrrc p15, 1, %0, %1, c14" : "=r"(lo), "=r"(hi) :: "memory");
-    return (uint64_t)hi << 32 | lo;
-}
-static uint32_t counter_freq(void) { uint32_t f; __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(f)); return f; }
-#elif defined(__aarch64__)
 static inline uint64_t counter(void) { uint64_t v; __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(v) :: "memory"); return v; }
 static uint32_t counter_freq(void) { uint64_t f; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); return (uint32_t)f; }
-#else
-static inline uint64_t counter(void) { return 0; }
-static uint32_t counter_freq(void) { return 0; }
-#endif
 static inline uint64_t ticks(void)
 {
     if (g_counter) return counter();

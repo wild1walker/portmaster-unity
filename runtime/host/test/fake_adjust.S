@@ -1,70 +1,8 @@
 // test_unityhooks.c's stand-in for AdjustThreadingModeForAPI(mode, renderer, flags): mode 3..6 on
 // renderer 11 -> 2, anything else -> mode. Written here (no Unity code): a prologue of the shape the
-// players' functions have (ARM state on 32-bit ARM, A64 on AArch64), then a loop whose branch stays
-// past the instructions the hook moves. Position-independent: the test copies it into a page. On
-// AArch64 more stand-ins follow it, for the trampoline's rewriting of pc-relative instructions.
-#if defined(__arm__)
-	.text
-	.arm
-	.syntax divided
-	.balign 4
-	.globl fake_adjust
-	.type fake_adjust, %function
-fake_adjust:
-	push	{r4, r5, r6, lr}
-	mov	r4, r1
-	mov	r5, #2
-1:	subs	r5, r5, #1
-	bne	1b
-	mov	r5, r0
-	cmp	r4, #11
-	bne	2f
-	sub	r6, r0, #3
-	cmp	r6, #3
-	movls	r5, #2
-2:	mov	r0, r5
-	pop	{r4, r5, r6, pc}
-	.globl fake_adjust_end
-fake_adjust_end:
-@ fmodasync.c's Thumb rows: a validate's shape (handle, out): r0 == 0 -> 0x24, r1 == 0 -> 0x25, else *out = handle
-@ and 0. Its entry's IT block lies wholly in the bytes the jump takes (8 at a word-aligned entry, 10 at another);
-@ the test copies it to both alignments.
-	.syntax unified
-	.thumb
-	.balign 4
-	.globl fake_validate
-	.type fake_validate, %function
-	.thumb_func
-fake_validate:
-	cmp	r0, #0
-	itt	eq
-	moveq	r0, #0x24
-	bxeq	lr
-	cmp	r1, #0
-	itt	eq
-	moveq	r0, #0x25
-	bxeq	lr
-	str	r0, [r1]
-	movs	r0, #0
-	bx	lr
-	.globl fake_validate_end
-fake_validate_end:
-	.arm
-	.syntax divided
-@ an ARM entry with a b<cond> among the moved bytes (2017.4's SystemI::validate): r0 == 0 -> 7, else r0 + 1
-	.balign 4
-	.globl fake_armcond
-	.type fake_armcond, %function
-fake_armcond:
-	cmp	r0, #0
-	beq	1f
-	add	r0, r0, #1
-	bx	lr
-1:	mov	r0, #7
-	bx	lr
-	.globl fake_armcond_end
-fake_armcond_end:
-#elif defined(__aarch64__)
+// players' functions have (A64), then a loop whose branch stays
+// past the instructions the hook moves. Position-independent: the test copies it into a page. More
+// stand-ins follow it, for the trampoline's rewriting of pc-relative instructions.
 	.text
 	.balign 4
 	.globl fake_adjust
@@ -181,5 +119,4 @@ fake_inner:				// (x0 > 0) 0, after x0 turns of a loop inside the entry
 	ret
 	.globl fake_inner_end
 fake_inner_end:
-#endif
 	.section .note.GNU-stack, "", %progbits

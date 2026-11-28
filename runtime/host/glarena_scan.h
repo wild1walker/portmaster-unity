@@ -15,7 +15,6 @@ static void scan_plain(const unsigned char *q, int n, unsigned sz, uint32_t *lo,
     }
     *lo = l; *hi = h;
 }
-#if defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
 static void scan_wide(const unsigned char *q, int n, unsigned sz, uint32_t *lo, uint32_t *hi)
 {
@@ -61,7 +60,4 @@ static void scan_wide(const unsigned char *q, int n, unsigned sz, uint32_t *lo, 
     }
     *lo = l; *hi = h;
 }
-#else
-static void scan_wide(const unsigned char *q, int n, unsigned sz, uint32_t *lo, uint32_t *hi) { scan_plain(q, n, sz, lo, hi); }
-#endif
 #endif

@@ -526,7 +526,7 @@ pub fn generate(core: Vec<Func>, ext: Vec<Func>) -> String {
             if d.is_empty() { "void".to_string() } else { d }
         };
         let args = ps.iter().map(|p| p.1.as_str()).collect::<Vec<_>>().join(", ");
-        let abi = if hasf { "SO_ABI " } else { "" };
+        let abi = if hasf { "" } else { "" };
         let c = classes[name];
         let rv = if ret != "void" { "return " } else { "" };
         let mut tra = vec![name.to_string()];

@@ -1,4 +1,4 @@
-// Unit tests for the Android shims, run without a GPU (armhf under QEMU, aarch64 natively): liblog,
+// Unit tests for the Android shims, run without a GPU (natively, aarch64): liblog,
 // AAssetManager, ALooper, sensors, ANativeWindow + egl_glue (against fake_egl.c), the libmediandk
 // stubs, OpenSL ES on SDL's disk audio driver.
 #define _GNU_SOURCE
@@ -307,8 +307,8 @@ static void test_looper_sensors_input(void)
     ASensorEventQueue *q = ASensorManager_createEventQueue(sm, l, 3, NULL, NULL);
     CHECK(q != NULL && ASensorEventQueue_hasEvents(q) == 0 && ASensorEventQueue_getEvents(q, NULL, 8) == 0);
     CHECK(ASensorManager_destroyEventQueue(sm, q) == 0);
-    // Unity's dump_sensor_info calls this through the Android convention (softfp on ARM).
-    float (SOFTFP *res)(const void *) = android_shims_lookup("ASensor_getResolution");
+    // Unity's dump_sensor_info calls this through the tables.
+    float (*res)(const void *) = android_shims_lookup("ASensor_getResolution");
     CHECK(res && res(NULL) == 0.0f);
 
     AInputEvent *e = android_input_event_new_key(3, AKEY_EVENT_ACTION_DOWN, 96 /* BUTTON_A */, 0);
@@ -609,9 +609,9 @@ static void test_ndk_newer(void)
     android_shims_set_api_level(0);
     CHECK(table_fn(android_ndk_shims, "AChoreographer_getInstance") != NULL && table_fn(android_shims, "APerformanceHint_getManager") != NULL);
 
-    // handheld answers, called through the tables as a game would (softfp on ARM)
+    // handheld answers, called through the tables as a game would
     ANativeWindow *w = android_window_get();
-    int32_t (SOFTFP *setfr)(ANativeWindow *, float, int8_t) = android_shims_lookup("ANativeWindow_setFrameRate");
+    int32_t (*setfr)(ANativeWindow *, float, int8_t) = android_shims_lookup("ANativeWindow_setFrameRate");
     CHECK(setfr && setfr(w, 60.0f, 0) == 0 && setfr(NULL, 60.0f, 0) != 0 && setfr(w, -1.0f, 0) != 0);
     bool (*traceon)(void) = android_shims_lookup("ATrace_isEnabled");
     CHECK(traceon && !traceon());
@@ -622,7 +622,7 @@ static void test_ndk_newer(void)
     CHECK(hintmgr && hintmgr() && hintsess(hintmgr(), &tid, 1, 16666666) == NULL && hintrate(hintmgr()) == -1);
     void *(*thmgr)(void) = android_shims_lookup("AThermal_acquireManager");
     int (*thstatus)(void *) = android_shims_lookup("AThermal_getCurrentThermalStatus");
-    float (SOFTFP *headroom)(void *, int) = android_shims_lookup("AThermal_getThermalHeadroom");
+    float (*headroom)(void *, int) = android_shims_lookup("AThermal_getThermalHeadroom");
     CHECK(thmgr && thmgr() && thstatus(thmgr()) == 0 && headroom && headroom(thmgr(), 0) != headroom(thmgr(), 0));  // NaN
     int (*hballoc)(const void *, void **) = android_shims_lookup("AHardwareBuffer_allocate");
     void (*hbdesc)(const void *, void *) = android_shims_lookup("AHardwareBuffer_describe");

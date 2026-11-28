@@ -1,6 +1,6 @@
 // hitches.c check: a thread named UnityMain does 60 fps "frames", one of them 300 ms long
-// (busy in spin()); the sampler must print samples and a "frame of" line. Run under
-// docker --platform linux/arm/v7 (QEMU) or on the device.
+// (busy in spin()); the sampler must print samples and a "frame of" line. Run in
+// ua-build-arm64 or on the device.
 #define _GNU_SOURCE
 #include <pthread.h>
 #include <stdio.h>

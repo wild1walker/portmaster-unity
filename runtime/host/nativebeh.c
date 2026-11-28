@@ -63,17 +63,6 @@
 #include "nativebeh.h"
 #include "unityhooks.h"
 
-#if !defined(__aarch64__)
-// the 64-bit player's loops only
-void nativebeh_frame(void) {}
-void nativebeh_on_load(uintptr_t base, size_t size)
-{
-    (void)base; (void)size;
-    const char *v = getenv("UA_NATIVE_BEH");
-    if (v && *v && strcmp(v, "0"))
-        fprintf(stderr, "[nativebeh] UA_NATIVE_BEH: the 64-bit player's loops only; Unity's loops are kept\n");
-}
-#else
 typedef uintptr_t U;
 
 enum { NB_UPDATE, NB_LATE, NB_FIXED };
@@ -177,15 +166,9 @@ static inline void pfs(U a) { __builtin_prefetch((const void *)a, 1, 3); }
 // --- the managed calls' order, the time (UA_NATIVE_BEH_STATS)
 static inline uint64_t ticks(void)
 {
-#if defined(__aarch64__)
     uint64_t t;
     __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(t) :: "memory");
     return t;
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-#endif
 }
 static uint64_t g_tick_hz;
 static struct nb_count {
@@ -718,4 +701,3 @@ void nativebeh_on_load(uintptr_t base, size_t size)
     }
     fprintf(stderr, "[nativebeh] this libunity.so is not one whose behaviour loops were read (pmu-dev unityhooks); Unity's loops are kept\n");
 }
-#endif

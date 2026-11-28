@@ -5,13 +5,12 @@
 // one buffer (dynamic batching; Hollow Knight's tk2d sprites): TransformVerticesInnerLoop<false,
 // false, true> writes each vertex's position (the 4x4 matrix times it), a constant normal and
 // tangent when the flags ask for them, the vertex colour, the vertex's other attributes copied from
-// a second stream, and zero padding. Unity's ARMv7 build of it reloads the matrix from the stack for
-// every vertex and calls memmove for the few bytes of each vertex's other attributes: 2.7 % of the
-// render thread in Greenpath on its own, plus the memmove calls.
+// a second stream, and zero padding. Unity's build of it reloads the matrix from the stack for every
+// vertex and calls memmove for the few bytes of each vertex's other attributes (the 32-bit player:
+// 2.7 % of the render thread in Greenpath on its own, plus the memmove calls).
 //
-// The same function here: the same VFP operations on the same operands in the same order (each
-// output is the same float, bit for bit: VFP multiply and add, no fused multiply-add, as Unity's
-// code; on AArch64 fmul and fadd, never fmadd), the matrix in registers, the attribute bytes copied inline for the usual sizes. The flags'
+// The same function here: the same operations on the same operands in the same order (each
+// output is the same float, bit for bit: fmul and fadd, never fmadd, as Unity's code), the matrix in registers, the attribute bytes copied inline for the usual sizes. The flags'
 // meaning was read from the code of the row below: 8 a constant normal (the 3x3 matrix's third
 // column, negated with 256 clear), 64 a constant tangent (the 4x4's first column and a sign: 256,
 // 512, 1024, 2048), 512/1024 a mirrored x/y (the matrix's first/second column negated), 16 the
@@ -23,8 +22,7 @@
 // (the emulated rig runs Unity's code too).
 #include "unityverts.h"
 
-// every output the same float as Unity's: a multiply and an add, never fused (AArch64's gcc fuses by default; the
-// ARMv7 build passes -ffp-contract=off)
+// every output the same float as Unity's: a multiply and an add, never fused (AArch64's gcc fuses by default)
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC optimize("fp-contract=off")
 #endif
@@ -38,7 +36,6 @@
 static const struct uh_row g_rows[] = {
     // TransformVerticesInnerLoop<false, false, true>(unsigned char*, Matrix4x4f const&, Matrix3x3f const&, bool,
     // unsigned int, unsigned char const*, int, unsigned char const*, int, int, GfxTransformVerticesFlags, unsigned int)
-    { "6000.0.61f1 armeabi-v7a", "TransformVerticesInnerLoop<false, false, true>", 0xab7344, 0x27c, 'a', 0xa8c11455644d88b3ull },
     // The arm64-v8a IL2CPP player (Hollow Knight's 64-bit build; read 2026-11-26): the same flags and operations (the
     // position's products summed m0*x + m4*y, then + m8*z, then m12 +, in that operand order: the A64 branch of the
     // loop), the 4x4 copied to the stack, Matrix4x4f::Scale(sx, sy, 1) on the copy for 512 /
@@ -87,16 +84,10 @@ static void fast_loop(unsigned char *dst, const float *m, const float *m3, int b
     for (; count; count--, src += src_stride) {
         float x, y, z;
         memcpy(&x, src, 4); memcpy(&y, src + 4, 4); memcpy(&z, src + 8, 4);
-#if defined(__aarch64__)
-        // the arm64-v8a row's operand order (which of two NaN inputs a VFP/A64 operation returns is its first)
+        // the arm64-v8a row's operand order (which of two NaN inputs an A64 operation returns is its first)
         float px = m0 * x; px = px + m4 * y; px = px + m8 * z; px = m12 + px;
         float py = m1 * x; py = py + y * m5; py = py + z * m9; py = m13 + py;
         float pz = x * m2; pz = pz + m6 * y; pz = pz + z * m10; pz = m14 + pz;
-#else
-        float px = m4 * y; px = px + m0 * x; px = px + m8 * z; px = m12 + px;
-        float py = y * m5; py = py + m1 * x; py = py + z * m9; py = m13 + py;
-        float pz = m6 * y; pz = pz + x * m2; pz = pz + z * m10; pz = m14 + pz;
-#endif
         put(&dst, px); put(&dst, py); put(&dst, pz);
         if (flags & 8) { put(&dst, n0); put(&dst, n1); put(&dst, n2); }
         if (flags & 64) { put(&dst, t0); put(&dst, t1); put(&dst, t2); put(&dst, tw); }

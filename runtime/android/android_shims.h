@@ -1,5 +1,4 @@
-// Android API shims for running Unity's Android player on ARM glibc Linux: the armeabi-v7a
-// player on armhf, the arm64-v8a player on aarch64.
+// Android API shims for running Unity's Android player (arm64-v8a) on aarch64 glibc Linux.
 //
 // Covers the Android-only libraries the player imports or dlopens:
 //   liblog.so      __android_log_*                         -> stderr

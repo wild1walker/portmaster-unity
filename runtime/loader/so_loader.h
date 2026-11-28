@@ -1,7 +1,6 @@
 /*
- * so_loader.h - ELF loader for Android ARM shared libraries on ARM glibc Linux:
- * armeabi-v7a (ELF32) on armhf, arm64-v8a (ELF64) on aarch64. A build loads the
- * libraries of its own architecture. Part of the Cuphead Unity-Android port.
+ * so_loader.h - ELF loader for Android arm64-v8a shared libraries (ELF64) on aarch64
+ * glibc Linux. Part of the Cuphead Unity-Android port.
  *
  * Ideas from the PS Vita so_loader (so_util.c) and PortMaster's gmloader;
  * the code is our own.
@@ -12,7 +11,6 @@
  *      (so register android_shims before bionic_shims to let them win)
  *   3. Android modules loaded with so_load(): M's DT_NEEDED modules first, then all
  *   4. the host (glibc + host libraries opened for M's DT_NEEDED, via dlsym);
- *      GL functions taking floats are wrapped for the softfp ABI (see below).
  *      Weak imports are never resolved from the host (Android semantics).
  *   5. unresolved: weak -> 0; functions -> a stub that prints the name and aborts;
  *      data objects -> a zeroed block. SO_TRACE=1 lists them at load time.
@@ -24,17 +22,12 @@
  * IFUNC symbols. ELF TLS (PT_TLS) is refused: NDK code for API levels below 29 uses
  * emulated TLS (__emutls_get_address, linked into each library).
  *
- * ABI WARNING (32-bit ARM): armeabi-v7a code uses the *softfp* calling convention
- * (float and double arguments/results in core registers), our code is hard-float.
- * Every C function that Android code calls (shims, JNI functions) or that we call in
- * Android code (JNI natives, callbacks) with float/double arguments or results must
- * be declared with SO_ABI. Variadic functions are unaffected. On AArch64 Android and
- * Linux share AAPCS64 and SO_ABI is empty.
+ * ABI: Android and Linux on AArch64 share AAPCS64: shims, JNI functions and callbacks
+ * are plain C.
  *
  * AArch64 THREAD SLOTS: bionic keeps per-thread slots at the thread pointer
  * (tpidr_el0), and NDK code built with the stack protector loads its canary from
- * slot 5, tpidr_el0 + 0x28, on entry to and exit from every protected function
- * (32-bit ARM code reads the global __stack_chk_guard instead, a shim). glibc's
+ * slot 5, tpidr_el0 + 0x28, on entry to and exit from every protected function. glibc's
  * tpidr_el0 points at its 16-byte TCB (the dtv pointer and an unused word), followed
  * by the executable's static TLS block, then the libraries' (errno, ...). A canary
  * that changes while a function runs aborts it, so so_loader.c makes that word ours:
@@ -69,11 +62,6 @@
 extern "C" {
 #endif
 
-#if defined(__arm__) && defined(__ARM_PCS_VFP)
-#define SO_ABI __attribute__((pcs("aapcs")))
-#else
-#define SO_ABI
-#endif
 
 typedef struct {
     const char *name;
@@ -98,7 +86,7 @@ size_t      so_size(so_module *m);
 int         so_unresolved_count(so_module *m);
 /* calls cb for each unresolved non-weak import of m */
 void        so_foreach_unresolved(so_module *m, void (*cb)(const char *name, int is_func, void *ud), void *ud);
-/* global lookup: shims, Android modules, host (softfp-wrapped). NULL if not found */
+/* global lookup: shims, Android modules, host. NULL if not found */
 void       *so_resolve(const char *name);
 /* lookup in the registered shim tables only */
 void       *so_shim_lookup(const char *name);
@@ -128,25 +116,10 @@ void so_map_library(const char *android_name, const char *host);
  * get a handle that searches the global shims. */
 void so_register_fake_lib(const char *android_name, const so_shim *table);
 
-/* Returns a softfp-callable wrapper for a host function that takes or returns
- * floats (GL/GLES, libm), or fn itself if it needs none. Used for dlsym results
- * and by eglGetProcAddress shims (the EGL glue should call this too). AArch64: fn. */
-void *so_softfp_wrap(const char *name, void *fn);
-/* A wrapper that needs no host function of that name (it calls host code statically), for names
- * the host lacks: bionic's __isfinite, __isfinitef. NULL otherwise, and on AArch64. */
-void *so_softfp_static(const char *name);
 
-/* ARM EHABI unwinding support (32-bit ARM): finds the .ARM.exidx table for pc in our
- * modules (then in host objects). Exported under the libgcc/glibc name by so_loader.c:
- * link the host executable with
- *     -Wl,--export-dynamic-symbol=__gnu_Unwind_Find_exidx
- * (or -rdynamic) so that the host libgcc_s unwinder, which libunity uses for C++
- * exceptions, can unwind through Android code.
- * AArch64 unwinds with .eh_frame instead, and arm64 Android libraries carry their own
- * unwinder (bionic never exported one on LP64), which finds frames through
- * dl_iterate_phdr: bionic_compat_table() routes that to the loader, which reports our
- * modules, then the host's. so_find_exidx returns 0 there. */
-uintptr_t so_find_exidx(uintptr_t pc, int *pcount);
+/* Unwinding: arm64 Android libraries carry their own unwinder (bionic never exported one on LP64),
+ * which finds frames through dl_iterate_phdr: bionic_compat_table() routes that to the loader, which
+ * reports our modules, then the host's. */
 
 /* dl* shims used by Android code (also part of bionic_shims). Handles are loader
  * handles, not glibc ones. The bionic RTLD_DEFAULT/RTLD_NEXT values are handled. */
@@ -160,8 +133,7 @@ void so_set_clock_hook(int (*hook)(int clk, long *sec, long *nsec));
 void so_set_dlsym_hook(void *(*hook)(const char *symbol, void *found));
 /* the host may serve a dlopen() path itself: rewrite(path, buf, size) returns the file to open instead,
    or NULL (e.g. Mono's AOT images, which it looks for beside assemblies inside an OBB); a served file is
-   loaded as an Android library whatever its ELF says (an AOT image has no DT_NEEDED and the Android
-   player's soft-float ABI, which the host's armhf loader refuses) */
+   loaded as an Android library whatever its ELF says (an AOT image has no DT_NEEDED) */
 void so_set_dlopen_rewrite(const char *(*rewrite)(const char *path, char *buf, size_t size));
 /* hook(m) for each Android module once it is relocated and protected, before its initializers run;
  * the loader's lock is held: the hook may read and patch the module (so_base, so_size, so_name), not

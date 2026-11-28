@@ -32,12 +32,10 @@
 // How: a sampler thread ("ua_prof") wakes <hz> times a second. For each thread it reads the
 // thread's state (/proc/self/task/<tid>/stat, an open file read again):
 //   - running (R): a signal (SIGRTMIN+5) makes the thread record itself into a buffer allocated for
-//     the recording: pc, lr and its callers. Callers are unwound exactly while the code has unwind
-//     tables (32-bit ARM: the .ARM.exidx/.ARM.extab EHABI opcodes of libunity, Mono's runtime, libc,
-//     the GLES driver; AArch64: the frame-pointer chain); from where that stops (Mono's JIT code has
-//     no such tables) the stack is scanned for words that are return addresses (the instruction
-//     before them is a call: arch.h), and on 32-bit ARM the exact unwind starts again where JIT
-//     code was entered from native code (see record()). Nothing is named, locked or allocated in
+//     the recording: pc, lr and its callers. Callers are unwound exactly along the frame-pointer
+//     chain; from where that stops (Mono's JIT code has no frame records the unwinder trusts) the
+//     stack is scanned for words that are return addresses (the instruction before them is a call:
+//     arch.h). Nothing is named, locked or allocated in
 //     the handler, and every stack read stays inside the thread's stack mapping.
 //     A thread whose last signal is still pending is counted as Q (runnable, not on a CPU, or in a
 //     long kernel path);
@@ -83,16 +81,14 @@
 
 #define MAX_THREADS 32
 #define MAX_RANGES 2048             // executable mappings: libraries, Mono's code chunks
-#define MAX_READABLE 4096           // file-backed readable mappings (unwind tables)
 #define HDR 9                       // a sample: time (us), state|syscall<<8, depth|exact<<8, pc, lr,
                                     // 4 words of "scanned" bits (one a frame), then the frames
 #define BITS (1u << 16)             // prefilter, one bit per MB of address space (hashed above 4 GB)
 #define NO_SYSCALL 0xffffu          // a running sample, or a blocked one whose call is unknown
 #define NOT_IN_SYSCALL 0xfffeu      // blocked outside a system call (a page fault)
 
-typedef struct { uintptr_t lo, hi; const uint32_t *exidx; int nexidx, anon; } range;
-typedef struct { uintptr_t lo, hi; } span;
-typedef struct { int n, nrd; range r[MAX_RANGES]; span rd[MAX_READABLE]; uint8_t bits[BITS / 8]; } rtab;
+typedef struct { uintptr_t lo, hi; int anon; } range;
+typedef struct { int n; range r[MAX_RANGES]; uint8_t bits[BITS / 8]; } rtab;
 
 typedef struct {
     _Atomic int tid;                // 0: unused slot
@@ -196,19 +192,6 @@ static const range *code_range(const rtab *t, uintptr_t v)
     return NULL;
 }
 
-// [a, a + n) lies in a file-backed readable mapping (where unwind tables are)
-static int readable(const rtab *t, uintptr_t a, uintptr_t n)
-{
-    int lo = 0, hi = t->nrd - 1;
-    while (lo <= hi) {
-        int m = (lo + hi) / 2;
-        if (a < t->rd[m].lo) hi = m - 1;
-        else if (a >= t->rd[m].hi) lo = m + 1;
-        else return a + n <= t->rd[m].hi && a + n >= a;
-    }
-    return 0;
-}
-
 static inline int stack_word(const pthr *t, uintptr_t a, uintptr_t *v)
 {
     // (a + 4 can wrap around: an unwind that popped a garbage stack pointer, 0xfffffffc)
@@ -217,130 +200,10 @@ static inline int stack_word(const pthr *t, uintptr_t a, uintptr_t *v)
     return 1;
 }
 
-#if defined(__arm__)
-// ARM EHABI: the unwind opcodes of the function that holds key (from its .ARM.exidx entry, inline
-// or in .ARM.extab), -1 when there are none (no table, EXIDX_CANTUNWIND, an unknown model)
-static inline uintptr_t prel31(const uint32_t *p) { return (uintptr_t)p + (uintptr_t)(((int32_t)(*p << 1)) >> 1); }
-static int ehabi_ops(const rtab *tab, const range *r, uintptr_t key, uint8_t *ops, int max)
-{
-    const uint32_t *e = r->exidx;
-    int lo = 0, hi = r->nexidx - 1, f = -1;
-    if (!e || hi < 0) return -1;
-    while (lo <= hi) {
-        int m = (lo + hi) / 2;
-        if (prel31(&e[2 * m]) <= key) { f = m; lo = m + 1; } else hi = m - 1;
-    }
-    if (f < 0) return -1;                                 // before the first function
-    if (e[2 * f + 1] == 1) return -2;                     // EXIDX_CANTUNWIND: the end (a thread's start)
-    uint32_t w = e[2 * f + 1], w0;
-    const uint32_t *d = NULL, *more;
-    int k = 0, words;
-    if (w & 0x80000000u) w0 = w;                          // inline (personality 0)
-    else {
-        d = (const uint32_t *)prel31(&e[2 * f + 1]);
-        if (!readable(tab, (uintptr_t)d, 8)) return -1;
-        w0 = d[0];
-    }
-    if (w0 & 0x80000000u) {                               // compact model
-        int pers = (w0 >> 24) & 0x0f;
-        if (pers == 0) { ops[k++] = (uint8_t)(w0 >> 16); ops[k++] = (uint8_t)(w0 >> 8); ops[k++] = (uint8_t)w0; words = 0; }
-        else if ((pers == 1 || pers == 2) && d) { words = (w0 >> 16) & 0xff; ops[k++] = (uint8_t)(w0 >> 8); ops[k++] = (uint8_t)w0; }
-        else return -1;
-        more = d ? d + 1 : NULL;
-    } else {                                              // a personality routine, then the opcodes
-        uint32_t w1 = d[1];
-        words = (w1 >> 24) & 0xff;
-        ops[k++] = (uint8_t)(w1 >> 16); ops[k++] = (uint8_t)(w1 >> 8); ops[k++] = (uint8_t)w1;
-        more = d + 2;
-    }
-    if (words > (max - k) / 4) words = (max - k) / 4;
-    if (words && !readable(tab, (uintptr_t)more, (uintptr_t)words * 4)) return -1;
-    for (int i = 0; i < words; i++) {
-        uint32_t x = more[i];
-        ops[k++] = (uint8_t)(x >> 24); ops[k++] = (uint8_t)(x >> 16); ops[k++] = (uint8_t)(x >> 8); ops[k++] = (uint8_t)x;
-    }
-    return k;
-}
-
-// the call before return address v (checked: arch.h) was BLX <register>: how native code enters
-// JIT-compiled code (Mono's runtime invoke, Unity's scripting calls), never a direct BL
-static inline int call_is_indirect(uintptr_t v)
-{
-    if (v & 1) return (*(const uint16_t *)((v & ~1u) - 2) & 0xFF87) == 0x4780;
-    return (*(const uint32_t *)(v - 4) & 0x0FFFFFF0) == 0x012FFF30;
-}
-
-// one frame up: r[] (r0-r15) from the callee's to the caller's: 1; 0 when it cannot be done here
-// (no tables, a refused or unreadable step); -1 at the end of the stack (CANTUNWIND, lr 0)
-static int ehabi_step(const pthr *t, const rtab *tab, uint32_t *r, int first)
-{
-    uintptr_t pc = r[15] & ~1u, key = first ? pc : pc - 2, v;
-    const range *rg = code_range(tab, key);
-    uint8_t ops[64];
-    int n = rg ? ehabi_ops(tab, rg, key, ops, sizeof ops) : -1, set15 = 0;
-    if (n == -2) return -1;
-    if (n < 0) return 0;
-    uintptr_t vsp = r[13];
-    for (int i = 0; i < n; ) {
-        uint8_t op = ops[i++];
-        if ((op & 0xc0) == 0x00) vsp += ((op & 0x3fu) << 2) + 4;
-        else if ((op & 0xc0) == 0x40) vsp -= ((op & 0x3fu) << 2) + 4;
-        else if ((op & 0xf0) == 0x80) {                   // pop r4-r15 under a mask
-            if (i >= n) return 0;
-            unsigned mask = ((op & 0x0fu) << 8) | ops[i++];
-            uintptr_t nsp = 0;
-            int sp_popped = 0;
-            if (!mask) return 0;                          // "refuse to unwind"
-            for (int b = 0; b < 12; b++) {
-                if (!(mask & (1u << b))) continue;
-                if (!stack_word(t, vsp, &v)) return 0;
-                vsp += 4;
-                if (4 + b == 13) { sp_popped = 1; nsp = v; } else r[4 + b] = (uint32_t)v;
-                if (4 + b == 15) set15 = 1;
-            }
-            if (sp_popped) vsp = nsp;
-        } else if ((op & 0xf0) == 0x90) {                 // vsp = r[n]
-            unsigned reg = op & 0x0fu;
-            if (reg == 13 || reg == 15) return 0;
-            vsp = r[reg];
-        } else if ((op & 0xf0) == 0xa0) {                 // pop r4-r[4+n] (and r14)
-            for (unsigned b = 0; b <= (op & 7u); b++) { if (!stack_word(t, vsp, &v)) return 0; vsp += 4; r[4 + b] = (uint32_t)v; }
-            if (op & 0x08) { if (!stack_word(t, vsp, &v)) return 0; vsp += 4; r[14] = (uint32_t)v; }
-        } else if (op == 0xb0) break;                     // finish
-        else if (op == 0xb1) {                            // pop r0-r3 under a mask
-            if (i >= n) return 0;
-            unsigned mask = ops[i++];
-            if (!mask || (mask & 0xf0)) return 0;
-            for (int b = 0; b < 4; b++) if (mask & (1u << b)) { if (!stack_word(t, vsp, &v)) return 0; vsp += 4; r[b] = (uint32_t)v; }
-        } else if (op == 0xb2) {                          // vsp += 0x204 + (uleb128 << 2)
-            uint32_t x = 0;
-            int sh = 0;
-            uint8_t c;
-            do { if (i >= n) return 0; c = ops[i++]; x |= (uint32_t)(c & 0x7f) << sh; sh += 7; } while ((c & 0x80) && sh < 28);
-            vsp += 0x204 + ((uintptr_t)x << 2);
-        } else if (op == 0xb3 || op == 0xc8 || op == 0xc9) {   // pop VFP registers (FSTMFDX / VPUSH)
-            if (i >= n) return 0;
-            uint8_t x = ops[i++];
-            vsp += ((x & 0x0fu) + 1) * 8 + (op == 0xb3 ? 4 : 0);
-        } else if ((op & 0xf8) == 0xb8) vsp += ((op & 7u) + 1) * 8 + 4;
-        else if ((op & 0xf8) == 0xd0) vsp += ((op & 7u) + 1) * 8;
-        else return 0;                                    // iWMMX, spare opcodes
-    }
-    if (!set15) r[15] = r[14];
-    uintptr_t osp = r[13];
-    r[13] = (uint32_t)vsp;
-    if (!r[15]) return -1;                                // no caller: the outermost frame
-    if (vsp < osp || (vsp == osp && (r[15] & ~1u) == pc) || vsp >= t->stk_hi) return 0;
-    return 1;
-}
-#endif
 
 // one sample into the thread's buffer: from its own signal handler (uc: running) or from the
 // sampler (blocked: pc and sp only). The slot is reserved atomically: both may write the buffer.
-// Callers: unwound while the code has tables; above that the stack is scanned. On 32-bit ARM a
-// scanned return address into code with tables, after one into JIT code reached through BLX
-// <register> (how native code calls into JIT code), starts an exact unwind again from there: the
-// callee pushed lr at the top of its frame, so the caller's sp is the next word.
+// Callers: unwound along the frame records; above that the stack is scanned.
 static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t lr, uintptr_t sp, const ucontext_t *uc)
 {
     unsigned i = atomic_fetch_add(&t->n, 1);
@@ -354,27 +217,6 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
     const rtab *tab = atomic_load(&g_tab);
     uintptr_t from = sp;
     if (depth && sp && t->stk_hi && sp >= t->stk_lo && sp < t->stk_hi) {
-#if defined(__arm__)
-        uint32_t r[16];
-        const range *last = code_range(tab, pc);
-        if (uc) {
-            const unsigned long *g = &uc->uc_mcontext.arm_r0;          // r0-r10, fp, ip, sp, lr, pc in order
-            for (int k = 0; k < 16; k++) r[k] = (uint32_t)g[k];
-            const range *rg;
-            int rc = 0;
-            for (int first = 1; d < depth && (rc = ehabi_step(t, tab, r, first)) == 1 && (rg = code_range(tab, r[15] & ~1u)); first = 0) {
-                s[HDR + d++] = r[15];
-                from = r[13];
-                last = rg;
-            }
-            exact = d;
-            // the thread's start: nothing above to scan. Not when the sample's own function has no
-            // tables (EXIDX_CANTUNWIND: glibc's assembly functions, syscall, memcpy): its callers
-            // are found by the scan (from sp: lr is still in its register, profsum.py takes it)
-            if (rc < 0 && d) depth = d;
-        }
-        int after_jit = last && last->anon;
-#elif defined(__aarch64__)
         if (uc) {                                          // the frame records: [fp] = caller's fp, [fp + 8] = lr
             uintptr_t fp = uc->uc_mcontext.regs[29], v, ret;
             while (d < depth && fp >= sp && stack_word(t, fp, &v) && stack_word(t, fp + 8, &ret) && ret) {
@@ -385,7 +227,6 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
             }
             exact = d;
         }
-#endif
         // an unwind through code with wrong or missing tables (Mali's driver) can leave a stack pointer
         // outside the thread's stack: then nothing is scanned (stk_hi - from would wrap around)
         if (from < t->stk_lo || from >= t->stk_hi) depth = d;
@@ -395,27 +236,6 @@ static void record(pthr *t, int state, unsigned sysnr, uintptr_t pc, uintptr_t l
             uintptr_t v = *w;
             const range *rg = code_range(tab, v);
             if (!rg || !is_return_address(v, rg->lo)) continue;
-#if defined(__arm__)
-            if (uc && rg->exidx && (!after_jit || call_is_indirect(v))) {
-                memset(r, 0, sizeof r);
-                r[15] = (uint32_t)v;
-                r[13] = (uint32_t)(uintptr_t)(w + 1);
-                unsigned at = d;
-                s[HDR + d++] = v;
-                const range *rg2 = rg;
-                int rc = 0;
-                while (d < depth && (rc = ehabi_step(t, tab, r, 0)) == 1 && (rg2 = code_range(tab, r[15] & ~1u))) s[HDR + d++] = r[15];
-                if (d == at + 1) scanned[at >> 5] |= (uintptr_t)1 << (at & 31);   // nothing unwound from it: a scan's find
-                else if (rc < 0) break;                    // unwound to the thread's start: the rest is old data
-                after_jit = rg2 && rg2->anon;
-                if (r[13] < from || r[13] >= t->stk_hi) break;      // (unwound off the stack: stop here)
-                w = (const uintptr_t *)(uintptr_t)r[13] - 1;   // the scan goes on above the unwound frames
-                if ((uintptr_t)(w + 1) < from) break;
-                from = (uintptr_t)(w + 1);
-                continue;
-            }
-            after_jit = rg->anon;
-#endif
             scanned[d >> 5] |= (uintptr_t)1 << (d & 31);
             s[HDR + d++] = v;
         }
@@ -487,22 +307,13 @@ static void build_table(const mapline *m, int n)
 {
     rtab *t = atomic_load(&g_tab) == &g_tabs[0] ? &g_tabs[1] : &g_tabs[0];
     memset(t->bits, 0, sizeof t->bits);
-    t->n = t->nrd = 0;
-    for (int i = 0; i < n && t->nrd < MAX_READABLE; i++) {     // where unwind tables can be read
-        if (m[i].perms[0] != 'r' || m[i].path[0] == '[' || (!m[i].path[0] && !so_module_at((void *)m[i].lo, NULL))) continue;
-        if (t->nrd && t->rd[t->nrd - 1].hi == m[i].lo) t->rd[t->nrd - 1].hi = m[i].hi;
-        else { t->rd[t->nrd].lo = m[i].lo; t->rd[t->nrd].hi = m[i].hi; t->nrd++; }
-    }
+    t->n = 0;
     for (int i = 0; i < n && t->n < MAX_RANGES; i++) {
         if (m[i].perms[0] != 'r' || m[i].perms[2] != 'x') continue;
         if (!strcmp(m[i].path, "[vectors]") || !strcmp(m[i].path, "[vsyscall]")) continue;
         range *r = &t->r[t->n++];
-        r->lo = m[i].lo; r->hi = m[i].hi; r->exidx = NULL; r->nexidx = 0;
+        r->lo = m[i].lo; r->hi = m[i].hi;
         r->anon = !m[i].path[0] && !so_module_at((void *)m[i].lo, NULL);   // Mono's JIT code, trampolines
-        int cnt = 0;
-        // the loader's modules, else glibc's (dl_iterate_phdr: an address inside the segment, not its page)
-        uintptr_t x = so_find_exidx(m[i].lo + (m[i].hi - m[i].lo) / 2, &cnt);
-        if (x && cnt > 0 && readable(t, x, (uintptr_t)cnt * 8)) { r->exidx = (const uint32_t *)x; r->nexidx = cnt; }
         for (uintptr_t a = m[i].lo; ; a += 1u << 20) {
             unsigned b = bit_of(a);
             t->bits[b >> 3] |= (uint8_t)(1u << (b & 7));
@@ -758,7 +569,7 @@ static const char *base_name(const char *p) { const char *b = strrchr(p, '/'); r
 // File format (one record per line; addresses in hex without 0x; times in us since the start):
 //   ua_prof 3                       format version (2: no ~ marks, callers after <exact> scanned;
 //                                    1: no <exact> field)
-//   arch armhf|arm64, hz <n>, secs <s>, depth <n> scan <bytes>, signal <n>, mono yes|no
+//   arch arm64, hz <n>, secs <s>, depth <n> scan <bytes>, signal <n>, mono yes|no
 //   thread <i> <tid> <name> <samples> <dropped>     the sampled threads
 //   module <lo> <hi> <bias> <name>  code an address falls in: <name>+(address - bias), an ELF address
 //                                    (Android libraries by the loader's bias, others by dladdr's base)
@@ -800,11 +611,7 @@ static void write_profile(double secs, const tcpu *c0, int n0, const tcpu *c1, i
         }
     }
     fprintf(f, "ua_prof 3\narch %s\nhz %d\nsecs %.3f\ndepth %d scan %d\nsignal %d\n",
-#if defined(__aarch64__)
             "arm64",
-#else
-            "armhf",
-#endif
             g_hz, secs, g_depth, g_scan, g_sig);
     if (g_ev_type >= 0) fprintf(f, "event %s period %ld\n", g_ev_name, g_ev_period);
     // every address once, sorted: modules and methods come in runs

@@ -1,7 +1,7 @@
 /*
  * fakejni: a JavaVM / JNIEnv implemented in C, for running Android JNI libraries (Unity's
  * libunity.so / libmain.so / libmono.so / libil2cpp.so) on a plain ARM Linux userland without
- * Java: armeabi-v7a libraries on armhf, arm64-v8a libraries on aarch64.
+ * Java: arm64-v8a libraries on aarch64.
  *
  * Model
  *  - Every jobject is a pointer to an internal object (class, string, array, plain object).
@@ -11,13 +11,12 @@
  *  - Unknown classes/methods/fields never crash: FindClass/GetMethodID/GetFieldID return a
  *    placeholder (logged once, always). Calling a placeholder returns 0/NULL.
  *  - RegisterNatives is recorded; C code fetches the native with fj_native() and can call it
- *    with the right ABI (softfp on ARM, AAPCS64 on AArch64) through fj_call_native*().
+ *    with the right ABI (AAPCS64) through fj_call_native*().
  *  - Reference counting: objects count local refs (per thread, with local frames), global and
  *    weak refs, and containment in object arrays / object fields; freed at zero (FJ_NOFREE=1
  *    disables freeing). Classes are permanent.
  *
- * ABI: on 32-bit ARM all JNI table functions use the base AAPCS (softfp), see JNI_ABI in
- * include/jni.h; on AArch64 Android and Linux share AAPCS64 and JNI_ABI is empty.
+ * ABI: Android and Linux on AArch64 share AAPCS64: JNI table functions are plain C.
  * Handlers (fj_fn) are only called by fakejni itself and use the normal host ABI.
  *
  * Environment: FJ_TRACE=1 logs every JNI call with arguments; FJ_NOFREE=1 never frees
@@ -35,9 +34,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* ABI attribute for functions that Android code calls or that we call in it (softfp on ARM). */
-#define FJ_ABI JNI_ABI
 
 /* Method implemented in C. `self` is the receiver object for instance methods and
  * constructors ("<init>": the freshly allocated object), the jclass for static methods.
@@ -141,11 +137,9 @@ jvalue   fj_call_native(const char *cls, const char *name, const char *sig, jobj
 jvalue   fj_call_native_a(const char *cls, const char *name, const char *sig, jobject self,
                           const jvalue *args);
 /* Call any Android function pointer with JNI-style arguments described by a signature:
- * env, self, then args, placed as the Android ABI wants them (32-bit ARM: base AAPCS words;
- * AArch64: AAPCS64 registers and stack). Exposed for the host/tests. */
+ * env, self, then args, placed as the Android ABI wants them (AAPCS64 registers and stack). Exposed for the host/tests. */
 jvalue   fj_invoke_native(void *fn, JNIEnv *env, jobject self, const char *sig,
                           const jvalue *args);
-#define  fj_invoke_softfp fj_invoke_native   /* its name from the 32-bit-only days */
 
 /* ---- interface proxies (java.lang.reflect.Proxy) -------------------------------------------- */
 /* Calls on a proxy object (any method not implemented in C) are forwarded to a native:

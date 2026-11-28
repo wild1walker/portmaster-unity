@@ -71,21 +71,8 @@ static inline float rec_bitsf(uint64_t v) { uint32_t u = (uint32_t)v; float f; m
 // ---- the timer (as glrec.c's UA_GL_REC=time)
 static int g_counter;
 static double g_tick_ns = 1;
-#if defined(__arm__)
-static inline uint64_t counter(void)
-{
-    uint32_t lo, hi;
-    __asm__ volatile("isb\n\tmrrc p15, 1, %0, %1, c14" : "=r"(lo), "=r"(hi) :: "memory");
-    return (uint64_t)hi << 32 | lo;
-}
-static uint32_t counter_freq(void) { uint32_t f; __asm__ volatile("mrc p15, 0, %0, c14, c0, 0" : "=r"(f)); return f; }
-#elif defined(__aarch64__)
 static inline uint64_t counter(void) { uint64_t v; __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(v) :: "memory"); return v; }
 static uint32_t counter_freq(void) { uint64_t f; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f)); return (uint32_t)f; }
-#else
-static inline uint64_t counter(void) { return 0; }
-static uint32_t counter_freq(void) { return 0; }
-#endif
 static inline uint64_t ticks(void)
 {
     if (g_counter) return counter();
@@ -464,17 +451,9 @@ static void evict_init(size_t kb)
     memset(g_ev_data, 1, EV_REGION);
     uint32_t *c = (uint32_t *)g_ev_code;
     size_t n = EV_REGION / 4;
-#if defined(__aarch64__)
     for (size_t i = 0; i < n; i++) c[i] = 0xd503201f;                 // nop
     for (size_t i = 0; i + 1 < n; i += g_evict / 4) if (i) c[i - 1] = 0xd65f03c0;   // ret at each slice's end
     c[n - 1] = 0xd65f03c0; c[n] = 0xd65f03c0;
-#elif defined(__arm__)
-    for (size_t i = 0; i < n; i++) c[i] = 0xe1a00000;                 // mov r0, r0
-    for (size_t i = 0; i + 1 < n; i += g_evict / 4) if (i) c[i - 1] = 0xe12fff1e;   // bx lr
-    c[n - 1] = 0xe12fff1e; c[n] = 0xe12fff1e;
-#else
-    g_evict = 0; return;
-#endif
     __builtin___clear_cache((char *)g_ev_code, (char *)g_ev_code + EV_REGION + 64);
     if (mprotect(g_ev_code, EV_REGION + 64, PROT_READ | PROT_EXEC)) g_evict = 0;
 }

@@ -514,9 +514,8 @@ static void cleared_buffer(GLenum buffer)
     pass_start(0);
     if (buffer == GL_DEPTH || buffer == GL_STENCIL || buffer == GL_DEPTH_STENCIL) dirty();
 }
-// (a float argument: on armhf the player calls with softfp, SO_ABI, so_loader.h)
 static void h_ClearBufferfi(GLenum b, GLint d, float v, GLint s) { if (mine()) pass_start(0); r_ClearBufferfi(b, d, v, s); cleared_buffer(b); }
-static SO_ABI void w_ClearBufferfi(GLenum b, GLint d, float v, GLint s) { h_ClearBufferfi(b, d, v, s); }
+static void w_ClearBufferfi(GLenum b, GLint d, float v, GLint s) { h_ClearBufferfi(b, d, v, s); }
 static void w_ClearBufferfv(GLenum b, GLint d, const float *v) { if (mine()) pass_start(0); r_ClearBufferfv(b, d, v); cleared_buffer(b); }
 static void w_ClearBufferiv(GLenum b, GLint d, const GLint *v) { if (mine()) pass_start(0); r_ClearBufferiv(b, d, v); cleared_buffer(b); }
 static void w_ClearBufferuiv(GLenum b, GLint d, const GLuint *v) { if (mine()) pass_start(0); r_ClearBufferuiv(b, d, v); cleared_buffer(b); }
@@ -632,8 +631,7 @@ static void *gl(void *(*next)(const char *), const char *name)
     return p;
 }
 
-// the wrappers that take a float, for a caller with the host's own calling convention (glrec.c:
-// on armhf the table's ones take the player's softfp convention)
+// the wrappers that take a float, for glrec.c (the same functions as the table's: one calling convention on aarch64)
 void *glopt_hard(const char *name)
 {
     if (g_on && !strcmp(name, "glClearBufferfi")) return (void *)h_ClearBufferfi;

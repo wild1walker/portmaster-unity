@@ -1,41 +1,32 @@
 #!/bin/bash
-# Builds the Android shims in Docker (runtime/ is mounted: media_ndk.c includes ../media/um.h):
-#   ARCH=armhf (default): Debian bookworm cross toolchain (glibc 2.36), image ua-android-shims ->
-#     out/libandroidshims.a (+ out/obj/*.o), out/test/test_shims, out/test/libfakeegl.so
-#   ARCH=arm64: native gcc of the ua-build-arm64 image (Ubuntu 20.04, glibc 2.31) -> the same
-#     files under out/arm64/
+# Builds the Android shims in Docker (runtime/ is mounted: media_ndk.c includes ../media/um.h) with
+# the native gcc of the ua-build-arm64 image (Ubuntu 20.04, glibc 2.31) -> out/arm64/libandroidshims.a
+# (+ out/arm64/obj/*.o), out/arm64/test/test_shims, out/arm64/test/libfakeegl.so. (32-bit armhf was
+# removed; the last tree with it is the tag last-armhf.)
 # Link with -lSDL2 -ldl -lpthread -lm.
-# ./build.sh test   also runs the unit tests (no GPU): armhf under QEMU (linux/arm/v7 container),
-# arm64 natively.
+# ./build.sh test   also runs the unit tests (no GPU), natively.
 set -e
 cd "$(dirname "$0")"
-ARCH=${ARCH:-armhf}
-case "$ARCH" in
-  armhf) IMG=ua-android-shims; PLAT=; O=out; CROSS=arm-linux-gnueabihf-
-         docker image inspect $IMG >/dev/null 2>&1 || docker build -t $IMG docker ;;
-  arm64) IMG=ua-build-arm64; PLAT="--platform linux/arm64"; O=out/arm64; CROSS=
-         docker image inspect $IMG >/dev/null 2>&1 || docker build $PLAT -t $IMG ../docker/arm64 ;;
-  *) echo "ARCH must be armhf or arm64"; exit 1 ;;
-esac
+ARCH=${ARCH:-arm64}
+[ "$ARCH" = arm64 ] || { echo "ARCH must be arm64 (armhf was removed: tag last-armhf)"; exit 1; }
+IMG=ua-build-arm64; PLAT="--platform linux/arm64"; O=out/arm64
+docker image inspect $IMG >/dev/null 2>&1 || docker build $PLAT -t $IMG ../docker/arm64
 mkdir -p $O/obj $O/test
-docker run --rm $PLAT -v "$PWD/..":/r -w /r/android -e O=$O -e CROSS=$CROSS $IMG bash -c '
+docker run --rm $PLAT -v "$PWD/..":/r -w /r/android -e O=$O $IMG bash -c '
   set -e
-  CC=${CROSS}gcc
+  CC=gcc
   CFLAGS="-O2 -g -fPIC -ffunction-sections -std=gnu11 -Wall -Wextra -Wno-unused-parameter -D_FILE_OFFSET_BITS=64"
   for f in log_shim native_window asset_manager looper_input_sensor choreographer ndk_newer opensles media_ndk egl_glue shim_tables; do
     $CC $CFLAGS -c $f.c -o $O/obj/$f.o
   done
   rm -f $O/libandroidshims.a
-  ${CROSS}ar rcs $O/libandroidshims.a $O/obj/*.o
+  ar rcs $O/libandroidshims.a $O/obj/*.o
   $CC $CFLAGS -shared -o $O/test/libfakeegl.so test/fake_egl.c
   $CC $CFLAGS -I. -o $O/test/test_shims test/test_shims.c $O/libandroidshims.a -Wl,--wrap=SDL_InitSubSystem -lSDL2 -lz -ldl -lpthread -lm
   file $O/libandroidshims.a $O/test/test_shims | sed "s|, BuildID[^,]*||"
-  ${CROSS}objdump -T $O/test/test_shims | grep -o "GLIBC_[0-9.]*" | sort -uV | tail -1 | sed "s/^/max glibc symbol version: /"
+  objdump -T $O/test/test_shims | grep -o "GLIBC_[0-9.]*" | sort -uV | tail -1 | sed "s/^/max glibc symbol version: /"
 '
 if [ "$1" = test ]; then
-  # armhf: the test binary runs in the same image, which carries the armhf multiarch runtime
-  # (libc6:armhf, libSDL2:armhf); Docker Desktop runs 32-bit ARM code with QEMU user emulation.
-  # arm64: native.
   # ANDROID_SLES_CAPTURE must hold exactly what SDL's disk driver was given.
   docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test \
     -e SDL_AUDIODRIVER=disk -e SDL_DISKAUDIOFILE=/tmp/sles.raw -e ANDROID_WINDOW_SIZE=640x480 \
@@ -63,7 +54,7 @@ if [ "$1" = test ]; then
     else
       echo "pipe/aplay: FAILED"; cat /tmp/aplay.args; exit 1
     fi'
-  # No SDL audio at all (a 32-bit SDL without a driver it can start, as muOS's has no dummy): the
+  # No SDL audio at all (an SDL without a driver it can start, as muOS's 32-bit one had no dummy): the
   # engine still starts and the default output (auto) reaches the pipe client.
   docker run --rm $PLAT -v "$PWD/..":/r -w /r/android/$O/test -e SDL_AUDIODRIVER=nosuchdriver \
     -e ANDROID_WINDOW_SIZE=640x480 -e PATH=/r/android/test/fakebin:/usr/bin:/bin $IMG sh -c '
@@ -75,7 +66,7 @@ if [ "$1" = test ]; then
       echo "no SDL audio: FAILED"; cat /tmp/out.txt; exit 1
     fi'
   # Silence never reaches a speaker. A silent run asks for SDL's dummy driver; where SDL has none
-  # (muOS's 32-bit SDL; TEST_SDL_NO_DUMMY=1 makes this one refuse it) auto takes no output, never the
+  # (as muOS's 32-bit SDL had none; TEST_SDL_NO_DUMMY=1 makes this one refuse it) auto takes no output, never the
   # pipe; ANDROID_SLES_OUTPUT=none (the device tools' silent runs) the same with a working SDL. Either
   # way no client is spawned (test/fakebin/aplay would record its arguments), and the buffers still go
   # on the clock, in order (ANDROID_SLES_CAPTURE: what the player took).

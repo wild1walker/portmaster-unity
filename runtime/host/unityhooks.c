@@ -15,10 +15,6 @@
 //                        and are left as Unity sets them.
 //   UA_GLES_POOL=1       Unity's pool of GLES buffers in lists that cost O(1) (unitypool.c)
 //   UA_FAST_VERTS=1      dynamic batching's vertex transform without its per-vertex overhead (unityverts.c)
-//   UA_INV_MEMO=1        the 4x4 matrix inverse's last results kept per thread (unitymath.c)
-//   UA_BEH_PREFETCH=1    the behaviour update loops fetch the next scripts' objects ahead (unitybeh.c)
-//   UA_BEH_EMPTY=1       a started script's empty Update/LateUpdate/FixedUpdate is not called (unitybeh.c)
-//   UA_SCRIPT_FIND=1     FindRuntimeScript's answers kept on UnityMain (AddComponent's script lookup; unityscripts.c)
 //   UA_PREFETCH=1        the 64-bit player's hot loops fetch their next elements ahead (PRFM; unityprefetch.c)
 //   UA_NATIVE_BEH=1      the 64-bit player's behaviour update loops replaced by our own (nativebeh.c; =verify: each of
 //                        their steps checked against Unity's own on the live state)
@@ -46,15 +42,11 @@
 // or a library of another version with a function at the same offset, matches no row and is left
 // alone; the log says so. No Unity code is kept here: offsets and hashes only.
 //
-// How it hooks. The function's first instructions (8 bytes in ARM state, 16 in A64, 8 in Thumb at a
-// word-aligned entry and 10 at another, whose jump starts with a nop so that its literal is
-// word-aligned; the tool checks that they can run elsewhere and that nothing in the function branches
-// into them) are copied to a trampoline that continues at the next instruction; the entry becomes a
-// jump to the wrapper here, which calls the original through the trampoline and adjusts only its
-// result. In ARM and Thumb state the moved instructions use no pc-relative operand and end on an
-// instruction's boundary, an IT block among them whole (fmodasync.c's Thumb rows); but an ARM
-// b<cond>, which becomes a load of its target into the pc. In A64 one that does is rewritten for its
-// new place: a direct branch (b, bl, b.cond, cbz, cbnz, tbz, tbnz) goes through a veneer behind the trampoline to
+// How it hooks. The function's first four A64 instructions (16 bytes; the tool checks that they can run elsewhere
+// and that nothing in the function branches into them) are copied to a trampoline that continues at the next
+// instruction; the entry becomes a jump to the wrapper here, which calls the original through the trampoline and
+// adjusts only its result. A moved instruction that is pc-relative is rewritten for its new place: a direct branch
+// (b, bl, b.cond, cbz, cbnz, tbz, tbnz) goes through a veneer behind the trampoline to
 // its old target, adr and adrp become a load of the address they computed. The trampoline's jumps
 // use x16, which no moved instruction writes (the tool checks it).
 #define _GNU_SOURCE
@@ -69,10 +61,6 @@
 
 #include "unitypool.h"
 #include "unityverts.h"
-#include "unitymath.h"
-#include "unitybeh.h"
-#include "unityscripts.h"
-#include "unitylayers.h"
 #include "fmodasync.h"
 #include "unityprefetch.h"
 #include "nativebeh.h"
@@ -80,7 +68,7 @@
 #include "enginerw.h"
 #include "unityphys2d.h"
 
-enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
+enum { ISA_A64 = 'x' };   // (the rows' isa: A64 only; 32-bit ARM was removed, tag last-armhf)
 #define row uh_row
 
 // AdjustThreadingModeForAPI(GfxThreadingMode, GfxDeviceRenderer, GfxCreateDeviceFlags) -> GfxThreadingMode
@@ -93,10 +81,7 @@ enum { ISA_ARM = 'a', ISA_THUMB = 't', ISA_A64 = 'x' };
 // keep); 2017.x Android players have no client ExecuteAsync at all.
 static const struct row g_adjust[] = {
     { "6000.0.58f2 arm64-v8a", "AdjustThreadingModeForAPI", 0x1064384, 0x124, ISA_A64, 0xcb638d1da6e7ceabull },
-    { "6000.0.61f1 armeabi-v7a", "AdjustThreadingModeForAPI", 0xae495c, 0x148, ISA_ARM, 0xf35961184571fb1cull },
     { "6000.0.61f1 arm64-v8a", "AdjustThreadingModeForAPI", 0x10665f8, 0x134, ISA_A64, 0x355bbd317a3bb811ull },
-    { "6000.3.11f1 armeabi-v7a", "AdjustThreadingModeForAPI", 0xb7bb1c, 0x1d4, ISA_ARM, 0x1c4d6f9fc49fc82cull },
-    { "6000.6.2f1 armeabi-v7a", "AdjustThreadingModeForAPI", 0xe47158, 0x214, ISA_ARM, 0x72524d146331a93dull },
 };
 enum { MODE_THREADED = 2, MODE_CLIENT_WORKER_JOBS = 3, RENDERER_GLES3X = 11 };
 
@@ -169,22 +154,8 @@ static size_t a64_trampoline(uint32_t *t, uint64_t fn, size_t n)
     return tail;
 }
 
-// Thumb: the bytes the entry's jump takes, `ldr.w pc, [pc, #0]` and its word: 8 at a word-aligned entry, else a
-// `nop` first (the load's literal must be word-aligned to load the pc): 10
-static size_t thumb_moved(uintptr_t fn) { return (fn & 2) ? 10 : 8; }
-static size_t thumb_jump(uint16_t *j, uintptr_t fn, uintptr_t to)
-{
-    size_t n = 0;
-    if (fn & 2) j[n++] = 0xbf00;                                    // nop
-    j[n++] = 0xf8df; j[n++] = 0xf000;                               // ldr.w pc, [pc, #0]
-    uint32_t a = (uint32_t)to;
-    memcpy(&j[n], &a, 4);
-    return 2 * n + 4;
-}
-
-// a trampoline: the moved instructions, then a jump to fn + moved; returns its address or 0 (a Thumb one with
-// its bit 0 set)
-static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
+// a trampoline: the moved instructions, then a jump to fn + moved; returns its address or 0
+static uintptr_t make_trampoline(uintptr_t fn, size_t moved)
 {
     static uint8_t *pool;
     static size_t used;
@@ -193,44 +164,23 @@ static uintptr_t make_trampoline(uintptr_t fn, size_t moved, char isa)
         pool = mmap(NULL, pg, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (pool == MAP_FAILED) { pool = NULL; return 0; }
     }
-    size_t need = isa == ISA_ARM ? 2 * moved + 8 : isa == ISA_THUMB ? moved + 10 : 4 * A64_TRAMPOLINE;
+    size_t need = 4 * A64_TRAMPOLINE;
     if (used + need > (size_t)pg) return 0;
     uint8_t *t = pool + used;
     mprotect(pool, pg, PROT_READ | PROT_WRITE);
-    if (isa == ISA_ARM) {
-        // a moved b<cond> becomes ldr<cond> pc, [pc, #k] of its target, kept behind the jump back
-        uint32_t *w = (uint32_t *)t, n = (uint32_t)(moved / 4), lit = n + 2;
-        memcpy(t, (void *)fn, moved);
-        for (uint32_t i = 0; i < n; i++)
-            if ((w[i] & 0x0f000000u) == 0x0a000000u && w[i] >> 28 != 0xf) {
-                uint32_t target = (uint32_t)(fn + 4 * i + 8 + (uint32_t)(((int32_t)(w[i] << 8) >> 8) * 4));
-                w[lit] = target;
-                w[i] = (w[i] & 0xf0000000u) | 0x059ff000u | (4 * lit - (4 * i + 8));
-                lit++;
-            }
-        w[n] = 0xe51ff004u;                                          // ldr pc, [pc, #-4]
-        w[n + 1] = (uint32_t)(fn + moved);
-        need = 4 * lit;
-    } else if (isa == ISA_THUMB) {                                   // t is word-aligned: the jump as at t + moved
-        uint16_t j[5];
-        memcpy(t, (void *)fn, moved);
-        need = moved + thumb_jump(j, (uintptr_t)(t + moved), (fn + moved) | 1);
-        memcpy(t + moved, j, need - moved);
-    } else {
-        need = 4 * a64_trampoline((uint32_t *)t, fn, moved / 4);
-    }
+    need = 4 * a64_trampoline((uint32_t *)t, fn, moved / 4);
     mprotect(pool, pg, PROT_READ | PROT_EXEC);
     if (!need) return 0;
     __builtin___clear_cache((char *)t, (char *)(t + need));
     used += (need + 15) & ~(size_t)15;
-    return (uintptr_t)t | (isa == ISA_THUMB);
+    return (uintptr_t)t;
 }
 
 // the entry of fn becomes a jump to to; *orig gets a callable original. 0 on success
 int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig)
 {
-    size_t moved = isa == ISA_ARM ? 8 : isa == ISA_THUMB ? thumb_moved(fn) : 4 * A64_MOVED;
-    uintptr_t t = make_trampoline(fn, moved, isa);
+    if (isa != ISA_A64) return -1;
+    uintptr_t t = make_trampoline(fn, 4 * A64_MOVED);
     if (!t) return -1;
     if (unityhooks_jump(fn, isa, to) != 0) return -1;
     *orig = (void *)t;
@@ -240,15 +190,7 @@ int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig)
 // the entry of fn becomes a jump to to, nothing kept (a function replaced whole). 0 on success
 int unityhooks_jump(uintptr_t fn, char isa, void *to)
 {
-    if (isa == ISA_ARM) {
-        uint32_t j[2] = { 0xe51ff004u, (uint32_t)(uintptr_t)to };     // Thumb bit kept: ldr pc interworks
-        return patch_bytes(fn, j, 8);
-    }
-    if (isa == ISA_THUMB) {                                          // ldr pc interworks: an ARM `to` too
-        uint16_t j[5];
-        size_t n = thumb_jump(j, fn, (uintptr_t)to);
-        return patch_bytes(fn, j, n);
-    }
+    if (isa != ISA_A64) return -1;
     uint32_t j[4] = { 0x58000050u, 0xd61f0200u, 0, 0 };
     uint64_t a = (uint64_t)(uintptr_t)to;
     memcpy(&j[2], &a, 8);
@@ -258,7 +200,7 @@ int unityhooks_jump(uintptr_t fn, char isa, void *to)
 // --- the row whose bytes the loaded library has
 int unityhooks_matches(const struct row *r, uintptr_t base, size_t size)
 {
-    if ((r->isa != ISA_A64) != (sizeof(void *) == 4)) return 0;
+    if (r->isa != ISA_A64) return 0;
     if ((size_t)r->off + r->size > size) return 0;
     return fnv1a((const uint8_t *)(base + r->off), r->size) == r->fnv;
 }
@@ -303,13 +245,10 @@ int unityhooks_gfx_jobs(void)
 
 // --- UA_PRESENT_SYNC
 // GraphicsDeviceSettings_Set_Custom_PropWaitForPresentSyncPoint(GfxDeviceWaitForPresentSyncPoint): stores the
-// value in GetGfxDevice() at 0x23a0; GfxDeviceClient::BeginFrame calls WaitForPendingPresent when it is 0,
-// EndFrame when it is 1 (both read in 6000.0.61f1 armeabi-v7a; their rows tie the setter to that code). The
-// arm64-v8a IL2CPP player of 6000.0.61f1 the same at 0x25d8 (read 2026-11-09, Hollow Knight's 64-bit build)
+// value in GetGfxDevice() (at 0x25d8 in the arm64-v8a IL2CPP player of 6000.0.61f1, read 2026-11-09, Hollow
+// Knight's 64-bit build); GfxDeviceClient::BeginFrame calls WaitForPendingPresent when it is 0, EndFrame when it
+// is 1 (their rows tie the setter to that code)
 static const struct row g_psync[] = {
-    { "6000.0.61f1 armeabi-v7a", "GraphicsDeviceSettings.waitForPresentSyncPoint (set)", 0x31ebd6, 0x10, ISA_THUMB, 0x973b56982359eb07ull },
-    { "6000.0.61f1 armeabi-v7a", "GfxDeviceClient::BeginFrame", 0x62f468, 0x70, ISA_THUMB, 0x0f58bedb8c26c3acull },
-    { "6000.0.61f1 armeabi-v7a", "GfxDeviceClient::EndFrame", 0x62f554, 0x6c, ISA_THUMB, 0xe6b3b700099f6c08ull },
     { "6000.0.61f1 arm64-v8a", "GraphicsDeviceSettings.waitForPresentSyncPoint (set)", 0x6a9398, 0x18, ISA_A64, 0x466b859985ec5841ull },
     { "6000.0.61f1 arm64-v8a", "GfxDeviceClient::BeginFrame", 0xab6408, 0xac, ISA_A64, 0x463888fc7b8a3132ull },
     { "6000.0.61f1 arm64-v8a", "GfxDeviceClient::EndFrame", 0xab6564, 0x9c, ISA_A64, 0x14176be35341ce5full },
@@ -326,7 +265,7 @@ static void present_sync_on_load(uintptr_t base, size_t size)
     for (size_t i = 0; i + 3 <= sizeof g_psync / sizeof *g_psync; i += 3)
         if (unityhooks_matches(&g_psync[i], base, size) && unityhooks_matches(&g_psync[i + 1], base, size) &&
             unityhooks_matches(&g_psync[i + 2], base, size)) {
-            g_psync_set = (void (*)(int))(base + g_psync[i].off + (g_psync[i].isa == ISA_THUMB));
+            g_psync_set = (void (*)(int))(base + g_psync[i].off);
             g_psync_value = want;
             return;
         }
@@ -467,8 +406,6 @@ void unityhooks_frame(void)
 {
     static unsigned long frames;
     job_split_frame();                          // UA_JOB_SPLIT
-    unitybeh_frame();                           // UA_BEH_STATS
-    unityscripts_frame();                       // UA_SCRIPT_FIND
     nativebeh_frame();                          // UA_NATIVE_BEH, UA_NATIVE_BEH_STATS
     enginerw_frame();                           // UA_ENGINE_COUNT and the engine rewrites (enginerw.c)
     unityphys2d_frame();                        // UA_PHYS2D
@@ -488,14 +425,10 @@ void unityhooks_on_load(so_module *m)
     unityphys2d_on_load(base, size);            // UA_PHYS2D (unityphys2d.c): its rows checked likewise
     unitypool_on_load(base, size);              // UA_GLES_POOL
     unityverts_on_load(base, size);             // UA_FAST_VERTS
-    unitymath_on_load(base, size);              // UA_INV_MEMO
-    unitybeh_on_load(base, size);               // UA_BEH_PREFETCH, UA_BEH_EMPTY, UA_BEH_STATS
-    unityscripts_on_load(base, size);           // UA_SCRIPT_FIND
     present_sync_on_load(base, size);           // UA_PRESENT_SYNC
     job_workers_on_load(base, size);            // UA_JOB_WORKERS
     unityjobs_on_load(base, size);              // UA_JOB_SLEEP (unityjobs.c)
     job_split_on_load(base, size);              // UA_JOB_SPLIT
-    unitylayers_on_load(base, size);            // UaHost::LayersInScene (unitylayers.c)
     fmodasync_on_load(base, size);              // UA_FMOD_ASYNC, UA_FMOD_COUNT (fmodasync.c)
     nativebeh_on_load(base, size);              // UA_NATIVE_BEH (nativebeh.c): before UA_PREFETCH, whose `beh` sites it replaces
     unityprefetch_on_load(base, size);          // UA_PREFETCH (unityprefetch.c)

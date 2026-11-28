@@ -17,13 +17,12 @@ struct uh_row {
     const char *unity;      // the player it was read from (for the log)
     const char *func;       // the function (demangled name, for the log)
     uint32_t off, size;     // in libunity.so (ELF address = file offset of the text here)
-    char isa;               // 'a' ARM, 't' Thumb, 'x' A64
+    char isa;               // 'x' A64 (the only one: 32-bit ARM was removed)
     uint64_t fnv;           // FNV-1a 64 of the function's size bytes
 };
 // 1 when the loaded library (base, size) has exactly the row's bytes at its offset
 int unityhooks_matches(const struct uh_row *r, uintptr_t base, size_t size);
-// the entry of fn (ARM, Thumb or A64) becomes a jump to `to`; *orig gets a callable original (a Thumb one with its
-// bit 0 set). 0 on success
+// the entry of fn (A64) becomes a jump to `to`; *orig gets a callable original. 0 on success
 int unityhooks_hook(uintptr_t fn, char isa, void *to, void **orig);
 // the entry of fn becomes a jump to `to` and nothing of it is kept: for a function replaced whole. 0 on success
 int unityhooks_jump(uintptr_t fn, char isa, void *to);

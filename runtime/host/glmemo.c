@@ -978,11 +978,9 @@ static void (*r_ClearBufferiv)(GLenum, GLint, const GLint *);
 static void w_ClearBufferiv(GLenum b, GLint d, const GLint *v) { pixels_begin(); r_ClearBufferiv(b, d, v); if (mine()) fb_written(g_draw_fb); }
 static void (*r_ClearBufferuiv)(GLenum, GLint, const GLuint *);
 static void w_ClearBufferuiv(GLenum b, GLint d, const GLuint *v) { pixels_begin(); r_ClearBufferuiv(b, d, v); if (mine()) fb_written(g_draw_fb); }
-// (a float argument: on armhf the player calls with softfp, SO_ABI; the next wrapper of the name is called the same way, the
-// driver with the host's own convention)
 static void (*r_ClearBufferfi)(GLenum, GLint, float, GLint);
-static void (SO_ABI *n_ClearBufferfi)(GLenum, GLint, float, GLint);
-static SO_ABI void w_ClearBufferfi(GLenum b, GLint d, float v, GLint s)
+static void (*n_ClearBufferfi)(GLenum, GLint, float, GLint);
+static void w_ClearBufferfi(GLenum b, GLint d, float v, GLint s)
 {
     pixels_begin();
     if (n_ClearBufferfi) n_ClearBufferfi(b, d, v, s); else r_ClearBufferfi(b, d, v, s);
@@ -1206,8 +1204,8 @@ static void w_TexParameterfv(GLenum t, GLenum p, const float *v)
     r_TexParameterfv(t, p, v);
 }
 static void (*r_TexParameterf)(GLenum, GLenum, float);
-static void (SO_ABI *n_TexParameterf)(GLenum, GLenum, float);
-static SO_ABI void w_TexParameterf(GLenum t, GLenum p, float v)
+static void (*n_TexParameterf)(GLenum, GLenum, float);
+static void w_TexParameterf(GLenum t, GLenum p, float v)
 {
     if (t == GL_TEXTURE_EXTERNAL_OES) { GLint x = (GLint)v; if (!ext_fix(t, p, &x)) return; v = (float)x; }
     float cur[4] = { 0 };
@@ -1262,8 +1260,8 @@ static void w_SamplerParameterfv(GLuint s, GLenum p, const float *v)
     r_SamplerParameterfv(s, p, v);
 }
 static void (*r_SamplerParameterf)(GLuint, GLenum, float);
-static void (SO_ABI *n_SamplerParameterf)(GLuint, GLenum, float);
-static SO_ABI void w_SamplerParameterf(GLuint s, GLenum p, float v)
+static void (*n_SamplerParameterf)(GLuint, GLenum, float);
+static void w_SamplerParameterf(GLuint s, GLenum p, float v)
 {
     float cur[4] = { 0 };
     if (g_on) { q_GetSamplerParameterfv(s, p, cur); if (cur[0] != v) bump(g_smp_gen, s); }

@@ -7,7 +7,7 @@
 // spin <hz>: the cost of sampling, as the work a thread with a 12 KB deep stack gets done in 3 s
 // while it is sampled at <hz> (0: not), in iterations per second.
 // Usage: test_prof <scenario> <dir> [hz]. Built with -rdynamic (dladdr names the test's functions); run
-// under docker --platform linux/arm/v7 (QEMU), natively on arm64, or on a handheld
+// natively on arm64 or on a handheld
 // (runtime/host/test/prof_test.sh).
 #define _GNU_SOURCE
 #include <dirent.h>
@@ -27,34 +27,6 @@ static _Atomic int g_finishing;
 int up_is_finishing(void) { return g_finishing; }
 const char *so_module_at(const void *addr, uintptr_t *bias) { (void)addr; (void)bias; return NULL; }
 uintptr_t so_relayout_orig(uintptr_t addr) { return addr; }   // (no UA_RELAYOUT copies here)
-// the loader's exidx lookup, for this program and glibc's libraries (32-bit ARM)
-#include <link.h>
-struct xq { uintptr_t pc, exidx; int count; };
-static int xcb(struct dl_phdr_info *info, size_t size, void *data)
-{
-    (void)size;
-#if defined(__arm__)
-    struct xq *q = data;
-    uintptr_t exidx = 0; int count = 0, in = 0;
-    for (int i = 0; i < info->dlpi_phnum; i++) {
-        const ElfW(Phdr) *ph = &info->dlpi_phdr[i];
-        uintptr_t a = info->dlpi_addr + ph->p_vaddr;
-        if (ph->p_type == PT_LOAD && q->pc >= a && q->pc < a + ph->p_memsz) in = 1;
-        if (ph->p_type == PT_ARM_EXIDX) { exidx = a; count = (int)(ph->p_memsz / 8); }
-    }
-    if (in) { q->exidx = exidx; q->count = count; return 1; }
-#else
-    (void)info; (void)data;
-#endif
-    return 0;
-}
-uintptr_t so_find_exidx(uintptr_t pc, int *pcount)
-{
-    struct xq q = { pc, 0, 0 };
-    dl_iterate_phdr(xcb, &q);
-    *pcount = q.count;
-    return q.exidx;
-}
 
 static uint8_t *g_jit;                  // the "JIT code": a countdown loop
 static int g_domain, g_ji, g_method, g_thread;
@@ -143,11 +115,7 @@ static void make_jit(void)
 {
     g_jit = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (g_jit == MAP_FAILED) { perror("mmap"); exit(1); }
-#if defined(__aarch64__)
     static const uint32_t code[] = { 0xF1000400, 0x54FFFFE1, 0xD65F03C0 };   // subs x0,x0,#1; b.ne .-4; ret
-#else
-    static const uint32_t code[] = { 0xE2500001, 0x1AFFFFFD, 0xE12FFF1E };   // subs r0,r0,#1; bne .-4; bx lr (ARM)
-#endif
     memcpy(g_jit, code, sizeof code);
     __builtin___clear_cache((char *)g_jit, (char *)g_jit + sizeof code);
     g_loop = (int (*)(int))(void *)g_jit;
@@ -262,11 +230,7 @@ static int check(const char *path, double want_secs)
     if (in_inner * 10 < r * 2) return fail("spin_inner under 20% of the running samples");
     if (with_outer * 2 < in_inner) return fail("spin_outer (lr or stack) missing from most spin_inner samples");
     if (with_game * 2 < in_inner) return fail("game_thread missing from the stack of most spin_inner samples");
-#if defined(__arm__)
-    if (unwound * 2 < in_inner) return fail("most spin_inner samples were not unwound (EHABI)");
-#elif defined(__aarch64__)
     if (unwound * 2 < in_inner) return fail("most spin_inner samples were not unwound (frame pointers)");
-#endif
     if (in_jit * 20 < r) return fail("the JIT loop under 5% of the running samples");
     if (s_blocked * 20 < main_samples) return fail("no blocked samples (UnityMain sleeps ~30%)");
     if (swaps < 3 || mains < 3) return fail("frame times missing");

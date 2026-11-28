@@ -9,7 +9,7 @@
 // A sample stops the thread in a signal handler while a watchdog thread copies its stack, then
 // logs one line: "[hitch-sample] +<ms into the frame> <thread> pc <module+off> lr <module+off> |
 // <return addresses>". The return addresses are the stack words that point just past a call
-// instruction (ARM/Thumb BL/BLX, A64 BL/BLR) in a mapped module (so: real calls, a few stale
+// instruction (A64 BL/BLR) in a mapped module (so: real calls, a few stale
 // ones). host/sym.py names libunity.so offsets. When the frame ends: "[hitch-sample] frame of
 // <ms> ms, <n> samples". Frames in Mono's JIT code (anonymous executable memory) are named by
 // Mono itself, as "M:<Namespace.Class:Method>" (the watchdog thread attaches to Mono's root
@@ -149,7 +149,7 @@ static const map_ent *find_map(uintptr_t v)
 }
 
 
-// Mono, for JIT code: loaded lazily from the Android libmono.so (pointer arguments only: no softfp issue)
+// Mono, for JIT code: loaded lazily from the Android libmono.so
 static void *(*mono_root)(void);
 static void *(*mono_attach)(void *);
 static void (*mono_detach)(void *);
