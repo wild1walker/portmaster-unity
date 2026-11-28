@@ -59,7 +59,7 @@ if [ "$ARCH" = arm64 ]; then
     gcc -O2 -Wall -rdynamic -o $O/egltest egltest.c -lEGL -lGLESv2
     gcc -O2 -Wall -o $O/passbench passbench.c -lEGL -lGLESv2
     gcc -O2 -Wall -o $O/drawbench drawbench.c -lEGL -lGLESv2
-    gcc -O2 -g -Wall -o $O/glreplay glreplay.c glreplay_hash.c glrename.c glpass.c -ldl -lz -lpthread
+    gcc -O2 -g -Wall -o $O/glreplay glreplay.c glreplay_hash.c glrename.c glpass.c glarena.c -ldl -lz -lpthread
     gcc -O2 -g -Wall -static -o $O/glpixdiff glpixdiff.c
     gcc -O2 -Wall -o $O/sdltest sdltest.c -lSDL2
     gcc -O2 -Wall -o $O/audiocheck audiocheck.c -lSDL2
@@ -160,7 +160,7 @@ docker run --rm --pull=never -e STEAM -e NOSTEAM -v "$PWD/..":/w -w /w/host ua-h
   arm-linux-gnueabihf-gcc -O2 -Wall -rdynamic -o out/egltest egltest.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/passbench passbench.c -lEGL -lGLESv2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/drawbench drawbench.c -lEGL -lGLESv2
-  arm-linux-gnueabihf-gcc -O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -o out/glreplay glreplay.c glreplay_hash.c glrename.c glpass.c -ldl -lz -lpthread
+  arm-linux-gnueabihf-gcc -O2 -g -Wall -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard -o out/glreplay glreplay.c glreplay_hash.c glrename.c glpass.c glarena.c -ldl -lz -lpthread
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/sdltest sdltest.c -lSDL2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/audiocheck audiocheck.c -lSDL2
   arm-linux-gnueabihf-gcc -O2 -Wall -o out/shadercheck shadercheck.c -lEGL -lGLESv2

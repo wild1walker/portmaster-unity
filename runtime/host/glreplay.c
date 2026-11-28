@@ -19,9 +19,9 @@
 //   --evict <KB> between calls (untimed), run <KB> of code and read <KB> of data, each from the next slice of
 //                a 4 MB region of its own: the caches as a game's own code and data between its GL calls leave
 //                them (a replayer alone keeps the driver's code hot, which the game does not)
-//   UA_GL_RENAME, UA_GL_SAMECLEAR (environment, as for ua_host): the calls go through ua_host's own layers
-//                glrename.c and glpass.c (in ua_host's order: rename -> pass -> the driver), glrename_frame and
-//                glpass_frame at each swap: the same trace replayed with and without them shows what they change
+//   UA_GL_RENAME, UA_GL_SAMECLEAR, UA_GL_ARENA (+ its UA_GL_ARENA_* options) (environment, as for ua_host): the
+//                calls go through ua_host's own layers glrename.c, glpass.c and glarena.c (in ua_host's order:
+//                rename -> pass -> arena -> the driver), glrename_frame, glpass_frame and glarena_frame at each swap: the same trace replayed with and without them shows what they change
 //                on the screen (a trace is written above those layers, so it holds the game's own calls)
 //   --frames N   the trace has N frames: no counting pass first, so the trace can be read from a pipe
 //                (glreplay /dev/stdin --frames N ...: a trace kept on another machine, streamed over ssh)
@@ -60,6 +60,7 @@
 #include "glreplay_hash.h"
 #include "glrename.h"
 #include "glpass.h"
+#include "glarena.h"
 
 #define TR_TAG (1ull << 63)
 #define TR_FRAME 0xFFFFF0u
@@ -573,7 +574,7 @@ static void frame_end(void)
     if (g_hash && rph_on(g_hframe)) rph_read(g_hframe, g_hcall, "swap", 0, 1, g_hw, g_hh);   // (before the swap: after it the window is undefined)
     g_hframe++;
     uint64_t t = g_measuring ? ticks() : 0;
-    if (g_layers) { glpass_frame(); glrename_frame(); }   // (ua_host's swap hook calls them in this order)
+    if (g_layers) { glpass_frame(); glrename_frame(); glarena_frame(); }   // (ua_host's swap hook calls them in this order)
     e_SwapBuffers(g_dpy, g_surf);
     RX(glFlush)();
     if (g_measuring) { g_end_ticks += (double)(ticks() - t); g_end_n++; }
@@ -592,25 +593,28 @@ static void *sym(const char *n)
 }
 
 // ua_host's glrename.c and glpass.c layers (UA_GL_RENAME, UA_GL_SAMECLEAR): rename -> pass -> the driver
-static const so_shim *g_lay_rename, *g_lay_pass;
+static const so_shim *g_lay_rename, *g_lay_pass, *g_lay_arena;
 static void *lay_find(const so_shim *t, const char *n)
 {
     for (; t && t->name; t++) if (!strcmp(t->name, n)) return t->fn;
     return NULL;
 }
-static void *after_pass(const char *n) { return sym(n); }
-static void *after_rename(const char *n) { void *p = lay_find(g_lay_pass, n); return p ? p : sym(n); }
+static void *after_arena(const char *n) { return sym(n); }
+static void *after_pass(const char *n) { void *p = lay_find(g_lay_arena, n); return p ? p : sym(n); }
+static void *after_rename(const char *n) { void *p = lay_find(g_lay_pass, n); return p ? p : after_pass(n); }
 static unsigned layers_init(void)
 {
+    g_lay_arena = glarena_table(after_arena);
     g_lay_pass = glpass_table(after_pass);
     g_lay_rename = glrename_table(after_rename);
     unsigned n = 0;
     for (unsigned i = 0; i < OP_N; i++) {
         void *p = lay_find(g_lay_rename, glrec_name[i]);
         if (!p) p = lay_find(g_lay_pass, glrec_name[i]);
+        if (!p) p = lay_find(g_lay_arena, glrec_name[i]);
         if (p && rp_fn[i]) { rp_fn[i] = p; n++; }
     }
-    g_layers = g_lay_rename[0].name || g_lay_pass[0].name;
+    g_layers = g_lay_rename[0].name || g_lay_pass[0].name || g_lay_arena[0].name;
     return n;
 }
 
@@ -803,8 +807,9 @@ int main(int argc, char **argv)
     unsigned nfn = 0;
     for (unsigned i = 0; i < OP_N; i++) if ((rp_fn[i] = sym(glrec_name[i]))) nfn++;
     unsigned nlay = layers_init();
-    if (g_layers) fprintf(stderr, "glreplay: %u entry points through ua_host's layers (UA_GL_RENAME=%s, UA_GL_SAMECLEAR=%s)\n", nlay,
-                          getenv("UA_GL_RENAME") ? getenv("UA_GL_RENAME") : "0", getenv("UA_GL_SAMECLEAR") ? getenv("UA_GL_SAMECLEAR") : "0");
+    if (g_layers) fprintf(stderr, "glreplay: %u entry points through ua_host's layers (UA_GL_RENAME=%s, UA_GL_SAMECLEAR=%s, UA_GL_ARENA=%s)\n", nlay,
+                          getenv("UA_GL_RENAME") ? getenv("UA_GL_RENAME") : "0", getenv("UA_GL_SAMECLEAR") ? getenv("UA_GL_SAMECLEAR") : "0",
+                          getenv("UA_GL_ARENA") ? getenv("UA_GL_ARENA") : "0");
     char last_frames[64];                                // --hash-frames last:N: the trace's last N frames
     if (hash_frames && !strncmp(hash_frames, "last:", 5)) {
         long n_ = atol(hash_frames + 5);

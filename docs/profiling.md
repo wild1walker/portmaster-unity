@@ -2900,6 +2900,13 @@ those layers), so one trace replayed without and with them gives the same frames
 without and with the option, on the same driver, with no difference of timing between the two
 (`picdiff frames`: quality.md, "Picture changes no one sees"). Only the window's readbacks mean anything
 then: a renamed texture's storage can owe its picture at a pass's end.
+`UA_GL_ARENA=1` (with its `UA_GL_ARENA_*` options) in glreplay's environment puts glarena.c below them, as in
+ua_host (rename, pass, arena, the driver; `glarena_frame` at each swap): the same trace replayed with and without the
+arena on the handheld's own driver. `--no-finish` lets the GPU fall behind, so the arena's busy paths (invalidating
+maps of buffers the GPU may still read, waits) run too. Enter the Gungeon, muOS (2026-11-27): four traces with pixels
+(Bullet Hell's busiest room, a median Keep and Forge room, the Breach walked; 3,200 - 3,600 frames each), the last
+200 frames hashed at every pass end and swap: 2,000 readbacks a trace, 0 differ with `UA_GL_ARENA=1
+UA_GL_ARENA_WIDESCAN=1`, with and without `--no-finish` (Bullet Hell's no-finish replay: 9,959 busy maps, 1,289 waits).
 `--frames N` (the trace's frame count, from the recording's log) skips the counting pass, so a trace can be
 read from a pipe: `cat trace.gz | ssh <handheld> glreplay /dev/stdin --frames N ...` replays a trace kept on
 the Mac (a trace with pixels is 0.5 GB for a few minutes of Hollow Knight, more than a shared card has free),
