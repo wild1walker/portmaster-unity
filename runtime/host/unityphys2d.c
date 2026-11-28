@@ -5,6 +5,7 @@
 //                      cheaper ones
 //   UA_PHYS2D=verify   the same, and every call checked against Unity's own scan on the live state
 //   UA_PHYS2D=stats    (a measurement: Unity's code runs) calls a frame and how much each scan visits
+//   UA_PHYS2D_POOL=1|verify  the contact reports' manifold buffers reused (ProcessContacts; further down)
 //
 // Where the time goes (Cuphead's run-and-gun level, muOS, 2017.4.40f1 arm64-v8a): a collider without a Rigidbody2D
 // that a script moves is rebuilt whole at the next sync of transforms (PhysicsManager2D::SyncTransforms, which every
@@ -49,7 +50,7 @@ enum { ISA_A64 = 'x' };
 
 #if defined(__aarch64__)
 enum { R_FLAG, R_WAKE, R_OPIDX, R_ERASE, R_DELNODES, R_SYNC, R_ADDPAIR, R_DESTROYFIX, R_CREATEFIX, R_CMDESTROY, R_PROXIES,
-       R_FIXDESTROY, R_BLOCKFREE, R_RESETMASS, NROWS };
+       R_FIXDESTROY, R_BLOCKFREE, R_RESETMASS, R_MFRESERVE, R_COLLDTOR, R_FREEINT, NROWS };
 static const struct row g_rows[NROWS] = {
     { "2017.4.40f1 arm64-v8a", "PhysicsManager2D::FlagContactsForRecreate", 0x29a7ec, 0x88, ISA_A64, 0x2fad9854b95d4ea9ull },
     { "2017.4.40f1 arm64-v8a", "Collider2D::WakeAllBodyContacts", 0x2b446c, 0xac, ISA_A64, 0x529eaf67646acfdeull },
@@ -65,9 +66,13 @@ static const struct row g_rows[NROWS] = {
     { "2017.4.40f1 arm64-v8a", "b2Fixture::Destroy", 0x1d43e4, 0xf4, ISA_A64, 0x253aaac7a9b5c3b7ull },
     { "2017.4.40f1 arm64-v8a", "b2BlockAllocator::Free", 0x1d334c, 0x3c, ISA_A64, 0xddfc7db446353c20ull },
     { "2017.4.40f1 arm64-v8a", "b2Body::ResetMassData", 0x1d3b90, 0x28c, ISA_A64, 0x03a9cf4f3accfa51ull },
+    { "2017.4.40f1 arm64-v8a", "dynamic_array<Collision2D::ContactManifold2D>::reserve", 0x2a31ac, 0xb4, ISA_A64, 0xd7ca8277475bd024ull },
+    { "2017.4.40f1 arm64-v8a", "dynamic_array<Collision2D>::~dynamic_array", 0x29a674, 0x78, ISA_A64, 0x6a7031fc33c79ed0ull },
+    { "2017.4.40f1 arm64-v8a", "free_alloc_internal", 0x3ca64c, 0x2c, ISA_A64, 0xe11b4ce67268eaedull },
 };
 
 static int g_mode;                  // 1 on, 2 verify, 3 stats
+static int g_asked;                 // UA_PHYS2D or UA_PHYS2D_POOL set: the 600-frame report lines are printed
 static int g_on;                    // every hook in place: the hooks act (else each calls Unity's own)
 static pthread_t g_main;            // the thread the 2D physics runs on (UnityMain): checked, counted otherwise
 
@@ -514,22 +519,89 @@ static void destroyfix_hook(uintptr_t body, uintptr_t fix, int reset)
     if (reset & 1) f_resetmass(body);
 }
 
+
+// --- UA_PHYS2D_POOL: the contact reports' manifold buffers kept for reuse (PhysicsManager2D::ProcessContacts)
+//
+// What Unity does (2017.4.40f1 arm64-v8a, read): every 2D physics step ProcessContacts builds a local
+// dynamic_array<Collision2D> of the contacts to report; each element (88 bytes) is made by emplace_back, which gives
+// its dynamic_array<ContactManifold2D> (buffer +0, label +8, size +16, capacity +24 with bit 63 = not owned) the
+// label 37 and reserve(4): realloc_internal(NULL, 4 * 104, 8, label) from Unity's default allocator (with its page
+// table bookkeeping). After the callbacks ~dynamic_array<Collision2D> (called only there) frees every element's
+// buffer (free_alloc_internal(buffer, label), when owned) and then the array's own. So each reported contact costs an
+// allocation and a free of the same 416 bytes every step.
+// Ours: a stack of such blocks (each one a block Unity allocated so, never given back while pooled): reserve(4) on an
+// empty, owned array of label 37 takes one (capacity 4 stored as Unity stores it, the buffer set), and the destructor
+// (replaced whole: the same loop, the same stores) puts an owned, capacity-4, label-37 buffer back instead of freeing
+// it. Everything else is Unity's (reserve of other sizes and arrays, every other free). Only the addresses of these
+// buffers change: they are data buffers, filled (operator=) before they are read, never a key. =verify counts the
+// hand-outs whose array was not empty and blocks given back twice (both must be 0).
+static int g_pool_mode;              // 1 on, 2 verify
+static void (*o_mfreserve)(uintptr_t, uint64_t);
+static void (*f_freeint)(uintptr_t, uint32_t);
+enum { POOLMAX = 1024 };
+static uintptr_t g_pool[POOLMAX];
+static uint32_t g_pooln;
+static uint64_t c_pool_out, c_pool_back, c_pool_bad, c_pool_miss;
+
+static void mfreserve_hook(uintptr_t arr, uint64_t n)
+{
+    if (g_pool_mode && n == 4 && !U64(arr, 0) && !U64(arr, 24) && U32(arr, 8) == 37 && pthread_equal(pthread_self(), g_main)) {
+        if (g_pooln) {
+            uintptr_t b = g_pool[--g_pooln];
+            if (g_pool_mode == 2 && U64(arr, 16)) c_pool_bad++;
+            U64(arr, 24) = 4;
+            U64(arr, 0) = b;
+            c_pool_out++;
+            return;
+        }
+        c_pool_miss++;
+    }
+    o_mfreserve(arr, n);
+}
+
+static void colldtor_hook(uintptr_t arr)
+{
+    uintptr_t buf = (uintptr_t)U64(arr, 0);
+    if (!buf || (U64(arr, 24) >> 63)) return;
+    uint64_t n = U64(arr, 16);
+    int main = pthread_equal(pthread_self(), g_main);
+    for (uintptr_t e = buf; n; e += 0x58, n--) {
+        uintptr_t b = (uintptr_t)U64(e, 0);
+        if (!b || (U64(e, 24) >> 63)) continue;
+        if (g_pool_mode && main && U64(e, 24) == 4 && U32(e, 8) == 37 && g_pooln < POOLMAX) {
+            if (g_pool_mode == 2) for (uint32_t i = 0; i < g_pooln; i++) if (g_pool[i] == b) c_pool_bad++;
+            g_pool[g_pooln++] = b;
+            c_pool_back++;
+        } else f_freeint(b, U32(e, 8));
+        U64(e, 0) = 0;
+    }
+    f_freeint((uintptr_t)U64(arr, 0), U32(arr, 8));
+    U64(arr, 0) = 0;
+}
+
 static uintptr_t g_base;
 static int g_ok[NROWS];
 
 void unityphys2d_on_load(uintptr_t base, size_t size)
 {
-    const char *v = getenv("UA_PHYS2D");
-    if (!v || !*v || !strcmp(v, "0")) return;
-    g_mode = !strcmp(v, "verify") ? 2 : !strcmp(v, "stats") ? 3 : 1;
+    // unset or empty: off; quietly nothing on a libunity.so whose rows do not match
+    const char *v = getenv("UA_PHYS2D"), *pv = getenv("UA_PHYS2D_POOL");
+    int asked = (v && *v) || (pv && *pv);
+    g_asked = asked;
+    if (!v || !*v) v = "0";
+    if (!pv || !*pv) pv = "0";
+    if (strcmp(v, "0")) g_mode = !strcmp(v, "verify") ? 2 : !strcmp(v, "stats") ? 3 : 1;
+    if (strcmp(pv, "0")) g_pool_mode = !strcmp(pv, "verify") ? 2 : 1;
+    if (!g_mode && !g_pool_mode) return;
     int ok = 1;
     for (int i = 0; i < NROWS; i++) {
         g_ok[i] = unityhooks_matches(&g_rows[i], base, size);
         ok = ok && g_ok[i];
     }
     if (!ok) {
-        fprintf(stderr, "[unityphys2d] UA_PHYS2D: this libunity.so is not one whose 2D physics was read; left as Unity's\n");
-        g_mode = 0;
+        if (asked)
+            fprintf(stderr, "[unityphys2d] UA_PHYS2D / UA_PHYS2D_POOL: this libunity.so is not one whose 2D physics was read; left as Unity's\n");
+        g_mode = 0; g_pool_mode = 0;
         return;
     }
     g_base = base;
@@ -538,8 +610,18 @@ void unityphys2d_on_load(uintptr_t base, size_t size)
 void unityphys2d_on_load_patch(uintptr_t base, size_t size)
 {
     (void)size;
-    if (!g_mode) return;
+    if (!g_mode && !g_pool_mode) return;
     g_main = pthread_self();                    // replaced at UnityMain's first frame (unityphys2d_frame)
+    if (g_pool_mode) {
+        f_freeint = (void (*)(uintptr_t, uint32_t))(base + g_rows[R_FREEINT].off);
+        if (unityhooks_hook(base + g_rows[R_MFRESERVE].off, ISA_A64, (void *)mfreserve_hook, (void **)&o_mfreserve) != 0) {
+            fprintf(stderr, "[unityphys2d] UA_PHYS2D_POOL: hook failed; off\n"); g_pool_mode = 0;
+        } else if (unityhooks_jump(base + g_rows[R_COLLDTOR].off, ISA_A64, (void *)colldtor_hook) != 0) {
+            fprintf(stderr, "[unityphys2d] UA_PHYS2D_POOL: destructor hook failed; the pool hands nothing out\n"); g_pool_mode = 0;
+        } else fprintf(stderr, "[unityphys2d] UA_PHYS2D_POOL=%s: the contact reports' manifold buffers reused (libunity %s)\n",
+                       g_pool_mode == 2 ? "verify" : "1", g_rows[0].unity);
+    }
+    if (!g_mode) return;
     struct { int r; void *to; void **orig; } h[] = {
         { R_FLAG, (void *)flag_hook, (void **)&o_flag }, { R_WAKE, (void *)wake_hook, (void **)&o_wake },
         { R_OPIDX, (void *)opidx_hook, (void **)&o_opidx }, { R_ERASE, (void *)erase_hook, (void **)&o_erase },
@@ -566,11 +648,18 @@ void unityphys2d_on_load_patch(uintptr_t base, size_t size)
 void unityphys2d_frame(void)
 {
     static unsigned long frames, f0;
-    if (!g_mode) return;
+    if (!g_mode && !g_pool_mode) return;
     if (!frames++) { g_main = pthread_self(); f0 = 1; return; }
     if (frames % 600) return;
     double nf = (double)(frames - f0);
     f0 = frames;
+    if (!g_asked) return;
+    if (g_pool_mode) {
+        fprintf(stderr, "[unityphys2d] pool a frame (%.0f frames): %.1f buffers reused, %.1f kept, %.1f from Unity (pool empty), %u pooled, "
+                "%llu bad\n", nf, c_pool_out / nf, c_pool_back / nf, c_pool_miss / nf, g_pooln, (unsigned long long)c_pool_bad);
+        c_pool_out = c_pool_back = c_pool_miss = 0;
+    }
+    if (!g_mode) return;
     fprintf(stderr, "[unityphys2d] %s a frame (%.0f frames): syncs %.1f; flag %.1f calls, %.0f buckets Unity's scans visit, %.1f hits, "
             "%.1f listed (ours), %llu rebuilds, %llu missed; wake %.1f calls, %.0f contacts walked, %.1f skipped, %llu would change; "
             "pairs +%.1f -%.1f; DestroyFixture %.1f calls, %.0f list steps, %.0f contacts walked, %.1f unlinked by the map, %.1f without "

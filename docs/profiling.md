@@ -2009,8 +2009,37 @@ Speed (RG34XX-SP muOS, the census2 route: `CUPHEAD_TEST_LEVEL=Platforming_Level_
 UnityMain's FixedUpdate is 1.0 - 1.2 ms a frame shorter in every pair, the sync about 40 % shorter. The run's frame
 rate follows where the scripted run takes the player (3 - 7 fps between runs of one setting, above), so one pair can
 show nothing (the second set); over four pairs +1.9 fps. `DestroyFixture`'s part is the smallest (its self time 5 % of
-the sync -> under 2 %, ~0.1 ms). Not yet measured: the G350 (held by another test the whole session) and Blasphemous
-(the same player and so the same rows; its rooms use 2D physics too).
+the sync -> under 2 %, ~0.1 ms).
+
+**Blasphemous** (the same 2017.4.40f1 player, so the same rows; muOS, its release test install through its own
+launcher, New Game, console `invincible` + `loadnoui D06Z01S01`, the busiest room, `UA_PROF=200` 20 s): its colliders
+move with Rigidbody2Ds, so it rebuilds almost none (`stats`: 112 syncs a frame, 0 rebuilds in the room, 0.3 a frame
+in a few windows of the first level); `verify` 0 missed / changed / differ over the whole run. Its physics step is
+0.3 - 0.4 ms. A B A B (off, on): 59.0 / 59.9 / 58.8 / 59.9 fps (the display holds it at 60), UnityMain 13.7 / 13.4 /
+13.6 / 13.1 ms of CPU a frame: no loss (the hooks on the sync, AddPair, CreateFixture and the contact destroy cost
+nothing measurable).
+
+**G350:** not run. Cuphead 64-bit is not installed there and /roms has 1.5 GB free (its OBB alone is 2 GB);
+Blasphemous's install is the Blasphemous chat's test install, its card is exFAT (no symbolic links, so no test folder
+of our own beside it without a full copy), and its ua_host predates `UA_PHYS2D`. For Blasphemous the switch does no
+work (above).
+
+**The contact reports' allocations (`UA_PHYS2D_POOL`).** The step's other large part is
+`PhysicsManager2D::ProcessContacts` (1.6 ms a frame): 26 % the game's own trigger scripts, ~0.3 ms Unity's
+`SendMessageAny` dispatch, and ~38 % allocation: every reported contact gets a 416-byte manifold buffer
+(`dynamic_array<ContactManifold2D>::reserve(4)`, label 37) that `~dynamic_array<Collision2D>` frees again after the
+callbacks, each through Unity's default allocator and its page table. `UA_PHYS2D_POOL` keeps those buffers for reuse
+(runtime.md): 120 - 220 a frame reused, 99 % from the pool, ~155 blocks kept; `verify` 0 bad (no hand-out to a
+non-empty array, no block given back twice). Three A/B pairs, both sides `UA_PHYS2D=1`:
+
+| | `UA_PHYS2D=1` | + `UA_PHYS2D_POOL=1` |
+|---|---|---|
+| ProcessContacts, ms a frame | 1.68, 1.60, 1.64 | 1.04, 1.05, 1.02 |
+| Physics2D step area, ms a frame | 3.71, 3.76, 3.35 | 2.71, 2.88, 2.93 |
+| fps | 40.8, 40.6, 43.5 | 42.3, 44.7, 38.1 |
+
+The 0.6 ms is steady; the fps is within the route's spread. `SendMessageAny`'s dispatch (the component walk and the
+script method lookup per message) is Unity's own and stays.
 
 What the sync still costs is Unity's own rebuild (shapes, broad-phase proxies out and in, the fixture's create and
 destroy) and the first wake walk of each sync, whose contacts are not in the cache. Making a moved static collider

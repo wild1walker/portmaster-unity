@@ -257,6 +257,45 @@ static void destroyfix_test(void)
     free(WA); free(WB);
 }
 
+// --- the manifold-buffer pool: Unity's emplace_back reserve(4) and ~dynamic_array<Collision2D> modelled; every block
+// Unity hands out is freed exactly once or sits in the pool, every element buffer is cleared, outer arrays freed
+static int live_blocks;
+static uintptr_t m_realloc_block(void) { live_blocks++; return (uintptr_t)malloc(416); }
+static void m_mfreserve(uintptr_t arr, uint64_t n) { U64(arr, 24) = n; U64(arr, 0) = n == 4 ? m_realloc_block() : (live_blocks++, (uintptr_t)malloc(104 * n)); }
+static void m_freeint(uintptr_t b, uint32_t label) { (void)label; if (b) { free((void *)b); live_blocks--; } }
+static void pool_test(void)
+{
+    o_mfreserve = m_mfreserve; f_freeint = m_freeint;
+    unsigned long steps = 0;
+    for (int mode = 1; mode <= 2; mode++) {
+        g_pool_mode = mode; c_pool_bad = 0;
+        for (int st = 0; st < 3000; st++, steps++) {
+            int n = rand() % 40;
+            uint8_t *outer = malloc(88 * (n ? n : 1)); live_blocks++;
+            uint8_t hdr[32] = { 0 };
+            U64(hdr, 0) = (uintptr_t)outer; U32(hdr, 8) = 37; U64(hdr, 16) = (uint64_t)n; U64(hdr, 24) = (uint64_t)(n ? n : 1);
+            for (int i = 0; i < n; i++) {
+                uintptr_t e = (uintptr_t)outer + 88ull * i;
+                memset((void *)e, 0, 88); U32(e, 8) = rand() % 8 ? 37 : 12;
+                mfreserve_hook(e, 4);
+                if (rand() % 10 == 0) { m_freeint(U64(e, 0), 37); U64(e, 0) = 0; mfreserve_hook(e, 4); }   // (an array freed elsewhere)
+                if (rand() % 12 == 0) { uint64_t c = 4 + rand() % 4; uintptr_t nb = (live_blocks++, (uintptr_t)malloc(104 * c)); m_freeint(U64(e, 0), 37); U64(e, 0) = nb; U64(e, 24) = c; }
+                if (rand() % 25 == 0) U64(e, 24) |= 1ull << 63;  // not owned: left alone
+                U64(e, 16) = rand() % 5;
+            }
+            for (int i = 0; i < n; i++) {               // the not-owned ones: their buffers are someone else's
+                uintptr_t e = (uintptr_t)outer + 88ull * i;
+                if (U64(e, 24) >> 63) { m_freeint(U64(e, 0), 37); U64(e, 0) = 0; }
+            }
+            colldtor_hook((uintptr_t)hdr);
+            CHECK(U64(hdr, 0) == 0, "pool mode %d step %d: the array's buffer not cleared", mode, st);
+        }
+        CHECK(c_pool_bad == 0, "pool mode %d: %llu bad", mode, (unsigned long long)c_pool_bad);
+    }
+    CHECK(live_blocks == (int)g_pooln, "pool: %d blocks alive, %u pooled (a leak or a double free)", live_blocks, g_pooln);
+    printf("pool: %lu steps, %llu reused, %llu kept, %u pooled\n", steps, (unsigned long long)c_pool_out, (unsigned long long)c_pool_back, g_pooln);
+}
+
 int main(void)
 {
     srand(7);
@@ -352,6 +391,7 @@ int main(void)
         CHECK(c_wake_bad == 0, "wake mode %d: verify counted %llu changes in skipped walks", mode, (unsigned long long)c_wake_bad);
     }
     destroyfix_test();
+    pool_test();
     printf("%s unityphys2d: %d failure(s) (%lu flags, %lu grows, %llu index rebuilds, %lu walks, %llu skipped)\n",
            fails ? "FAILED" : "PASSED", fails, flags, grows, (unsigned long long)c_rebuild, walks, (unsigned long long)c_wake_skipped);
     return fails != 0;
