@@ -1237,7 +1237,9 @@ fn fast_il2cpp(g: &mut Game) -> R<()> {
     let extra = il2cpp_args(g, rep.as_ref())?;
     g.step("il2cpp --dry-run", |g| {
         let dlog = g.work.join("dry.log");
-        let mut args = vec!["il2cpp".to_string(), src.clone(), out.clone(), "--dry-run".into(), "--on-device".into(), "--home".into(), home.clone()];
+        // (--jobs 4: a handheld's cores. Without it the commands name this machine's CPU count, as
+        // Docker's VM gives it, and the baseline holds only on a machine with as many)
+        let mut args = vec!["il2cpp".to_string(), src.clone(), out.clone(), "--dry-run".into(), "--on-device".into(), "--home".into(), home.clone(), "--jobs".into(), "4".into()];
         args.extend(extra);
         let rc = g.pmu(&args, &dlog, Some(3600), &[]);
         copyfile(&dlog, &g.out.join("il2cpp-dry-run.log"));
