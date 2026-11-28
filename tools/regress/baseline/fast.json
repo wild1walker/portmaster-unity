@@ -153,7 +153,7 @@
     "resources.assets": "bab14d68e37ecddf"
    },
    "shaders": 45,
-   "total": "7da5fd111a89d9abad02d1424a348771346f9edf979390feca74134d438ee5b1"
+   "total": "6a3689054575fe3236f5f06f272fd1d9ca037057d6dfae083b954a2f492241a6"
   },
   "steps": {
    "files": 1,
@@ -249,7 +249,7 @@
     "sharedassets0.assets": "a3ebe3fc35467b0d"
    },
    "shaders": 36,
-   "total": "f392f720a901ab97f45b365113ef84d63d01b5b645b46ba8f8307354984fd30a"
+   "total": "09ad5e8f3f6612626b83acb28571db82ee833e1084bc7a6d4a30cd2b2b648f07"
   },
   "steps": {
    "files": 1,
@@ -1363,7 +1363,7 @@
     "sharedassets9.assets": "8f66f5dc3b65dad7"
    },
    "shaders": 147,
-   "total": "1fea6f428fe54f5687595491d164634cbcaaaeb93a51d81fe4eabc6c0d659d26"
+   "total": "2a40e40eea81207fec29a935ec8801201fe435644491b6a2d2fcdaad7b407a4c"
   },
   "steps": {
    "files": 1,
@@ -1501,10 +1501,10 @@
     "Resources/unity_builtin_extra": "7a761eb9e768f450",
     "globalgamemanagers.assets": "a46b78166003ef27",
     "resources.assets": "fb8c88e9430cad64",
-    "sharedassets1.assets": "4c293aab774ea626"
+    "sharedassets1.assets": "95ad70ede891d8e3"
    },
    "shaders": 114,
-   "total": "899bebf893de2ef7428b09590ad8fd6787e861a47c0cc56f08ef471bedf1a267"
+   "total": "a82d9ca75693b16f1012aceeca6c5958638985c706a2bc52c5012c8e80672a53"
   },
   "steps": {
    "files": 1,
@@ -1658,7 +1658,7 @@
     "sharedassets6.assets": "0c1692134930d97a"
    },
    "shaders": 168,
-   "total": "754cdbda3fc12f7a83c131d37b981d34b3b79f8576a1ea4b26ca88269bce3d60"
+   "total": "cd00ab4cf1fbad4f8573bf264659a000ae2ca6ccdf6fae95365f3cceca8d54f5"
   },
   "steps": {
    "files": 1,
@@ -1731,7 +1731,7 @@
     "sharedassets6.assets": "52c673361d6c7879"
    },
    "shaders": 84,
-   "total": "6c681823a22987f59dee9ee48f32892c8ee70e798ecf994ab5bb9419b3baebdd"
+   "total": "e980bb9f6c3bfe1c0259a1cd610b22da8f921177de7511f591e769841b7542ca"
   },
   "steps": {
    "files": 1,
@@ -1781,8 +1781,8 @@
   },
   "il2cpp_dry_run": {
    "assemblies": "assemblies: 28 of the game, 64 UnityEngine (IL2CPP player), 21 class libraries (MonoBleedingEdge/lib/mono/unityaot-linux)",
-   "commands": "c504ca81581375dc",
-   "lines": 24,
+   "commands": "a8fbf77103e23eeb",
+   "lines": 41,
    "staged": {
     "files": 113,
     "total": "eebcc9caccc53301"
@@ -2040,7 +2040,7 @@
     "sharedassets0.assets": "3056a15a3c4ea0b3"
    },
    "shaders": 36,
-   "total": "03cbf2c545e51f5c0f72fb048b0b9b7c0bfc7330ea2938792ba26d5df84e47f5"
+   "total": "808d9a0a1498768221d022f13834c5a3a22baa96d3856055e03497ae403ae363"
   },
   "steps": {
    "files": 1,
@@ -2083,7 +2083,7 @@
   },
   "il2cpp_dry_run": {
    "assemblies": "assemblies: 8 of the game, 59 UnityEngine (IL2CPP player), 23 class libraries (MonoBleedingEdge/lib/mono/unityaot)",
-   "commands": "acc5d744cafd0f4c",
+   "commands": "6c5ed42716795b2c",
    "lines": 4,
    "staged": {
     "files": 90,
@@ -2562,7 +2562,7 @@
     "sharedassets0.assets": "5aecc0dbb19f5490"
    },
    "shaders": 53,
-   "total": "acc75f0f333d010c72d1011f54f5e33becd00d01b6256d3a33060e7647ca1a83"
+   "total": "07c1b87d1a213bc3fa1c433121d477d5819bb8988cde521ecdf923d1df80cb18"
   },
   "steps": {
    "files": 1,
@@ -2633,7 +2633,8 @@
    "routes_ok": [
     "android",
     "box64",
-    "il2cpp-arm64"
+    "il2cpp-arm64",
+    "mono-arm64"
    ],
    "scripting_runtime": ".NET 3.5 (libmono)",
    "shader_source": "glcore",
@@ -2685,7 +2686,7 @@
     "sharedassets6.assets": "65cf4d7bdf2e2d85"
    },
    "shaders": 77,
-   "total": "efe785d3e5c7f8af2313906833971c9c57e5793f545789b2648c20c8613f43fd"
+   "total": "d874ee7456afaba1432d852db351e82db505c9d59e8c84d8e88e6c099547da7d"
   },
   "steps": {
    "files": 1,
@@ -2708,7 +2709,8 @@
    "routes_ok": [
     "android",
     "box64",
-    "il2cpp-arm64"
+    "il2cpp-arm64",
+    "mono-arm64"
    ],
    "scripting_runtime": ".NET 3.5 (libmono)",
    "shader_source": "glcore",
@@ -2735,8 +2737,8 @@
   },
   "il2cpp_dry_run": {
    "assemblies": "assemblies: 9 of the game, 45 UnityEngine (IL2CPP player), 5 class libraries (Mono/lib/mono/unity)",
-   "commands": "b5fd298d27c18ccc",
-   "lines": 24,
+   "commands": "9d2df4aca614a292",
+   "lines": 41,
    "staged": {
     "files": 59,
     "total": "87d861917ac3b846"
