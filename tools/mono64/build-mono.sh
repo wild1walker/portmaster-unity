@@ -121,7 +121,9 @@ fi
 # applies the set to its tree:
 #   thread-exit: a thread Mono detached is not unregistered from the collector a second time when it
 #     exits (with thread-local free lists, the second time faults); the lines whose collector has them:
-#     6000.0 always, 2017.4 with the managed allocator
+#     every line with a patch file (2021.3, 6000.0), 2017.4 only with the managed allocator (its bdwgc 7.6
+#     has no thread-local lists on aarch64 otherwise). 2021.3: Bomb Rush Cyberfunk crashed in
+#     GC_destroy_thread_local when a thread-pool worker ended (G350, 2026-11-28)
 #   managed-alloc (MONO64_MANAGED_ALLOC=1|0; default 1 for 6000.0, 0 for the others): the JIT's
 #     allocations of small objects, arrays and strings off the thread's Boehm free list
 #     (docs/mono-arm64.md, "A managed allocator for Boehm")
@@ -140,7 +142,7 @@ if [ "$MA" = 1 ]; then
   [ -f "$HERE/patches/managed-alloc-$LINE.patch" ] || { echo "MONO64_MANAGED_ALLOC: no patch for the $LINE line"; exit 1; }
   cp "$HERE/patches/managed-alloc-$LINE.patch" "$D/.ua-patches/"
 fi
-if [ -f "$HERE/patches/thread-exit-$LINE.patch" ] && { [ "$LINE" = 6000.0 ] || [ "$MA" = 1 ]; }; then
+if [ -f "$HERE/patches/thread-exit-$LINE.patch" ] && { [ "$LINE" != 2017.4 ] || [ "$MA" = 1 ]; }; then
   cp "$HERE/patches/thread-exit-$LINE.patch" "$D/.ua-patches/"
 fi
 [ -f "$HERE/patches/invoke-info-$LINE.patch" ] && cp "$HERE/patches/invoke-info-$LINE.patch" "$D/.ua-patches/"

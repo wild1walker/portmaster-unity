@@ -1161,6 +1161,10 @@ does that second walk: the 6000.0 line's (and the 2017.4 line's when built with 
 ends a `Thread` would. `patches/thread-exit-<line>.patch`: the exit handler unregisters only a thread
 still registered and not finished (applied to every 6000.0 build; a 3-thread start-and-end test passes
 in the container, before it crashed at the first end).
+The 2021.3 line has the same thread-local lists: Bomb Rush Cyberfunk (2021.3.20f1) crashed there when a
+thread-pool worker ended, in its first level's load on the G350 (2026-11-28); `thread-exit-2021.3.patch` (the
+same hunk) fixed it. build-mono.sh now applies the patch to every line that has one, 2017.4 only with the managed
+allocator.
 
 **The 2017.4 line (Mono 5.0.1, Cuphead)**: its collector (bdwgc 7.6) has no thread-local free lists on
 aarch64 Linux at all (bdwgc's configure defines `THREAD_LOCAL_ALLOC` for the x86 Linux hosts only), so
