@@ -25,7 +25,7 @@ command 2: port new mygame --config cfg.toml --out port --player <BASE>/in/playe
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 1894 e8500eaeb25c6a31
-file port-rel/mygame.zip 644 38523 9f9700961856eab5 zip 77 21ed2ebcbd05f632
+file port-rel/mygame.zip 644 38581 3c1fdbc55df4196b zip 77 11bfbee2959c6b2d
 file port-rel/submission/mygame/My Game.sh 644 7790 fe2130f34283ce21
 file port-rel/submission/mygame/README.md 644 1811 43cb29e292920f55
 file port-rel/submission/mygame/gameinfo.xml 644 394 da3fe877d58c9995
@@ -38,7 +38,7 @@ file port-rel/submission/mygame/mygame/licenses/LICENSE.libvpx.txt 644 28 029e25
 file port-rel/submission/mygame/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e036
 file port-rel/submission/mygame/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/submission/mygame/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/submission/mygame/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/submission/mygame/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/submission/mygame/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
@@ -72,7 +72,7 @@ file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 28 029e2579fd1ddd65
 file port-rel/zip/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e036
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
@@ -148,7 +148,7 @@ command 2: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - port.thanks is empty: the README starts with "Thanks to [Studio & Co](https://example.com/dev) for creating My Game."; thank the game's makers in your own sentence (a link, one thing that makes the game worth playing)
   out:   - [controls] is empty: the README and the testing thread list only the exit hotkey; list the game's controls as the handheld labels its buttons
 file cfg.toml 644 1863 26508d151c45ad36
-file port-rel/mygame.zip 644 40605 d0a2ec304418edda zip 83 a1cc2f519b08cc31
+file port-rel/mygame.zip 644 40663 7fdf3267341e5705 zip 83 eed9d6db70cd08be
 file port-rel/submission/mygame/My Game.sh 644 7790 fe2130f34283ce21
 file port-rel/submission/mygame/README.md 644 1896 2a38afd348376962
 file port-rel/submission/mygame/cover.png 644 3595 9e22c636d1f68dab
@@ -163,7 +163,7 @@ file port-rel/submission/mygame/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 
 file port-rel/submission/mygame/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/submission/mygame/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
 file port-rel/submission/mygame/mygame/licenses/LICENSE.port.txt 644 9 bfae429af78bd276
-file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/submission/mygame/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/submission/mygame/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/submission/mygame/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
@@ -200,7 +200,7 @@ file port-rel/zip/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e0
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
 file port-rel/zip/mygame/licenses/LICENSE.port.txt 644 9 bfae429af78bd276
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
@@ -295,7 +295,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
 file cfg.toml 644 531 0f7fc14ae8a8bfd8
 file port-rel/build/a32 644 3064 869b4522d89f2a0c
 file port-rel/build/x 644 1 af63f54c86021707
-file port-rel/mygame.zip 644 35312 1a4a6a404651ab2b zip 78 fac9d124a0338825
+file port-rel/mygame.zip 644 35370 9e29a57e0f688576 zip 78 7948ad0793f7571c
 file port-rel/testing_thread.txt 644 868 bc8295a92e9c156f
 file port-rel/zip/My Game.sh 644 6808 05db5aeecc7c6035
 file port-rel/zip/mygame/README.md 644 2296 46b985e86ae847cd
@@ -309,7 +309,7 @@ file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/zip/mygame/licenses/LICENSE.mono-2019.4.txt 644 19 caafae6ba20f6299
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/licenses/LICENSE.x.txt 644 1 af63f54c86021707
@@ -385,7 +385,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.json 644 317 632cfd1940c86ef1
-file port-rel/mygame.zip 644 27639 6c5f0806f3b8aedd zip 50 533af640531e03a4
+file port-rel/mygame.zip 644 27697 af57e7aecf915a61 zip 50 d5bea724fd47f92d
 file port-rel/testing_thread.txt 644 937 e2f5ba1e6625a1c3
 file port-rel/zip/Other Title.sh 644 6758 06efed87d25d522e
 file port-rel/zip/mygame/README.md 644 2283 55a31dee790d2982
@@ -398,7 +398,7 @@ file port-rel/zip/mygame/licenses/LICENSE.mono-cecil.txt 644 1131 4ef34e5cbd59e0
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
 file port-rel/zip/mygame/licenses/LICENSE.pmhlslcc-HLSLcc.txt 644 11 933a0225bdb82910
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
@@ -464,7 +464,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 114 24a47c9ee982e2ef
-file port-rel/mygame.zip 644 35180 16c155541f58161c zip 59 58617bf485d4400f
+file port-rel/mygame.zip 644 35238 8c103654480cf771 zip 59 0f648ad07f44e95a
 file port-rel/testing_thread.txt 644 917 480cf568ecfcb867
 file port-rel/zip/Win.sh 644 7706 46f722055d0f1d93
 file port-rel/zip/mygame/README.md 644 2414 ccc83f7f0011569d
@@ -476,7 +476,7 @@ file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 28 029e2579fd1ddd65
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
 file port-rel/zip/mygame/licenses/LICENSE.pmhlslcc-HLSLcc.txt 644 11 933a0225bdb82910
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
@@ -642,7 +642,7 @@ command 5: port package port3 --out port3-rel --runtime <BASE>/in/rt --donors <B
   out:   - no screenshot (<BASE>/work/port3/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 227 cd6fc800141165bb
-file port-rel/mygame.zip 644 23604 7da08c29635eed64 zip 40 e865b48e0e95eb85
+file port-rel/mygame.zip 644 23662 1b1682d7e3547036 zip 40 7448608b10f246f0
 file port-rel/submission/mygame/My Game.sh 644 7600 51fcf7876cf20fbc
 file port-rel/submission/mygame/README.md 644 2072 3bdc9907f934ca43
 file port-rel/submission/mygame/gameinfo.xml 644 267 32eef5e1ac1059f2
@@ -652,7 +652,7 @@ file port-rel/submission/mygame/mygame/licenses/LICENSE.libhybris.txt 644 21 154
 file port-rel/submission/mygame/mygame/licenses/LICENSE.libvpx.txt 644 77 0983770c5a50ec68
 file port-rel/submission/mygame/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/submission/mygame/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/submission/mygame/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/submission/mygame/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/submission/mygame/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/submission/mygame/mygame/port.env 644 185 b5d3a3c6cb138934
@@ -673,7 +673,7 @@ file port-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
 file port-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 77 0983770c5a50ec68
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
@@ -701,7 +701,7 @@ file port/mygame/setup/setup.env 644 531 f0aec6093a398efd
 file port/package.sh 755 1266 0c4794ba0bbacc96
 file port/port.build.json 644 4177 0c73e523f759a3ee
 file port/testing_thread.txt 644 955 78e506d16c6356d0
-file port2-rel/mygame.zip 644 23638 48d4e53d040a9c9b zip 40 4e705c1acbaaab53
+file port2-rel/mygame.zip 644 23696 baaebb013319ab76 zip 40 4aeb483976f5d3d2
 file port2-rel/testing_thread.txt 644 1094 6b2aedd3e01bfb45
 file port2-rel/zip/V7.sh 644 7550 57316651b58e8fdc
 file port2-rel/zip/mygame/README.md 644 2910 9bafdc77f556a10e
@@ -711,7 +711,7 @@ file port2-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
 file port2-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 77 0983770c5a50ec68
 file port2-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port2-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port2-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port2-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port2-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port2-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port2-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
@@ -739,7 +739,7 @@ file port2/mygame/setup/setup.env 644 481 f8002a4ff29fb3a0
 file port2/package.sh 755 1266 0c4794ba0bbacc96
 file port2/port.build.json 644 4082 1e47612917d91d38
 file port2/testing_thread.txt 644 1094 6b2aedd3e01bfb45
-file port3-rel/mygame.zip 644 23390 1d10dadac46e0e30 zip 38 cafcdbdc8ce0bf9b
+file port3-rel/mygame.zip 644 23448 a3949322565f829b zip 38 f597dd1165df53ee
 file port3-rel/testing_thread.txt 644 953 cb35801d64402d5e
 file port3-rel/zip/V7only.sh 644 7590 567d712f871de8e4
 file port3-rel/zip/mygame/README.md 644 2926 eacd2fe1dba897e6
@@ -749,7 +749,7 @@ file port3-rel/zip/mygame/licenses/LICENSE.libhybris.txt 644 21 1546861eae1e06db
 file port3-rel/zip/mygame/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port3-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port3-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port3-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port3-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port3-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port3-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port3-rel/zip/mygame/port.env 644 185 b5d3a3c6cb138934
@@ -809,7 +809,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 102 7791b7c54a934a80
-file port-rel/mygame.zip 644 22395 489ee90a2b336a43 zip 46 07c4c6f5009b8908
+file port-rel/mygame.zip 644 22453 f3dd83e04829e7e1 zip 46 381559a66e38f577
 file port-rel/testing_thread.txt 644 865 a7452ed185425eb1
 file port-rel/zip/Box.sh 644 7349 bd510f6b18a66ea3
 file port-rel/zip/mygame/README.md 644 1950 f70a32eb56d38b3d
@@ -823,7 +823,7 @@ file port-rel/zip/mygame/gl4es/libGL.so.1 755 3064 d920b61413994e50
 file port-rel/zip/mygame/glxes/libGL.so.1 755 3064 d920b61413994e50
 file port-rel/zip/mygame/licenses/LICENSE.box64.txt 644 10 42c5417fa2fa9148
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
 file port-rel/zip/mygame/port.env 644 587 7df0b57cc594a010
@@ -887,7 +887,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - game.url and port.store are empty: no link to the game's page (the testing thread's URL)
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
-file port-rel/mono.zip 644 40713 975541e4f4cde9e2 zip 92 ec130830cd2638f2
+file port-rel/mono.zip 644 40771 1c1cbfcdadef0869 zip 92 26452198c26f3505
 file port-rel/testing_thread.txt 644 871 a5247d942334d02a
 file port-rel/zip/Mono.sh 644 6795 d84b57ed4b7156f4
 file port-rel/zip/mono/README.md 644 2300 b15cdd5c49afe68a
@@ -903,7 +903,7 @@ file port-rel/zip/mono/licenses/LICENSE.libvpx.txt 644 14 2b56356acb00ede9
 file port-rel/zip/mono/licenses/LICENSE.mono-2019.4.txt 644 19 caafae6ba20f6299
 file port-rel/zip/mono/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mono/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mono/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mono/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mono/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mono/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mono/mono.ini 644 483 3b8d6ee4c6f53a0b
@@ -991,7 +991,7 @@ command 2: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - the launcher does not start with PortMaster's standard lines (#!/bin/bash, the PORTMASTER line, then the controlfolder block, source control.txt, the firmware's mod_${CFW_NAME}.txt, get_controls)
   out:   - the launcher never calls pm_finish
 file cfg.toml 644 188 c4582cb045462b6c
-file port-rel/mygame.zip 644 32711 b356e28e39e7e950 zip 82 35db65ee6183351f
+file port-rel/mygame.zip 644 32769 4872922073099407 zip 82 b023462a7e3ff430
 file port-rel/testing_thread.txt 644 861 21f9d9f7d2b26bdd
 file port-rel/zip/Old.sh 644 24 0cf0d85f4cc30b5a
 file port-rel/zip/mygame/README.md 644 2282 972e52fc1604ea55
@@ -1006,7 +1006,7 @@ file port-rel/zip/mygame/licenses/LICENSE.mono-2017.4.txt 644 19 caafae6ba20f629
 file port-rel/zip/mygame/licenses/LICENSE.mono-class-libraries-2017.4.txt 644 20 2cf918c3c2a65edc
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
@@ -1078,7 +1078,7 @@ command 1: port package port --out port-rel --runtime <BASE>/in/rt --donors <BAS
   out:   - no screenshot (<BASE>/work/port/screenshot.png): PortMaster requires one, a real capture of the game on a handheld (4:3, at least 640x480): tools/device/drive.sh (ua_host saves the next frame when the game's folder gets a shot.req)
   out:   - no cover (cover.png): optional, but expected; gameinfo.xml then shows the screenshot
 file cfg.toml 644 115 45542d6f2cf26d71
-file port-rel/mygame.zip 644 36757 6b4109c39356f0c0 zip 94 470738be6d233f46
+file port-rel/mygame.zip 644 36815 3a6dd2d4c3665fff zip 94 60d740f2b9da186b
 file port-rel/testing_thread.txt 644 861 21f9d9f7d2b26bdd
 file port-rel/zip/Old.sh 644 6774 e86215093e0ff886
 file port-rel/zip/mygame/README.md 644 2282 972e52fc1604ea55
@@ -1093,7 +1093,7 @@ file port-rel/zip/mygame/licenses/LICENSE.mono-2017.4.txt 644 19 caafae6ba20f629
 file port-rel/zip/mygame/licenses/LICENSE.mono-class-libraries-2017.4.txt 644 20 2cf918c3c2a65edc
 file port-rel/zip/mygame/licenses/LICENSE.musl.txt 644 9 3f351066925d4a84
 file port-rel/zip/mygame/licenses/LICENSE.openh264.txt 644 13 c6ac26f99c90f470
-file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22052 ba3a35ca2b9be6b5
+file port-rel/zip/mygame/licenses/LICENSE.portmaster-unity.txt 644 22171 ed40986a0654d0a4
 file port-rel/zip/mygame/licenses/LICENSE.rust-crates.txt 644 24 673cc0bba46eb4e0
 file port-rel/zip/mygame/licenses/LICENSE.unity-donor.txt 644 469 8b9ef2b2bf6e21d8
 file port-rel/zip/mygame/mygame.ini 644 483 3b8d6ee4c6f53a0b
