@@ -47,8 +47,6 @@ PM=${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster
 if [ -z "$SDL_GAMECONTROLLERCONFIG" ] && [ -z "$SDL_GAMECONTROLLERCONFIG_FILE" ]; then
   for f in "$PM"/gamecontrollerdb.txt "$PM"/*/gamecontrollerdb.txt; do [ -f "$f" ] && export SDL_GAMECONTROLLERCONFIG_FILE="$f" && break; done
 fi
-# a 32-bit ua_host (ELF class 1) on a 64-bit firmware finds its libraries in lib32
-[ "$(od -An -tx1 -j4 -N1 ua_host | tr -d ' ')" = 01 ] && export LD_LIBRARY_PATH=/lib32:/usr/lib32${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
 # append mode for both writers, so this script's own [uatest] lines are not overwritten
 : > run.log; ./ua_host "$PWD" >> run.log 2>&1 &

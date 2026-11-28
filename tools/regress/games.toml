@@ -27,7 +27,7 @@
 #   rig         seconds, shots (s after ua_host starts), content (shot times that must show a
 #               picture: not black, not one colour), frames_min, log / log_absent (regexes),
 #               exit (allowed codes, default [124] = still running when the time was up),
-#               exceptions_max, arch (apk: armhf | arm64)
+#               exceptions_max, arch (arm64)
 # Every level also compares with the recorded baseline (baseline/<level>.json).
 
 # The expectations (expect, rig) are what docs/compat/games.md records for each game: the shaders
@@ -348,11 +348,8 @@ rig = { arch = "arm64", seconds = 150, shots = [40, 90, 140], content = [140], f
 slug = "apk-calculords"
 route = "apk"
 covers = ["2022.3", "apk", "mono-armv7", "gles2"]
-levels = ["fast", "rig"]
-apk = { target = "armhf" }
-# under QEMU it stops drawing after its story screen at times and does not pause at the end
-# (killed: exit 137), as in its first runs (2026-10-20): the picture is checked before that
-rig = { arch = "armhf", seconds = 240, shots = [60, 140, 220], content = [60, 140], frames_min = 20, exit = [124, 137] }
+# (its only player is armeabi-v7a, which no route runs since armhf was removed: tag last-armhf; kept as the record)
+levels = []
 
 [[game]]
 slug = "apk-catcove"
@@ -364,7 +361,8 @@ apk = { target = "arm64" }
 slug = "apk-roots"
 route = "apk"
 covers = ["2019.4", "apk", "mono-armv7"]
-apk = { target = "armhf" }
+# (its only player is armeabi-v7a, which no route runs since armhf was removed: tag last-armhf; kept as the record)
+levels = []
 
 [[game]]
 slug = "cs-chapeu-apk"
@@ -381,17 +379,15 @@ rig = { arch = "arm64", seconds = 150, shots = [40, 90, 140], content = [140], f
 slug = "dfu-apk-mono32"
 route = "apk"
 covers = ["2022.3", "apk", "mono-armv7", "same-game-backends"]
-apk = { target = "armhf" }
-levels = ["fast", "rig"]
-rig = { arch = "armhf", seconds = 300, shots = [60, 150, 280], content = [280], frames_min = 30 }   # its data-folder screen (no Daggerfall data)
+# (its only player is armeabi-v7a, which no route runs since armhf was removed: tag last-armhf; kept as the record)
+levels = []
 
 [[game]]
 slug = "dfu-apk-il2cpp32"
 route = "apk"
 covers = ["2022.3", "apk", "il2cpp-armv7", "same-game-backends"]
-apk = { target = "armhf" }
-levels = ["fast", "rig"]
-rig = { arch = "armhf", seconds = 300, shots = [60, 150, 280], content = [280], frames_min = 30 }
+# (its only player is armeabi-v7a, which no route runs since armhf was removed: tag last-armhf; kept as the record)
+levels = []
 
 [[game]]
 slug = "dfu-apk-il2cpp64"

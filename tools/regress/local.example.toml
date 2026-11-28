@@ -41,4 +41,4 @@ players = ["/path/to/unity-players"]
 # zip = "/path/to/android-data-out/zip"
 # lib = "/path/to/emu-root/lib"
 # root_files = []
-# arch = "armhf"
+# arch = "arm64"

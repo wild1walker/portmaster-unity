@@ -16,7 +16,7 @@ PM=${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster
 [ -z "$SDL_GAMECONTROLLERCONFIG" ] && [ -f "$PM/knulli/gamecontrollerdb.txt" ] &&
   export SDL_GAMECONTROLLERCONFIG_FILE="$PM/knulli/gamecontrollerdb.txt"
 # package name, build id and APK: from android_package.json beside the APK (or UA_PACKAGE, UA_META, UA_APK_NAME)
-LD_LIBRARY_PATH=/lib32:/usr/lib32 ./ua_host "$ROOT" > "$LOG" 2>&1 &
+./ua_host "$ROOT" > "$LOG" 2>&1 &
 pid=$!
 for _ in $(seq "$SECS"); do kill -0 $pid 2>/dev/null || break; sleep 1; done
 if kill -0 $pid 2>/dev/null; then kill -INT $pid; sleep 3; kill -0 $pid 2>/dev/null && kill -KILL $pid; fi

@@ -3,18 +3,18 @@
 # LGPL-2.1-or-later) for a port to ship: ua_host takes video pictures from the handheld's decoder
 # through it (H.264, HEVC; VP8 from commit 27e1bf1; commit 858cb05, the default here,
 # names everything pmhwdec). Built with this repository's
-# images (no clang or Debian sysroot needed): <out>/armhf/libpmhwdec.so.1 for the android route's
-# 32-bit ua_host (ua-host-armhf), <out>/arm64/libpmhwdec.so.1 for the arm64 routes (ua-build-arm64),
+# images (no clang or Debian sysroot needed): <out>/arm64/libpmhwdec.so.1 for ua_host (ua-build-arm64),
 # and <out>/aarch64/pmhwdec-cedard, the Allwinner decoder (GPL-2.0-or-later, a separate program the
 # library starts next to itself; the H616 / H700 / A133 handhelds run 64-bit kernels, so the 64-bit one
 # for both), and pmhwdec-test, which the setup asks whether VP8 plays on the video engine (the clips then
 # stay at full size). Ship the library's folder with pmhwdec-cedard beside it and point UM_PMHWDEC at the library in
-# port.env (docs/porting.md, "Videos"). <out>/armhf/librockchip_mpp.so is Rockchip MPP (Apache-2.0,
+# port.env (docs/porting.md, "Videos"). <out>/arm64/librockchip_mpp.so is Rockchip MPP (Apache-2.0,
 # LICENSE.mpp.txt beside it), trimmed as the library's rkmpp/build_mpp.sh does (its source patches,
-# H.264 / HEVC / VP8 decoders only), with gcc in ua-host-armhf instead of clang and a sysroot: ship it
+# H.264 / HEVC / VP8 decoders only), with gcc in ua-build-arm64 instead of clang and a sysroot: ship it
 # next to libpmhwdec.so.1 for Rockchip handhelds on vendor kernels (dArkOS, ArkOS, AmberELEC), whose
-# launcher opens the decoder's nodes (docs/porting.md). MPP_ARM64=1 builds <out>/arm64's too (slow:
-# emulated). The sources are cloned into <out>/src; the port ships their licences.
+# launcher opens the decoder's nodes (docs/porting.md). MPP_ARM64=0 leaves it out (slow where arm64 is
+# emulated). The sources are cloned into <out>/src; the port ships their licences. (The armhf builds
+# went with armhf: tag last-armhf.)
 set -euo pipefail
 OUT=$(mkdir -p "$1" && cd "$1" && pwd); REV=${2:-858cb05}
 SRC=$OUT/src
@@ -35,14 +35,12 @@ else
   $STRIP $O/libpmhwdec.so.1 $O/pmhwdec-test
 fi
 rm -rf $O/obj'
-docker run --rm -v "$OUT":/o -e A=armhf -e CC="arm-linux-gnueabihf-gcc -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" \
-  -e STRIP=arm-linux-gnueabihf-strip ua-host-armhf bash -c "$build" 2>&1 | grep -v "warning:\|note:\|^ \|^In \|^$" || true
 docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=arm64 -e CC=gcc -e STRIP=strip ua-build-arm64 bash -c "$build" 2>&1 \
   | grep -v "warning:\|note:\|^ \|^In \|^$" || true
 docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=aarch64 ua-build-arm64 bash -c "$build" 2>&1 | grep -v "warning:\|note:\|^ \|^In \|^$" || true
 # Rockchip MPP 1.1.0, as rkmpp/build_mpp.sh builds it (cmake and ninja put into the throwaway container)
-# (the source patches run with ua-host-armhf's Python 3.11 for both: they call Path.write_text(newline=), which
-# Python 3.10 added, and ua-build-arm64 has 3.8)
+# (the source patches run with Debian bookworm's Python 3.11 (image ua-py311, made here from debian:bookworm on
+# first use): they call Path.write_text(newline=), which Python 3.10 added, and ua-build-arm64 has 3.8)
 prep='set -e; H=/o/src/pmhwdec; M=/o/mpp-src-$A; rm -rf $M /o/mpp-build-$A && cp -a /o/src/mpp $M
 for p in soc_name hw_list no_enc no_dbg_log; do python3 -I $H/rkmpp/patch_$p.py $M >/dev/null; done'
 mpp='set -e; apt-get update -qq >/dev/null && apt-get install -y -qq cmake ninja-build >/dev/null
@@ -62,14 +60,12 @@ cp -L $(find /o/mpp-build-$A -name "librockchip_mpp.so*" -type f | head -1) $O/l
 { echo "librockchip_mpp.so: Rockchip MPP, https://github.com/rockchip-linux/mpp.git (tag 1.1.0), trimmed as libpmhwdec rkmpp/build_mpp.sh does."
   echo; cat $M/LICENSES/Apache-2.0 2>/dev/null || cat $M/LICENSE.md; } > $O/LICENSE.mpp.txt
 rm -rf $M /o/mpp-build-$A /o/mpp-$A.cmake /o/mpp-api-$A.map'
-docker run --rm -v "$OUT":/o -e A=armhf -e PROC=arm -e CROSS=arm-linux-gnueabihf- \
-  -e CPU="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" ua-host-armhf bash -c "$prep
-$mpp"
-if [ "${MPP_ARM64:-0}" = 1 ]; then
-  docker run --rm -v "$OUT":/o -e A=arm64 ua-host-armhf bash -c "$prep"
+if [ "${MPP_ARM64:-1}" = 1 ]; then
+  docker image inspect ua-py311 >/dev/null 2>&1 || printf 'FROM debian:bookworm\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*\n' | docker build -q -t ua-py311 - >/dev/null
+  docker run --rm -v "$OUT":/o -e A=arm64 ua-py311 bash -c "$prep"
   docker run --rm --platform linux/arm64 -v "$OUT":/o -e A=arm64 -e PROC=aarch64 -e CROSS= \
     -e CPU=-mcpu=cortex-a53 ua-build-arm64 bash -c "$mpp"
 fi
 echo "libpmhwdec $(git -C "$SRC/pmhwdec" rev-parse --short HEAD):"
-ls -l "$OUT"/armhf/libpmhwdec.so.1 "$OUT"/armhf/librockchip_mpp.so "$OUT"/arm64/libpmhwdec.so.1 "$OUT"/aarch64/pmhwdec-cedard \
-  $([ "${MPP_ARM64:-0}" = 1 ] && echo "$OUT"/arm64/librockchip_mpp.so)
+ls -l "$OUT"/arm64/libpmhwdec.so.1 "$OUT"/aarch64/pmhwdec-cedard \
+  $([ "${MPP_ARM64:-1}" = 1 ] && echo "$OUT"/arm64/librockchip_mpp.so)

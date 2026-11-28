@@ -1,9 +1,10 @@
 #!/bin/bash
-# build.sh <editor> <MonoArmv7|Il2cppArm64|Il2cppArmv7> <out dir>: a donor APK from Unity's editor (Unity.app on
+# build.sh <editor> <MonoArmv7|Il2cppArm64> <out dir>: a donor APK from Unity's editor (Unity.app on
 # macOS) in batch mode: a one-scene game of pong whose APK carries that Unity version's Android player
 # (`pmu player donor` reads it), written as donor-<version>-mono-armv7.apk or
-# donor-<version>-il2cpp-arm64.apk (Il2cppArmv7: -il2cpp-armv7.apk), the names a port's setup reads. Every port of the android and
-# mono-arm64 routes ships these (the handheld never downloads Unity's player): `pmu port check` and
+# donor-<version>-il2cpp-arm64.apk, the names a port's setup reads (the Mono one for its engine assemblies:
+# Unity's Android Mono players are armv7 only; Il2cppArmv7 went with armhf, tag last-armhf). Every port of the
+# mono-arm64 route ships these (the handheld never downloads Unity's player): `pmu port check` and
 # `port new` name the ones a port needs, `port package --donors <out dir>` ships them (docs/porting.md,
 # section 5, "Donors"). The editor: get-editor.sh <version> <dir> (unpacked from Unity's installers, no
 # Hub), or one the Unity Hub installed.
@@ -17,7 +18,7 @@
 #         Unity 6 checks for every Android build)
 #   JDK   a JDK home (2017.4 and 2021.3: JDK 8, the 8u172 x86-64 build Unity lists for its Intel and
 #         Apple-silicon editors alike; Unity 6: the OpenJDK 17 its release API lists)
-#   NDK   for Il2cppArm64 and Il2cppArmv7: the NDK the editor asks for (2017.4: r13b; 2018.4: r16b); 2021.3 and
+#   NDK   for Il2cppArm64: the NDK the editor asks for (2017.4: r13b; 2018.4: r16b); 2021.3 and
 #         Unity 6 ask for one for every build, Mono too ("Android NDK not found"; 2021.3.27f1: r21d,
 #         6000.0: r27c, in <editor>/PlaybackEngines/AndroidPlayer/NDK)
 # 6000.0.61f1 (2026-11-06): its MonoArmv7 donor's player (`pmu player donor`) is the one Unity's
@@ -39,7 +40,7 @@
 # comes from. ADB_KILL_OK=1 builds anyway.
 set -euo pipefail
 export TZ=UTC     # (the APK's file times: UTC, not the porter's local time)
-ED=${1:?usage: build.sh <editor> <MonoArmv7|Il2cppArm64|Il2cppArmv7> <out dir>}; WHAT=${2:?}; OUT=${3:?}
+ED=${1:?usage: build.sh <editor> <MonoArmv7|Il2cppArm64> <out dir>}; WHAT=${2:?}; OUT=${3:?}
 HERE=$(cd "$(dirname "$0")" && pwd)
 mine="$(cd "${SDK:?set SDK}/platform-tools" 2>/dev/null && pwd -L)/adb"
 for pid in $(pgrep -x adb || true); do

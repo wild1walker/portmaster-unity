@@ -18,8 +18,8 @@
 #                     ControlMaster connection
 #   REMOTE=<dir>      the folder on the handheld (default: uatest/<game folder's name> in the login's
 #                     home directory)
-#   ARCH=armhf|arm64  which ua_host to send: runtime/host/out/ua_host (armhf, the default) or
-#                     runtime/host/out/arm64/ua_host
+#   ARCH=arm64        which ua_host to send: runtime/host/out/arm64/ua_host (the only one: armhf was
+#                     removed)
 #   HOST_BIN=<file>   another ua_host build to send instead
 #   OUT=<dir>         where results go (default: devtest-<game folder's name>/ in the current folder)
 #   STOP_ES=1         stop EmulationStation during the run and start it again afterwards (Knulli and
@@ -35,10 +35,9 @@ GAME=${1:?usage: DEVICE=user@host test.sh <game folder> <seconds> [screenshot se
 HERE=$(cd "$(dirname "$0")" && pwd); PU=$(cd "$HERE/../.." && pwd)
 GAME=$(cd "$GAME" && pwd) || exit 1; NAME=$(basename "$GAME")
 REMOTE=${REMOTE:-uatest/$NAME}; OUT=${OUT:-$PWD/devtest-$NAME}
-case "${ARCH:-armhf}" in
-  armhf) BIN=${HOST_BIN:-$PU/runtime/host/out/ua_host} ;;
+case "${ARCH:-arm64}" in
   arm64) BIN=${HOST_BIN:-$PU/runtime/host/out/arm64/ua_host} ;;
-  *) echo "ARCH=${ARCH}: armhf or arm64"; exit 1 ;;
+  *) echo "ARCH=${ARCH}: arm64 only (armhf was removed: tag last-armhf)"; exit 1 ;;
 esac
 [ -f "$BIN" ] || { echo "no ua_host at $BIN: build it first (docs/building.md)"; exit 1; }
 [ -d "$GAME/lib" ] || { echo "$GAME has no lib/ folder with the player's libraries"; exit 1; }

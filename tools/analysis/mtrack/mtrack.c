@@ -2,11 +2,11 @@
 // /proc/self/maps, read with raw syscalls: no dladdr inside malloc), through glibc's __libc_malloc and friends. When
 // <cwd>/mtrack.req appears (a thread looks every 2 s) it writes to stderr the live bytes by library
 // ("[mtrack] libmali.so: 3944 blocks, 13.9 MB live") and the 30 call sites in ua_host holding the most, as offsets
-// to symbolize with ua_host.debug (arm-linux-gnueabihf-addr2line -f -i -e out/ua_host.debug <offset - 1>).
+// to symbolize with ua_host.debug (addr2line -f -i -e out/arm64/ua_host.debug <offset - 1>).
 // UA_MEM_LEDGER=2 (docs/runtime.md) names the Android libraries' blocks the same way; this adds the GPU driver's,
 // ua_host's and the system libraries'. A 16 MB table and a lock around every allocation: not for a frame-rate run.
-// Build (the device's 32-bit userland), in runtime/host's ua-host-armhf image:
-//   arm-linux-gnueabihf-gcc -O2 -shared -fPIC -o mtrack.so mtrack.c -lpthread
+// Build in the ua-build-arm64 image (runtime/docker/arm64):
+//   gcc -O2 -shared -fPIC -o mtrack.so mtrack.c -lpthread
 // Use: LD_PRELOAD=<dir>/mtrack.so for ua_host only (a bench's environment file), then touch mtrack.req in the
 // game's folder (docs/porting.md, where a level's memory goes).
 #define _GNU_SOURCE

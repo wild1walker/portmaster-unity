@@ -14,8 +14,7 @@
 #                                            and libgcc linked in), default out tools/hlslcc/out/linux-arm64.
 #                                            HLSLcc is fetched on the host first (the image has no CA
 #                                            certificates) into tools/hlslcc/out/. BUILD_NAME names the container.
-# For an armhf build: the ua-host-armhf image with CC=arm-linux-gnueabihf-gcc
-# CXX=arm-linux-gnueabihf-g++; an <out> that already holds HLSLcc-<commit>/ is not fetched again.
+# An <out> that already holds HLSLcc-<commit>/ is not fetched again.
 #
 # Fetching uses curl, wget or git, whichever there is. Environment: CC, CXX (compilers),
 # CXXFLAGS, LDFLAGS, HLSLCC_SRC (an HLSLcc-<commit> folder fetched before). The converter finds the

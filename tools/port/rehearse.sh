@@ -7,7 +7,7 @@
 # curl, PortMaster's 7-Zip, 1 GB of RAM, the network on) and a stand-in for PortMaster
 # (control.txt, utils/patcher.txt). The launcher runs the setup through the "patcher"; afterwards
 # ports/<name>/ is what the handheld would have. With [emu seconds] the installed game then runs
-# in the emulated armv7 rig (tools/emu: QEMU + Mesa llvmpipe) with the port's port.env (and, as the
+# in the emulated arm64 rig (tools/emu: Mesa llvmpipe) with the port's port.env (and, as the
 # launcher does, UA_WWISE_DATA / UA_FMOD_DATA when the setup converted Wwise / FMOD banks), four screenshots go to
 # <work>/shots.png and the sound to <work>/sound.wav (never played aloud: what the game's OpenSL ES
 # output played, the Wwise player's mix included, with its levels printed at the end). The results of
@@ -26,12 +26,9 @@
 #                   Other variables reach the rig as tools/emu/emu.sh says (UA_*, ANDROID_*, ..., EMU_ENV),
 #                   e.g. UA_WWISE_CAPTURE=/emu/wwise.wav (the Wwise player's mix alone, for the whole run
 #                   unless UA_WWISE_CAPTURE_SECS) lands in <work>/emuroot/
-#   REHEARSE_64ONLY=1  a 64-bit-only system: the image's 32-bit loader (/lib/ld-linux-armhf.so.3)
-#                   is removed in the container first, so a launcher takes its 64-bit path
-#   REHEARSE_AARCH64_ONLY=1  an aarch64-only release (port.toml port.aarch64_only; docs/arm64.md, "Shipping
-#                   aarch64 only"): before the game goes in, the release's own pmu checks it in the container
+#   REHEARSE_AARCH64_ONLY=1  before the game goes in, the release's own pmu checks it in the container
 #                   (`pmu arch-check`: no armhf ELF file, the donors' entries included, and the 64-bit route's
-#                   pieces there) and the rehearsal stops if it fails; implies REHEARSE_64ONLY=1
+#                   pieces there; docs/arm64.md, "Shipping aarch64 only") and the rehearsal stops if it fails
 #   REHEARSE_NAME   the setup container's name (to docker kill it)
 #   REHEARSE_OVER   an update rehearsed: the work dir of an earlier rehearsal (of an older release), whose
 #                   installed roms/ is copied and the zip unpacked over it as PortMaster updates a port
@@ -58,9 +55,8 @@
 #                   anonymous, page cache; each process over 2 MB: RSS/anonymous/peak RSS in MB; the setup's
 #                   step and its last line), then each program's peak and the step it was in (`pmu-dev memlog`):
 #                   which step and program need the most of a handheld's memory
-#   EMU_ARCH        the emulated rig's architecture (tools/emu/emu.sh: armhf or arm64); default:
-#                   arm64 when the installed game is an arm64-v8a build (android_package.json "abi"),
-#                   which then runs with the port's ua_host64 when it has one (the apk route)
+#   EMU_ARCH        the emulated rig's architecture (tools/emu/emu.sh): arm64 (armhf was removed); the
+#                   port's ua_host64 runs where it has one (the apk route)
 # Game files stay in <work>; nothing of them goes anywhere else.
 set -euo pipefail
 ZIP=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); GAME=$2; WORK=$3; SECS=${4:-0}; INP=${5:-}
@@ -89,7 +85,6 @@ read -r name launcher < <(jq -r '"\(.items[1]) \(.items[0])"' "$pj")
 P="$R/ports/$name"
 echo "port $name, launcher $launcher"
 if [ "${REHEARSE_AARCH64_ONLY:-}" = 1 ]; then
-  REHEARSE_64ONLY=1
   [ -z "${REHEARSE_OVER:-}" ] || { echo "REHEARSE_AARCH64_ONLY: a fresh install only (not with REHEARSE_OVER)"; exit 1; }
   [ -x "$P/setup/pmu" ] || { echo "REHEARSE_AARCH64_ONLY: the release has no setup/pmu to check it with"; exit 1; }
   docker run --rm --platform linux/arm64 -v "$R/ports:/rel:ro" "$IMG" "/rel/$name/setup/pmu" arch-check /rel \
@@ -183,7 +178,7 @@ RMEM=${REHEARSE_MEM:-1g}; RSWAP=${REHEARSE_MEMSWAP:-${REHEARSE_MEM:-2g}}
 docker run --rm --platform linux/arm64 ${REHEARSE_NAME:+--name "$REHEARSE_NAME"} ${REHEARSE_NET:+--network "$REHEARSE_NET"} --memory "$RMEM" --memory-swap "$RSWAP" --ulimit "nofile=${REHEARSE_NOFILE:-1024:524288}" -v "$R":/roms -v "$WORK/rbin":/rbin:ro \
   ${REHEARSE_MEMINFO:+-v "$REHEARSE_MEMINFO":/proc/meminfo:ro} ${PMU_PROF:+-e PMU_PROF="$PMU_PROF"} ${PMU_EXACT_STATS:+-e PMU_EXACT_STATS=1} \
   -e REHEARSE_FREE_MB="$FREE_MB" -e PMUNITY_DISK_FREE_MB="$FREE_MB" -e ANSWERS="${ANSWERS:-}" \
-  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_MEMLOG:+(/rbin/memsamp /roms/mem.log '/roms/ports/$name' &); }${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }${REHEARSE_64ONLY:+rm -f /lib/ld-linux-armhf.so.3; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
+  -e HOME=/roms/home "$IMG" bash -c "mkdir -p /roms/home; ${REHEARSE_MEMLOG:+(/rbin/memsamp /roms/mem.log '/roms/ports/$name' &); }${PM_PYTHON:+/roms/ports/PortMaster/7zzs.aarch64 x -snl -y -o/roms/home/python_3.11 /roms/ports/PortMaster/libs/python_3.11.squashfs >/dev/null; }export PATH=/rbin:/bb:\$PATH; cd /roms/ports && bash '/roms/ports/$launcher'" \
   > "$WORK/launch1.log" 2>&1 || true
 echo "setup: $(( $(date +%s) - t0 )) s; launcher log: $WORK/launch1.log; setup log: $P/patchlog.txt"
 if [ -f "$R/mem.log" ]; then mv "$R/mem.log" "$WORK/mem.log"; "$PU/setup-rs/tools/pmu-dev.sh" memlog "$WORK/mem.log" || true; fi
@@ -196,10 +191,8 @@ echo "installed: $(du -sm "$P" | cut -f1) MB; ${lib#$P/}: $(ls "${lib:-$P/lib}" 
 fi
 [ "$SECS" -gt 0 ] || exit 0
 
-# the ua_host that runs the installed build: the port's ua_host, or its ua_host64 for an arm64-v8a
-# build when it has both (the apk route)
+# the ua_host that runs the installed build: the port's ua_host, or its ua_host64 (the apk route)
 abi=$(sed -n 's/^ *"abi": *"\([^"]*\)".*/\1/p' "$P/android_package.json" 2>/dev/null | head -1)
-[ "$abi" = arm64-v8a ] && export EMU_ARCH=${EMU_ARCH:-arm64}
 # an earlier emulated run's results (EMU_ONLY reruns, a second rehearsal) are kept: <work>/earlier/<n>/
 E="$WORK/emuroot"
 if [ -f "$E/run.log" ]; then
@@ -208,8 +201,9 @@ if [ -f "$E/run.log" ]; then
   echo "the earlier run's log, shots and sound: $WORK/earlier/$n"
 fi
 H="$WORK/hostbin"; rm -rf "$H"; mkdir -p "$H"
-if [ "${EMU_ARCH:-${ARCH:-armhf}}" = arm64 ] && [ -f "$P/ua_host64" ]; then cp "$P/ua_host64" "$H/ua_host"; else cp "$P/ua_host" "$H/ua_host"; fi
-echo "== the installed game in the emulated rig (${EMU_ARCH:-${ARCH:-armhf}}${abi:+, $abi}), $SECS s ($(date +%T))"
+if [ -f "$P/ua_host64" ]; then cp "$P/ua_host64" "$H/ua_host"; else cp "$P/ua_host" "$H/ua_host"; fi
+export EMU_ARCH=arm64
+echo "== the installed game in the emulated rig (arm64${abi:+, $abi}), $SECS s ($(date +%T))"
 rm -rf "$E"; mkdir -p "$E"; cp "$H/ua_host" "$E/"
 (
   set +u

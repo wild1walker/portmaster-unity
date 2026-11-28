@@ -21,7 +21,7 @@
 #   PLAN, MEASURE        defaults for every run (a run's own VAR=value wins)
 #   STOP_ES=0            leave EmulationStation running (default: stopped during the runs: it
 #                        holds GPU memory and CPU time)
-#   ARCH, HOST_BIN       the ua_host to send (default this checkout's runtime/host/out/ua_host);
+#   ARCH, HOST_BIN       the ua_host to send (default this checkout's runtime/host/out/arm64/ua_host);
 #                        SEND_HOST=0 runs the game folder's own ua_host
 #   SYMS=<dir>           Unity's symbol files for the summaries (pmu-dev benchsum --syms)
 #   UA_*, SDL_*, GC_*, MONO_* in the environment pass through to every run, as with test.sh
@@ -30,10 +30,9 @@ DIR=${1:?usage: DEVICE=user@host profbench.sh <game folder on the handheld> <nam
 : "${DEVICE:?set DEVICE=user@host (the handheld)}"
 HERE=$(cd "$(dirname "$0")" && pwd); PU=$(cd "$HERE/../.." && pwd)
 OUT=${OUT:-$PWD/profbench}
-case "${ARCH:-armhf}" in
-  armhf) BIN=${HOST_BIN:-$PU/runtime/host/out/ua_host} ;;
+case "${ARCH:-arm64}" in
   arm64) BIN=${HOST_BIN:-$PU/runtime/host/out/arm64/ua_host} ;;
-  *) echo "ARCH=${ARCH}: armhf or arm64"; exit 1 ;;
+  *) echo "ARCH=${ARCH}: arm64 only (armhf was removed: tag last-armhf)"; exit 1 ;;
 esac
 . "$HERE/transport.sh"                                        # dev_sh, dev_tar_in, dev_tar_out
 rshn() { dev_sh "$@"; }
@@ -69,9 +68,8 @@ else
   COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$HERE" profrun.sh | dev_tar_in "$B" &&
     rshn "cd $(q "$B") && cp -f ../ua_host ua_host && chmod +x ua_host profrun.sh" || { echo "copying failed"; exit 1; }
 fi
-# the GPU counter sampler for GPUCNT=1 runs (runtime/host/gpucnt.c; a static armhf build serves
-# both userlands)
-GC=${GPUCNT_BIN:-$PU/runtime/host/out/gpucnt}
+# the GPU counter sampler for GPUCNT=1 runs (runtime/host/gpucnt.c, static)
+GC=${GPUCNT_BIN:-$PU/runtime/host/out/arm64/gpucnt}
 if [ -f "$GC" ] && [ "$(basename "$GC")" = gpucnt ]; then
   COPYFILE_DISABLE=1 tar ${TARC[@]+"${TARC[@]}"} -cf - -C "$(dirname "$GC")" gpucnt | dev_tar_in "$B" &&
     rshn "chmod +x $(q "$B/gpucnt")" || echo "   (copying gpucnt failed: no GPU counters)"
